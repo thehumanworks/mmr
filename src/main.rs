@@ -5,6 +5,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use clap::{Parser, Subcommand};
 use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -1591,6 +1592,521 @@ const SPA_HTML: &str = r##"<!DOCTYPE html>
 </html>"##;
 
 
+// --- CLI Definition ---
+
+#[derive(Parser)]
+#[command(name = "memory", about = "Search and browse AI conversation history")]
+struct Cli {
+    /// Pretty-print JSON output
+    #[arg(long, global = true)]
+    pretty: bool,
+
+    /// Filter by source: claude, codex
+    #[arg(long, global = true)]
+    source: Option<String>,
+
+    /// Suppress ingestion progress (stderr)
+    #[arg(long, global = true)]
+    quiet: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// List all projects
+    Projects,
+    /// List sessions for a project
+    Sessions {
+        /// Project name
+        #[arg(long)]
+        project: String,
+    },
+    /// Get messages for a session
+    Messages {
+        /// Session ID
+        #[arg(long)]
+        session: String,
+        /// Return only the last N messages
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Search across all conversations
+    Search {
+        /// Search query
+        query: String,
+        /// Filter by project name
+        #[arg(long)]
+        project: Option<String>,
+        /// Page number (0-indexed)
+        #[arg(long, default_value = "0")]
+        page: usize,
+        /// Results per page
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
+    /// Show usage statistics
+    Stats,
+    /// Start the web server (default when no subcommand given)
+    Serve,
+}
+
+// --- CLI Command Implementations ---
+
+fn cmd_projects(conn: &Connection, source: Option<&str>) -> Result<ApiProjectsResponse> {
+    let (query_sql, has_source) = match source {
+        Some(s) if s == "claude" || s == "codex" => (
+            "SELECT name, source, original_path, session_count, message_count FROM projects WHERE source = ? ORDER BY message_count DESC".to_string(),
+            true,
+        ),
+        _ => (
+            "SELECT name, source, original_path, session_count, message_count FROM projects ORDER BY message_count DESC".to_string(),
+            false,
+        ),
+    };
+
+    let mut stmt = conn.prepare(&query_sql)?;
+    let projects: Vec<ApiProject> = if has_source {
+        stmt.query_map(params![source.unwrap()], |row| {
+            Ok(ApiProject {
+                name: row.get::<_, String>(0)?,
+                source: row.get::<_, String>(1)?,
+                original_path: row.get::<_, String>(2)?,
+                session_count: row.get::<_, i32>(3)?,
+                message_count: row.get::<_, i32>(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    } else {
+        stmt.query_map([], |row| {
+            Ok(ApiProject {
+                name: row.get::<_, String>(0)?,
+                source: row.get::<_, String>(1)?,
+                original_path: row.get::<_, String>(2)?,
+                session_count: row.get::<_, i32>(3)?,
+                message_count: row.get::<_, i32>(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
+
+    let (total_messages, total_sessions) = if has_source {
+        let m: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE source = ?",
+            params![source.unwrap()],
+            |row| row.get(0),
+        )?;
+        let s: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE source = ?",
+            params![source.unwrap()],
+            |row| row.get(0),
+        )?;
+        (m, s)
+    } else {
+        let m: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))?;
+        let s: i64 = conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
+        (m, s)
+    };
+
+    Ok(ApiProjectsResponse {
+        projects,
+        total_messages,
+        total_sessions,
+    })
+}
+
+fn cmd_sessions(conn: &Connection, project: &str, source: Option<&str>) -> Result<ApiSessionsResponse> {
+    let source = source.unwrap_or("claude");
+
+    let project_path: String = conn
+        .query_row(
+            "SELECT original_path FROM projects WHERE name = ? AND source = ?",
+            params![project, source],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| project.to_string());
+
+    let mut stmt = conn.prepare(
+        "SELECT session_id, first_timestamp, last_timestamp, message_count, user_messages, assistant_messages
+         FROM sessions WHERE project = ? AND source = ? ORDER BY first_timestamp DESC",
+    )?;
+
+    let sessions: Vec<ApiSession> = stmt
+        .query_map(params![project, source], |row| {
+            let sid: String = row.get(0)?;
+            Ok((sid, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i32>(3)?, row.get::<_, i32>(4)?, row.get::<_, i32>(5)?))
+        })?
+        .filter_map(|r| r.ok())
+        .map(|(sid, first_ts, last_ts, msg_count, user_msgs, asst_msgs)| {
+            let preview: String = conn
+                .query_row(
+                    "SELECT content_text FROM messages WHERE session_id = ? AND project = ? AND source = ? AND role = 'user' ORDER BY id ASC LIMIT 1",
+                    params![&sid, project, source],
+                    |row| row.get(0),
+                )
+                .unwrap_or_default();
+            let preview_short = if preview.len() > 120 {
+                let end = preview.ceil_char_boundary(120);
+                format!("{}...", &preview[..end])
+            } else {
+                preview
+            };
+            ApiSession {
+                session_id: sid,
+                first_timestamp: first_ts,
+                last_timestamp: last_ts,
+                message_count: msg_count,
+                user_messages: user_msgs,
+                assistant_messages: asst_msgs,
+                preview: preview_short,
+            }
+        })
+        .collect();
+
+    Ok(ApiSessionsResponse {
+        project_name: project.to_string(),
+        project_path,
+        source: source.to_string(),
+        sessions,
+    })
+}
+
+fn cmd_messages(conn: &Connection, session_id: &str, limit: Option<usize>) -> Result<ApiMessagesResponse> {
+    let (project_name, source): (String, String) = conn
+        .query_row(
+            "SELECT project, source FROM sessions WHERE session_id = ?",
+            params![session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap_or_else(|_| (String::new(), String::new()));
+
+    let project_path: String = conn
+        .query_row(
+            "SELECT original_path FROM projects WHERE name = ? AND source = ?",
+            params![&project_name, &source],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| project_name.clone());
+
+    let messages: Vec<ApiMessage> = if let Some(limit) = limit {
+        // Get last N messages: query descending, then reverse
+        let mut stmt = conn.prepare(
+            "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
+             FROM messages
+             WHERE session_id = ?
+             ORDER BY id DESC
+             LIMIT ?",
+        )?;
+        let mut msgs: Vec<ApiMessage> = stmt
+            .query_map(params![session_id, limit as i64], |row| {
+                Ok(ApiMessage {
+                    role: row.get::<_, String>(0)?,
+                    content: row.get::<_, String>(1)?,
+                    model: row.get::<_, String>(2)?,
+                    timestamp: row.get::<_, String>(3)?,
+                    is_subagent: row.get::<_, bool>(4)?,
+                    msg_type: row.get::<_, String>(5)?,
+                    input_tokens: row.get::<_, i64>(6)?,
+                    output_tokens: row.get::<_, i64>(7)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        msgs.reverse();
+        msgs
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
+             FROM messages
+             WHERE session_id = ?
+             ORDER BY id ASC",
+        )?;
+        stmt.query_map(params![session_id], |row| {
+            Ok(ApiMessage {
+                role: row.get::<_, String>(0)?,
+                content: row.get::<_, String>(1)?,
+                model: row.get::<_, String>(2)?,
+                timestamp: row.get::<_, String>(3)?,
+                is_subagent: row.get::<_, bool>(4)?,
+                msg_type: row.get::<_, String>(5)?,
+                input_tokens: row.get::<_, i64>(6)?,
+                output_tokens: row.get::<_, i64>(7)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
+
+    Ok(ApiMessagesResponse {
+        session_id: session_id.to_string(),
+        project_name,
+        project_path,
+        source,
+        messages,
+    })
+}
+
+fn cmd_search(
+    conn: &Connection,
+    query: &str,
+    project: Option<&str>,
+    source: Option<&str>,
+    page: usize,
+    per_page: usize,
+) -> Result<ApiSearchResponse> {
+    if query.is_empty() {
+        return Ok(ApiSearchResponse {
+            query: String::new(),
+            total_count: 0,
+            page,
+            per_page,
+            results: Vec::new(),
+        });
+    }
+
+    let project_filter = project.unwrap_or("");
+    let source_filter = source.unwrap_or("");
+    let offset = page * per_page;
+
+    let (total_count, rows) = run_search(conn, query, project_filter, source_filter, per_page, offset);
+
+    let results: Vec<ApiSearchResult> = rows
+        .into_iter()
+        .map(|(id, project, project_path, session_id, role, content, model, timestamp, is_subagent, source)| {
+            ApiSearchResult {
+                id,
+                project,
+                project_path,
+                session_id,
+                role,
+                content,
+                model,
+                timestamp,
+                is_subagent,
+                source,
+            }
+        })
+        .collect();
+
+    Ok(ApiSearchResponse {
+        query: query.to_string(),
+        total_count,
+        page,
+        per_page,
+        results,
+    })
+}
+
+fn cmd_stats(conn: &Connection, source: Option<&str>) -> Result<ApiAnalyticsResponse> {
+    let source_filter = source.filter(|s| *s == "claude" || *s == "codex");
+
+    let source_stats: Vec<ApiSourceStats> = if let Some(sf) = source_filter {
+        let mut stmt = conn.prepare(
+            "SELECT source, COUNT(*) as msg_count, COUNT(DISTINCT session_id) as sess_count, COUNT(DISTINCT project) as proj_count
+             FROM messages WHERE source = ? GROUP BY source ORDER BY msg_count DESC",
+        )?;
+        stmt.query_map(params![sf], |row| {
+            Ok(ApiSourceStats {
+                source: row.get::<_, String>(0)?,
+                message_count: row.get::<_, i64>(1)?,
+                session_count: row.get::<_, i64>(2)?,
+                project_count: row.get::<_, i64>(3)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT source, COUNT(*) as msg_count, COUNT(DISTINCT session_id) as sess_count, COUNT(DISTINCT project) as proj_count
+             FROM messages GROUP BY source ORDER BY msg_count DESC",
+        )?;
+        stmt.query_map([], |row| {
+            Ok(ApiSourceStats {
+                source: row.get::<_, String>(0)?,
+                message_count: row.get::<_, i64>(1)?,
+                session_count: row.get::<_, i64>(2)?,
+                project_count: row.get::<_, i64>(3)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
+
+    let model_stats: Vec<ApiModelStats> = if let Some(sf) = source_filter {
+        let mut stmt = conn.prepare(
+            "SELECT source, model, COUNT(*) as msg_count, SUM(input_tokens) as total_input, SUM(output_tokens) as total_output
+             FROM messages
+             WHERE model != '' AND role = 'assistant' AND source = ?
+             GROUP BY source, model
+             ORDER BY msg_count DESC",
+        )?;
+        stmt.query_map(params![sf], |row| {
+            Ok(ApiModelStats {
+                source: row.get::<_, String>(0)?,
+                model: row.get::<_, String>(1)?,
+                message_count: row.get::<_, i64>(2)?,
+                input_tokens: row.get::<_, i64>(3)?,
+                output_tokens: row.get::<_, i64>(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT source, model, COUNT(*) as msg_count, SUM(input_tokens) as total_input, SUM(output_tokens) as total_output
+             FROM messages
+             WHERE model != '' AND role = 'assistant'
+             GROUP BY source, model
+             ORDER BY msg_count DESC",
+        )?;
+        stmt.query_map([], |row| {
+            Ok(ApiModelStats {
+                source: row.get::<_, String>(0)?,
+                model: row.get::<_, String>(1)?,
+                message_count: row.get::<_, i64>(2)?,
+                input_tokens: row.get::<_, i64>(3)?,
+                output_tokens: row.get::<_, i64>(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
+
+    let project_stats: Vec<ApiProjectStats> = if let Some(sf) = source_filter {
+        let mut stmt = conn.prepare(
+            "SELECT source, project_path, COUNT(*) as cnt,
+                    SUM(CASE WHEN role='user' THEN 1 ELSE 0 END) as user_cnt,
+                    SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END) as asst_cnt
+             FROM messages WHERE source = ?
+             GROUP BY source, project_path
+             ORDER BY cnt DESC",
+        )?;
+        stmt.query_map(params![sf], |row| {
+            Ok(ApiProjectStats {
+                source: row.get::<_, String>(0)?,
+                project_path: row.get::<_, String>(1)?,
+                total_messages: row.get::<_, i64>(2)?,
+                user_messages: row.get::<_, i64>(3)?,
+                assistant_messages: row.get::<_, i64>(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT source, project_path, COUNT(*) as cnt,
+                    SUM(CASE WHEN role='user' THEN 1 ELSE 0 END) as user_cnt,
+                    SUM(CASE WHEN role='assistant' THEN 1 ELSE 0 END) as asst_cnt
+             FROM messages
+             GROUP BY source, project_path
+             ORDER BY cnt DESC",
+        )?;
+        stmt.query_map([], |row| {
+            Ok(ApiProjectStats {
+                source: row.get::<_, String>(0)?,
+                project_path: row.get::<_, String>(1)?,
+                total_messages: row.get::<_, i64>(2)?,
+                user_messages: row.get::<_, i64>(3)?,
+                assistant_messages: row.get::<_, i64>(4)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
+    };
+
+    Ok(ApiAnalyticsResponse {
+        source_stats,
+        model_stats,
+        project_stats,
+    })
+}
+
+fn run_cli(cli: Cli) -> Result<()> {
+    let conn = Connection::open_in_memory()?;
+    init_db(&conn)?;
+
+    if !cli.quiet {
+        eprintln!("Ingesting conversation history...");
+    }
+    let stats = ingest_all(&conn)?;
+    if !cli.quiet {
+        eprintln!(
+            "  Claude: {} messages from {} sessions across {} projects",
+            stats.claude_messages, stats.claude_sessions, stats.claude_projects
+        );
+        eprintln!(
+            "  Codex:  {} messages from {} sessions across {} projects",
+            stats.codex_messages, stats.codex_sessions, stats.codex_projects
+        );
+        let total_messages = stats.claude_messages + stats.codex_messages;
+        let total_sessions = stats.claude_sessions + stats.codex_sessions;
+        eprintln!("  Total:  {} messages, {} sessions", total_messages, total_sessions);
+        eprintln!("Building FTS index...");
+    }
+    create_fts_index(&conn)?;
+    if !cli.quiet {
+        eprintln!("Ready.");
+    }
+
+    let source = cli.source.as_deref();
+    let command = cli.command.unwrap(); // caller ensures this is Some
+
+    let json_output = match command {
+        Commands::Projects => {
+            let result = cmd_projects(&conn, source)?;
+            if cli.pretty {
+                serde_json::to_string_pretty(&result)?
+            } else {
+                serde_json::to_string(&result)?
+            }
+        }
+        Commands::Sessions { project } => {
+            let result = cmd_sessions(&conn, &project, source)?;
+            if cli.pretty {
+                serde_json::to_string_pretty(&result)?
+            } else {
+                serde_json::to_string(&result)?
+            }
+        }
+        Commands::Messages { session, limit } => {
+            let result = cmd_messages(&conn, &session, limit)?;
+            if cli.pretty {
+                serde_json::to_string_pretty(&result)?
+            } else {
+                serde_json::to_string(&result)?
+            }
+        }
+        Commands::Search {
+            query,
+            project,
+            page,
+            limit,
+        } => {
+            let result = cmd_search(&conn, &query, project.as_deref(), source, page, limit)?;
+            if cli.pretty {
+                serde_json::to_string_pretty(&result)?
+            } else {
+                serde_json::to_string(&result)?
+            }
+        }
+        Commands::Stats => {
+            let result = cmd_stats(&conn, source)?;
+            if cli.pretty {
+                serde_json::to_string_pretty(&result)?
+            } else {
+                serde_json::to_string(&result)?
+            }
+        }
+        Commands::Serve => unreachable!(), // handled before calling run_cli
+    };
+
+    println!("{}", json_output);
+    Ok(())
+}
+
 // --- OpenAPI ---
 
 #[derive(OpenApi)]
@@ -1616,6 +2132,17 @@ struct ApiDoc;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
+    let cli = Cli::parse();
+
+    // If a CLI subcommand is given (and it's not `serve`), run in CLI mode
+    match &cli.command {
+        Some(Commands::Serve) | None => {}
+        Some(_) => {
+            return run_cli(cli);
+        }
+    }
+
+    // --- Server mode ---
     println!("Initializing DuckDB...");
     let conn = Connection::open_in_memory()?;
     init_db(&conn)?;
