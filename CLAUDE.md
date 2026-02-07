@@ -19,12 +19,15 @@ cargo test               # Run tests
 
 ### CLI Usage
 
-With no subcommand (or `serve`), starts the web server. With a subcommand, runs as a CLI tool outputting JSON to stdout:
+With no subcommand (or `serve`), starts the web server.
+
+With a subcommand, runs as a CLI tool outputting JSON to stdout. CLI query subcommands read from an on-disk DuckDB cache; build/refresh it with `memory ingest` (alias: `memory refresh`).
 
 ```
 memory [OPTIONS] <COMMAND>
 
 Commands:
+  ingest     (Re)ingest conversation history and rebuild the CLI cache
   projects   List all projects
   sessions   List sessions for a project
   messages   Get messages for a session
@@ -35,11 +38,12 @@ Commands:
 Global Options:
   --pretty           Pretty-print JSON output
   --source <SOURCE>  Filter by source: claude, codex
-  --quiet            Suppress ingestion progress (stderr)
+  --quiet            Suppress ingest progress (stderr)
 ```
 
 Examples:
 ```bash
+memory ingest
 memory projects --pretty
 memory sessions --project <NAME> --source claude --pretty
 memory messages --session <ID> --limit 3 --pretty
@@ -53,13 +57,20 @@ memory projects --quiet 2>/dev/null | jq .   # Clean JSON, no stderr
 
 Single-file app (`src/main.rs`, ~1860 lines including tests).
 
-**Startup sequence**: `main()` parses CLI args via clap. If a CLI subcommand is given, it runs `run_cli()` which creates an in-memory DuckDB, ingests data, builds FTS, runs the `cmd_*` function, and prints JSON to stdout. Otherwise (no subcommand or `serve`), it starts the Axum web server. All data lives in memory — there is no persistent storage.
+**Startup sequence**: `main()` parses CLI args via clap.
+
+- Server mode (no subcommand or `serve`): creates an in-memory DuckDB, ingests data, builds FTS, and starts the Axum web server.
+- CLI mode (any other subcommand):
+  - `ingest`: (re)ingests data into an on-disk DuckDB cache and builds FTS.
+  - query subcommands (`projects`, `sessions`, `messages`, `search`, `stats`): open the cache DB and run the `cmd_*` function, printing JSON to stdout.
+
+The web server continues to use in-memory storage; persistence is only used for the CLI cache.
 
 ### Logical sections in order:
 
 1. **JSONL Parsing Types** (lines ~15-41): `ClaudeJsonlLine`, `ClaudeMessagePayload` — serde structs for Claude's JSONL format. Codex parsing uses `serde_json::Value` directly.
 
-2. **DB Setup & Ingestion** (lines ~43-590): `init_db()` creates three tables (`messages`, `projects`, `sessions`) all with a `source` column (`'claude'` or `'codex'`). `ingest_claude()` reads `~/.claude/projects/{project-dir}/{uuid}.jsonl` (dash-encoded paths, e.g. `-Users-mish-memory` → `/Users/mish/memory`). `ingest_codex()` walks `~/.codex/sessions/` recursively. `ingest_all()` orchestrates both and populates the `sessions` table via aggregate INSERT.
+2. **DB Setup & Ingestion** (lines ~43-590): `init_db()` loads the DuckDB FTS extension and creates tables (`messages`, `projects`, `sessions`, `cache_meta`) all with a `source` column (`'claude'` or `'codex'`). `ingest_claude()` reads `~/.claude/projects/{project-dir}/{uuid}.jsonl` (dash-encoded paths, e.g. `-Users-mish-memory` → `/Users/mish/memory`). `ingest_codex()` walks `~/.codex/sessions/` recursively. `ingest_all()` orchestrates both and populates the `sessions` table via aggregate INSERT.
 
 3. **Query Param & API Response Types** (lines ~594-727): `Deserialize` + `IntoParams` structs for query params (`ProjectQuery`, `MessageQuery`, `SearchParams`). `Serialize` + `ToSchema` structs for all JSON responses (`ApiProject`, `ApiSession`, `ApiMessage`, `ApiSearchResult`, `ApiAnalyticsResponse`, etc.).
 
@@ -76,7 +87,7 @@ Single-file app (`src/main.rs`, ~1860 lines including tests).
 
 7. **SPA Frontend** (lines ~1198-1591): `SPA_HTML` const — full HTML document with embedded CSS and JavaScript. Client-side routing via `history.pushState()`, fetches from `/api/*` endpoints. Source tab filtering on the index page is done client-side.
 
-8. **CLI Definition & Commands**: Clap `Parser`/`Subcommand` structs (`Cli`, `Commands`). Five `cmd_*` functions that take `&Connection` + direct args and return `Result<T>` — these add source filtering and `--limit` support on top of the same DB queries. `run_cli()` orchestrates ingestion → FTS → command dispatch → JSON output.
+8. **CLI Definition & Commands**: Clap `Parser`/`Subcommand` structs (`Cli`, `Commands`). `memory ingest` builds the on-disk cache; the query subcommands call the `cmd_*` functions against the cache DB.
 
 9. **OpenAPI & Router Wiring**: `ApiDoc` struct with `#[derive(OpenApi)]`. Routes registered via `OpenApiRouter` which auto-collects specs. Spec served at `GET /openapi.json`. Non-API routes fall back to `spa_handler`.
 
@@ -85,6 +96,7 @@ Single-file app (`src/main.rs`, ~1860 lines including tests).
 ## Key Technical Details
 
 - DuckDB in-memory with bundled build (`duckdb` crate `features = ["bundled"]`)
+- CLI cache: on-disk DuckDB (default under OS cache dir; override with `MEMORY_DB_PATH`)
 - FTS: `PRAGMA create_fts_index` with `fts_main_messages.match_bm25()` for ranked search
 - CLI parsing via `clap` v4 with derive macros; no subcommand defaults to web server
 - Shared state is `Arc<Mutex<Connection>>` (aliased as `AppState`) for web server mode

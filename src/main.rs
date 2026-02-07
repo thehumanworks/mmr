@@ -8,7 +8,7 @@ use axum::{
 use clap::{Parser, Subcommand};
 use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -43,9 +43,16 @@ struct ClaudeMessagePayload {
 
 // --- DuckDB Setup ---
 
-fn init_db(conn: &Connection) -> Result<()> {
+fn load_fts(conn: &Connection) -> Result<()> {
+    // Prefer LOAD (fast, typically no network). Fall back to INSTALL+LOAD if needed.
+    if conn.execute_batch("LOAD fts;").is_ok() {
+        return Ok(());
+    }
     conn.execute_batch("INSTALL fts; LOAD fts;")?;
+    Ok(())
+}
 
+fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS messages (
@@ -90,9 +97,21 @@ fn init_db(conn: &Connection) -> Result<()> {
             assistant_messages INTEGER DEFAULT 0,
             PRIMARY KEY (session_id, project, source)
         );
+
+        -- Key/value metadata for on-disk CLI cache (safe to exist in server/in-memory DB too).
+        CREATE TABLE IF NOT EXISTS cache_meta (
+            key   VARCHAR PRIMARY KEY,
+            value VARCHAR NOT NULL
+        );
         ",
     )?;
 
+    Ok(())
+}
+
+fn init_db(conn: &Connection) -> Result<()> {
+    load_fts(conn)?;
+    ensure_schema(conn)?;
     Ok(())
 }
 
@@ -588,6 +607,35 @@ fn ingest_all(conn: &Connection) -> Result<IngestStats> {
         codex_sessions: xs,
         codex_messages: xm,
     })
+}
+
+const CACHE_SCHEMA_VERSION: &str = "1";
+
+fn write_cache_meta(conn: &Connection, stats: &IngestStats) -> Result<()> {
+    let refreshed_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+
+    conn.execute("DELETE FROM cache_meta", [])?;
+    conn.execute(
+        "INSERT INTO cache_meta (key, value) VALUES ('schema_version', ?)",
+        params![CACHE_SCHEMA_VERSION],
+    )?;
+    conn.execute(
+        "INSERT INTO cache_meta (key, value) VALUES ('refreshed_at_unix', ?)",
+        params![refreshed_at_unix],
+    )?;
+    conn.execute(
+        "INSERT INTO cache_meta (key, value) VALUES ('claude_messages', ?)",
+        params![stats.claude_messages.to_string()],
+    )?;
+    conn.execute(
+        "INSERT INTO cache_meta (key, value) VALUES ('codex_messages', ?)",
+        params![stats.codex_messages.to_string()],
+    )?;
+    Ok(())
 }
 
 // --- Web Server ---
@@ -1591,6 +1639,130 @@ const SPA_HTML: &str = r##"<!DOCTYPE html>
 </body>
 </html>"##;
 
+// --- CLI Cache (On-Disk DuckDB) ---
+
+fn cache_db_path() -> Result<PathBuf> {
+    if let Ok(p) = std::env::var("MEMORY_DB_PATH") {
+        return Ok(PathBuf::from(p));
+    }
+
+    let base = dirs::cache_dir()
+        .or_else(dirs::data_local_dir)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".cache")))
+        .context("Could not determine cache directory")?;
+
+    Ok(base.join("memory").join("memory.duckdb"))
+}
+
+fn validate_cache(conn: &Connection, cache_path: &Path) -> Result<()> {
+    let schema_version: String = conn
+        .query_row(
+            "SELECT value FROM cache_meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .with_context(|| {
+            format!(
+                "Cache at {} is not initialized. Run `memory ingest` to build it.",
+                cache_path.display()
+            )
+        })?;
+
+    if schema_version != CACHE_SCHEMA_VERSION {
+        anyhow::bail!(
+            "Cache schema version mismatch (found {}, expected {}). Run `memory ingest` to rebuild the cache at {}.",
+            schema_version,
+            CACHE_SCHEMA_VERSION,
+            cache_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn open_cache_db_for_cli() -> Result<Connection> {
+    let cache_path = cache_db_path()?;
+    if !cache_path.exists() {
+        anyhow::bail!(
+            "Cache not found at {}. Run `memory ingest` to build it.",
+            cache_path.display()
+        );
+    }
+
+    let conn = Connection::open(&cache_path)?;
+    load_fts(&conn)?;
+    validate_cache(&conn, &cache_path)?;
+    Ok(conn)
+}
+
+fn rebuild_cli_cache(quiet: bool) -> Result<()> {
+    let cache_path = cache_db_path()?;
+    let cache_dir = cache_path
+        .parent()
+        .context("Cache path has no parent directory")?;
+    std::fs::create_dir_all(cache_dir)?;
+
+    let tmp_path = {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        cache_dir.join(format!(".memory-cache-{}-{}.duckdb", std::process::id(), ts))
+    };
+
+    if !quiet {
+        eprintln!("Building CLI cache at {}", cache_path.display());
+        eprintln!("Ingesting conversation history...");
+    }
+
+    let ingest_result: Result<()> = (|| {
+        let conn = Connection::open(&tmp_path)?;
+        init_db(&conn)?;
+
+        let stats = ingest_all(&conn)?;
+        if !quiet {
+            eprintln!(
+                "  Claude: {} messages from {} sessions across {} projects",
+                stats.claude_messages, stats.claude_sessions, stats.claude_projects
+            );
+            eprintln!(
+                "  Codex:  {} messages from {} sessions across {} projects",
+                stats.codex_messages, stats.codex_sessions, stats.codex_projects
+            );
+            let total_messages = stats.claude_messages + stats.codex_messages;
+            let total_sessions = stats.claude_sessions + stats.codex_sessions;
+            eprintln!("  Total:  {} messages, {} sessions", total_messages, total_sessions);
+            eprintln!("Building FTS index...");
+        }
+
+        create_fts_index(&conn)?;
+        write_cache_meta(&conn, &stats)?;
+        Ok(())
+    })();
+
+    if let Err(e) = ingest_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // Swap the new cache into place. Prefer atomic rename. If the destination exists and
+    // rename fails (e.g. on Windows), remove then rename.
+    if let Err(e) = std::fs::rename(&tmp_path, &cache_path) {
+        if cache_path.exists() {
+            std::fs::remove_file(&cache_path)?;
+            std::fs::rename(&tmp_path, &cache_path)?;
+        } else {
+            return Err(e.into());
+        }
+    }
+
+    if !quiet {
+        eprintln!("Cache ready.");
+    }
+
+    Ok(())
+}
+
 
 // --- CLI Definition ---
 
@@ -1648,6 +1820,9 @@ enum Commands {
     },
     /// Show usage statistics
     Stats,
+    /// (Re)ingest conversation history and rebuild the CLI cache
+    #[command(alias = "refresh")]
+    Ingest,
     /// Start the web server (default when no subcommand given)
     Serve,
 }
@@ -2025,86 +2200,75 @@ fn cmd_stats(conn: &Connection, source: Option<&str>) -> Result<ApiAnalyticsResp
 }
 
 fn run_cli(cli: Cli) -> Result<()> {
-    let conn = Connection::open_in_memory()?;
-    init_db(&conn)?;
+    let Cli {
+        pretty,
+        source,
+        quiet,
+        command,
+    } = cli;
 
-    if !cli.quiet {
-        eprintln!("Ingesting conversation history...");
-    }
-    let stats = ingest_all(&conn)?;
-    if !cli.quiet {
-        eprintln!(
-            "  Claude: {} messages from {} sessions across {} projects",
-            stats.claude_messages, stats.claude_sessions, stats.claude_projects
-        );
-        eprintln!(
-            "  Codex:  {} messages from {} sessions across {} projects",
-            stats.codex_messages, stats.codex_sessions, stats.codex_projects
-        );
-        let total_messages = stats.claude_messages + stats.codex_messages;
-        let total_sessions = stats.claude_sessions + stats.codex_sessions;
-        eprintln!("  Total:  {} messages, {} sessions", total_messages, total_sessions);
-        eprintln!("Building FTS index...");
-    }
-    create_fts_index(&conn)?;
-    if !cli.quiet {
-        eprintln!("Ready.");
-    }
+    let command = command.expect("caller ensures this is Some");
 
-    let source = cli.source.as_deref();
-    let command = cli.command.unwrap(); // caller ensures this is Some
-
-    let json_output = match command {
-        Commands::Projects => {
-            let result = cmd_projects(&conn, source)?;
-            if cli.pretty {
-                serde_json::to_string_pretty(&result)?
-            } else {
-                serde_json::to_string(&result)?
-            }
-        }
-        Commands::Sessions { project } => {
-            let result = cmd_sessions(&conn, &project, source)?;
-            if cli.pretty {
-                serde_json::to_string_pretty(&result)?
-            } else {
-                serde_json::to_string(&result)?
-            }
-        }
-        Commands::Messages { session, limit } => {
-            let result = cmd_messages(&conn, &session, limit)?;
-            if cli.pretty {
-                serde_json::to_string_pretty(&result)?
-            } else {
-                serde_json::to_string(&result)?
-            }
-        }
-        Commands::Search {
-            query,
-            project,
-            page,
-            limit,
-        } => {
-            let result = cmd_search(&conn, &query, project.as_deref(), source, page, limit)?;
-            if cli.pretty {
-                serde_json::to_string_pretty(&result)?
-            } else {
-                serde_json::to_string(&result)?
-            }
-        }
-        Commands::Stats => {
-            let result = cmd_stats(&conn, source)?;
-            if cli.pretty {
-                serde_json::to_string_pretty(&result)?
-            } else {
-                serde_json::to_string(&result)?
-            }
-        }
+    match command {
+        Commands::Ingest => rebuild_cli_cache(quiet),
         Commands::Serve => unreachable!(), // handled before calling run_cli
-    };
+        other => {
+            let conn = open_cache_db_for_cli()?;
+            let source = source.as_deref();
 
-    println!("{}", json_output);
-    Ok(())
+            let json_output = match other {
+                Commands::Projects => {
+                    let result = cmd_projects(&conn, source)?;
+                    if pretty {
+                        serde_json::to_string_pretty(&result)?
+                    } else {
+                        serde_json::to_string(&result)?
+                    }
+                }
+                Commands::Sessions { project } => {
+                    let result = cmd_sessions(&conn, &project, source)?;
+                    if pretty {
+                        serde_json::to_string_pretty(&result)?
+                    } else {
+                        serde_json::to_string(&result)?
+                    }
+                }
+                Commands::Messages { session, limit } => {
+                    let result = cmd_messages(&conn, &session, limit)?;
+                    if pretty {
+                        serde_json::to_string_pretty(&result)?
+                    } else {
+                        serde_json::to_string(&result)?
+                    }
+                }
+                Commands::Search {
+                    query,
+                    project,
+                    page,
+                    limit,
+                } => {
+                    let result = cmd_search(&conn, &query, project.as_deref(), source, page, limit)?;
+                    if pretty {
+                        serde_json::to_string_pretty(&result)?
+                    } else {
+                        serde_json::to_string(&result)?
+                    }
+                }
+                Commands::Stats => {
+                    let result = cmd_stats(&conn, source)?;
+                    if pretty {
+                        serde_json::to_string_pretty(&result)?
+                    } else {
+                        serde_json::to_string(&result)?
+                    }
+                }
+                Commands::Ingest | Commands::Serve => unreachable!("handled above"),
+            };
+
+            println!("{}", json_output);
+            Ok(())
+        }
+    }
 }
 
 // --- OpenAPI ---

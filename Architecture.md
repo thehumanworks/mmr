@@ -83,7 +83,7 @@ Search uses `fts_main_messages.match_bm25()` for ranked results, with LIKE fallb
 2. `ingest_codex()` — walks `~/.codex/sessions/` and `~/.codex/archived_sessions/` recursively
 3. `sessions` table populated via aggregate INSERT from `messages` grouped by `(session_id, project, source)`
 
-All data is in-memory (no persistent storage). Full re-ingestion on every startup.
+Server mode uses an in-memory DuckDB (full re-ingestion on every startup). CLI query commands use an on-disk DuckDB cache built/refreshed via `memory ingest`.
 
 ## API
 

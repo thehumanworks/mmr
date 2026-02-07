@@ -9,9 +9,12 @@ This repo is a local tool to ingest and browse conversation history from the hos
 
 It is **distinct** from the agent runtime `get_memory` tool.
 
+## CLI Cache
+
+CLI query commands read from an on-disk DuckDB cache. Build/refresh it with `memory ingest` (alias: `memory refresh`). Override the cache location with `MEMORY_DB_PATH`. Server mode remains in-memory.
+
 ## `get_memory` Tool Clarification
 
 `get_memory` reads a host-managed “stored memory” payload keyed by a `memory_id`. It does **not**
 read or derive data from this repo or from Codex/Claude session JSONL logs unless the host system
 has explicitly persisted those details into memory.
-
