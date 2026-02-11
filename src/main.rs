@@ -83,6 +83,7 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             original_path   VARCHAR NOT NULL,
             session_count   INTEGER DEFAULT 0,
             message_count   INTEGER DEFAULT 0,
+            last_activity   VARCHAR DEFAULT '',
             PRIMARY KEY (name, source)
         );
 
@@ -633,6 +634,17 @@ fn ingest_all(conn: &Connection) -> Result<IngestStats> {
         ",
     )?;
 
+    // Update projects.last_activity from the most recent session timestamp
+    conn.execute_batch(
+        "
+        UPDATE projects SET last_activity = (
+            SELECT MAX(s.last_timestamp)
+            FROM sessions s
+            WHERE s.project = projects.name AND s.source = projects.source
+        );
+        ",
+    )?;
+
     Ok(IngestStats {
         claude_projects: cp,
         claude_sessions: cs,
@@ -704,6 +716,7 @@ struct ApiProject {
     original_path: String,
     session_count: i32,
     message_count: i32,
+    last_activity: String,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -968,7 +981,7 @@ async fn api_projects(
 
     let mut stmt = conn
         .prepare(
-            "SELECT name, source, original_path, session_count, message_count FROM projects ORDER BY message_count DESC",
+            "SELECT name, source, original_path, session_count, message_count, last_activity FROM projects ORDER BY last_activity DESC",
         )
         .unwrap();
     let projects: Vec<ApiProject> = stmt
@@ -979,6 +992,7 @@ async fn api_projects(
                 original_path: row.get::<_, String>(2)?,
                 session_count: row.get::<_, i32>(3)?,
                 message_count: row.get::<_, i32>(4)?,
+                last_activity: row.get::<_, String>(5)?,
             })
         })
         .unwrap()
@@ -1024,7 +1038,7 @@ async fn api_sessions(
     let mut stmt = conn
         .prepare(
             "SELECT session_id, first_timestamp, last_timestamp, message_count, user_messages, assistant_messages
-             FROM sessions WHERE project = ? AND source = ? ORDER BY first_timestamp DESC",
+             FROM sessions WHERE project = ? AND source = ? ORDER BY last_timestamp DESC",
         )
         .unwrap();
 
@@ -1105,7 +1119,7 @@ async fn api_messages(
             "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
              FROM messages
              WHERE session_id = ?
-             ORDER BY id ASC",
+             ORDER BY id DESC",
         )
         .unwrap();
 
@@ -1878,11 +1892,11 @@ enum Commands {
 fn cmd_projects(conn: &Connection, source: Option<&str>) -> Result<ApiProjectsResponse> {
     let (query_sql, has_source) = match source {
         Some(s) if s == "claude" || s == "codex" => (
-            "SELECT name, source, original_path, session_count, message_count FROM projects WHERE source = ? ORDER BY message_count DESC".to_string(),
+            "SELECT name, source, original_path, session_count, message_count, last_activity FROM projects WHERE source = ? ORDER BY last_activity DESC".to_string(),
             true,
         ),
         _ => (
-            "SELECT name, source, original_path, session_count, message_count FROM projects ORDER BY message_count DESC".to_string(),
+            "SELECT name, source, original_path, session_count, message_count, last_activity FROM projects ORDER BY last_activity DESC".to_string(),
             false,
         ),
     };
@@ -1896,6 +1910,7 @@ fn cmd_projects(conn: &Connection, source: Option<&str>) -> Result<ApiProjectsRe
                 original_path: row.get::<_, String>(2)?,
                 session_count: row.get::<_, i32>(3)?,
                 message_count: row.get::<_, i32>(4)?,
+                last_activity: row.get::<_, String>(5)?,
             })
         })?
         .filter_map(|r| r.ok())
@@ -1908,6 +1923,7 @@ fn cmd_projects(conn: &Connection, source: Option<&str>) -> Result<ApiProjectsRe
                 original_path: row.get::<_, String>(2)?,
                 session_count: row.get::<_, i32>(3)?,
                 message_count: row.get::<_, i32>(4)?,
+                last_activity: row.get::<_, String>(5)?,
             })
         })?
         .filter_map(|r| r.ok())
@@ -1952,7 +1968,7 @@ fn cmd_sessions(conn: &Connection, project: &str, source: Option<&str>) -> Resul
 
     let mut stmt = conn.prepare(
         "SELECT session_id, first_timestamp, last_timestamp, message_count, user_messages, assistant_messages
-         FROM sessions WHERE project = ? AND source = ? ORDER BY first_timestamp DESC",
+         FROM sessions WHERE project = ? AND source = ? ORDER BY last_timestamp DESC",
     )?;
 
     let sessions: Vec<ApiSession> = stmt
@@ -2013,7 +2029,6 @@ fn cmd_messages(conn: &Connection, session_id: &str, limit: Option<usize>) -> Re
         .unwrap_or_else(|_| project_name.clone());
 
     let messages: Vec<ApiMessage> = if let Some(limit) = limit {
-        // Get last N messages: query descending, then reverse
         let mut stmt = conn.prepare(
             "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
              FROM messages
@@ -2021,7 +2036,7 @@ fn cmd_messages(conn: &Connection, session_id: &str, limit: Option<usize>) -> Re
              ORDER BY id DESC
              LIMIT ?",
         )?;
-        let mut msgs: Vec<ApiMessage> = stmt
+        stmt
             .query_map(params![session_id, limit as i64], |row| {
                 Ok(ApiMessage {
                     role: row.get::<_, String>(0)?,
@@ -2035,15 +2050,13 @@ fn cmd_messages(conn: &Connection, session_id: &str, limit: Option<usize>) -> Re
                 })
             })?
             .filter_map(|r| r.ok())
-            .collect();
-        msgs.reverse();
-        msgs
+            .collect()
     } else {
         let mut stmt = conn.prepare(
             "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
              FROM messages
              WHERE session_id = ?
-             ORDER BY id ASC",
+             ORDER BY id DESC",
         )?;
         stmt.query_map(params![session_id], |row| {
             Ok(ApiMessage {
@@ -2421,11 +2434,11 @@ mod tests {
 
         // Insert test projects
         conn.execute(
-            "INSERT INTO projects (name, source, original_path, session_count, message_count) VALUES (?, 'claude', ?, 1, 2)",
+            "INSERT INTO projects (name, source, original_path, session_count, message_count, last_activity) VALUES (?, 'claude', ?, 1, 2, '2025-01-01T00:01:00')",
             params!["-Users-test-proj", "/Users/test/proj"],
         ).unwrap();
         conn.execute(
-            "INSERT INTO projects (name, source, original_path, session_count, message_count) VALUES (?, 'codex', ?, 1, 2)",
+            "INSERT INTO projects (name, source, original_path, session_count, message_count, last_activity) VALUES (?, 'codex', ?, 1, 2, '2025-01-02T00:01:00')",
             params!["/Users/test/codex-proj", "/Users/test/codex-proj"],
         ).unwrap();
 
@@ -2542,8 +2555,9 @@ mod tests {
 
         let messages = json["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
-        assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+        // Messages are sorted most recent first (DESC by id)
+        assert_eq!(messages[0]["role"].as_str().unwrap(), "assistant");
+        assert_eq!(messages[1]["role"].as_str().unwrap(), "user");
     }
 
     #[tokio::test]
