@@ -21,10 +21,10 @@ cargo test               # Run tests
 
 With no subcommand (or `serve`), starts the web server.
 
-With a subcommand, runs as a CLI tool outputting JSON to stdout. CLI query subcommands read from an on-disk DuckDB cache; build/refresh it with `memory ingest` (alias: `memory refresh`).
+With a subcommand, runs as a CLI tool outputting JSON to stdout. CLI query subcommands read from an on-disk DuckDB cache; build/refresh it with `mmr ingest` (alias: `mmr refresh`).
 
 ```
-memory [OPTIONS] <COMMAND>
+mmr [OPTIONS] <COMMAND>
 
 Commands:
   ingest     (Re)ingest conversation history and rebuild the CLI cache
@@ -43,14 +43,14 @@ Global Options:
 
 Examples:
 ```bash
-memory ingest
-memory projects --pretty
-memory sessions --project <NAME> --source claude --pretty
-memory messages --session <ID> --limit 3 --pretty
-memory search "some query" --pretty
-memory search "test" --source claude
-memory stats --pretty
-memory projects --quiet 2>/dev/null | jq .   # Clean JSON, no stderr
+mmr ingest
+mmr projects --pretty
+mmr sessions --project <NAME> --source claude --pretty
+mmr messages --session <ID> --limit 3 --pretty
+mmr search "some query" --pretty
+mmr search "test" --source claude
+mmr stats --pretty
+mmr projects --quiet 2>/dev/null | jq .   # Clean JSON, no stderr
 ```
 
 ## Architecture
@@ -71,6 +71,8 @@ The web server continues to use in-memory storage; persistence is only used for 
 1. **JSONL Parsing Types** (lines ~15-41): `ClaudeJsonlLine`, `ClaudeMessagePayload` — serde structs for Claude's JSONL format. Codex parsing uses `serde_json::Value` directly.
 
 2. **DB Setup & Ingestion** (lines ~43-590): `init_db()` loads the DuckDB FTS extension and creates tables (`messages`, `projects`, `sessions`, `cache_meta`) all with a `source` column (`'claude'` or `'codex'`). `ingest_claude()` reads `~/.claude/projects/{project-dir}/{uuid}.jsonl` (dash-encoded paths, e.g. `-Users-mish-memory` → `/Users/mish/memory`). `ingest_codex()` walks `~/.codex/sessions/` recursively. `ingest_all()` orchestrates both and populates the `sessions` table via aggregate INSERT.
+ 
+    **Claude Code project path encoding**: Claude Code encodes project directory paths via `path.replace(/[^a-zA-Z0-9]/g, "-")` — every non-alphanumeric character (`/`, `.`, `-`, `_`, space) becomes `-`. This is a **lossy, irreversible** encoding (e.g. `/foo/bar-baz` and `/foo/bar/baz` both encode to `-foo-bar-baz`). Instead of attempting to decode the dir name, `extract_project_path_from_sessions()` reads the `cwd` field from JSONL session data to recover the true path. `decode_project_name()` is a no-op identity fallback used only when no session data contains a `cwd`.
 
 3. **Query Param & API Response Types** (lines ~594-727): `Deserialize` + `IntoParams` structs for query params (`ProjectQuery`, `MessageQuery`, `SearchParams`). `Serialize` + `ToSchema` structs for all JSON responses (`ApiProject`, `ApiSession`, `ApiMessage`, `ApiSearchResult`, `ApiAnalyticsResponse`, etc.).
 
@@ -87,7 +89,7 @@ The web server continues to use in-memory storage; persistence is only used for 
 
 7. **SPA Frontend** (lines ~1198-1591): `SPA_HTML` const — full HTML document with embedded CSS and JavaScript. Client-side routing via `history.pushState()`, fetches from `/api/*` endpoints. Source tab filtering on the index page is done client-side.
 
-8. **CLI Definition & Commands**: Clap `Parser`/`Subcommand` structs (`Cli`, `Commands`). `memory ingest` builds the on-disk cache; the query subcommands call the `cmd_*` functions against the cache DB.
+8. **CLI Definition & Commands**: Clap `Parser`/`Subcommand` structs (`Cli`, `Commands`). `mmr ingest` builds the on-disk cache; the query subcommands call the `cmd_*` functions against the cache DB.
 
 9. **OpenAPI & Router Wiring**: `ApiDoc` struct with `#[derive(OpenApi)]`. Routes registered via `OpenApiRouter` which auto-collects specs. Spec served at `GET /openapi.json`. Non-API routes fall back to `spa_handler`.
 
@@ -96,7 +98,7 @@ The web server continues to use in-memory storage; persistence is only used for 
 ## Key Technical Details
 
 - DuckDB in-memory with bundled build (`duckdb` crate `features = ["bundled"]`)
-- CLI cache: on-disk DuckDB (default under OS cache dir; override with `MEMORY_DB_PATH`)
+- CLI cache: on-disk DuckDB (default under OS cache dir; override with `MMR_DB_PATH` (legacy: `MEMORY_DB_PATH`))
 - FTS: `PRAGMA create_fts_index` with `fts_main_messages.match_bm25()` for ranked search
 - CLI parsing via `clap` v4 with derive macros; no subcommand defaults to web server
 - Shared state is `Arc<Mutex<Connection>>` (aliased as `AppState`) for web server mode

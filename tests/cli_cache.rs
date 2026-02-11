@@ -15,10 +15,10 @@ fn cli_errors_when_cache_missing() {
     fs::create_dir_all(&home).unwrap();
     let db_path = tmp.path().join("missing.duckdb");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_memory"))
+    let out = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .arg("projects")
         .env("HOME", &home)
-        .env("MEMORY_DB_PATH", &db_path)
+        .env("MMR_DB_PATH", &db_path)
         .output()
         .unwrap();
 
@@ -29,7 +29,7 @@ fn cli_errors_when_cache_missing() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("memory ingest") || stderr.contains("ingest"),
+        stderr.contains("mmr ingest") || stderr.contains("ingest"),
         "stderr should instruct how to build cache, stderr={}",
         stderr
     );
@@ -68,11 +68,11 @@ fn cli_uses_cache_and_does_not_reingest() {
     let db_path = tmp.path().join("cache.duckdb");
 
     // Build the cache from fixtures.
-    let out = Command::new(env!("CARGO_BIN_EXE_memory"))
+    let out = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .arg("--quiet")
         .arg("ingest")
         .env("HOME", &home)
-        .env("MEMORY_DB_PATH", &db_path)
+        .env("MMR_DB_PATH", &db_path)
         .output()
         .unwrap();
     assert!(
@@ -86,10 +86,10 @@ fn cli_uses_cache_and_does_not_reingest() {
     fs::remove_dir_all(home.join(".codex")).unwrap();
 
     // Query should succeed purely from the cache.
-    let out = Command::new(env!("CARGO_BIN_EXE_memory"))
+    let out = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .arg("projects")
         .env("HOME", &home)
-        .env("MEMORY_DB_PATH", &db_path)
+        .env("MMR_DB_PATH", &db_path)
         .output()
         .unwrap();
     assert!(
@@ -108,4 +108,3 @@ fn cli_uses_cache_and_does_not_reingest() {
     assert_eq!(json["total_sessions"].as_i64().unwrap(), 2);
     assert_eq!(json["projects"].as_array().unwrap().len(), 2);
 }
-

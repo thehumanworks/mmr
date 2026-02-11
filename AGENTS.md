@@ -11,7 +11,7 @@ It is **distinct** from the agent runtime `get_memory` tool.
 
 ## CLI Cache
 
-CLI query commands read from an on-disk DuckDB cache. Build/refresh it with `memory ingest` (alias: `memory refresh`). Override the cache location with `MEMORY_DB_PATH`. Server mode remains in-memory.
+CLI query commands read from an on-disk DuckDB cache. Build/refresh it with `mmr ingest` (alias: `mmr refresh`). Override the cache location with `MMR_DB_PATH` (legacy: `MEMORY_DB_PATH`). Server mode remains in-memory.
 
 ## `get_memory` Tool Clarification
 

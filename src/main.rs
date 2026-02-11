@@ -186,12 +186,45 @@ fn extract_usage(usage: &serde_json::Value) -> (i64, i64) {
 }
 
 fn decode_project_name(dir_name: &str) -> String {
-    if dir_name.starts_with('-') {
-        let path = dir_name.replacen('-', "/", 1);
-        path.replace('-', "/")
-    } else {
-        dir_name.to_string()
+    dir_name.to_string()
+}
+
+/// Extract the actual project path from JSONL session files by reading the `cwd`
+/// field from the first parseable line that has one.
+///
+/// Claude Code's encoding (`replace(/[^a-zA-Z0-9]/g, "-")`) is lossy: `/`, `.`,
+/// `-`, `_`, and spaces all map to `-`, making decoding from the dir name alone
+/// impossible. Instead we read the ground-truth `cwd` from session data.
+fn extract_project_path_from_sessions(project_dir: &Path) -> Option<String> {
+    let mut entries: Vec<_> = std::fs::read_dir(project_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                == Some("jsonl")
+        })
+        .collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
+
+    for entry in entries {
+        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            for line in content.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(parsed) = serde_json::from_str::<ClaudeJsonlLine>(line) {
+                    if let Some(cwd) = parsed.cwd.as_deref() {
+                        if !cwd.is_empty() {
+                            return Some(cwd.to_string());
+                        }
+                    }
+                }
+            }
+        }
     }
+    None
 }
 
 fn ingest_claude_jsonl_file(
@@ -297,7 +330,8 @@ fn ingest_claude(conn: &Connection, id_counter: &mut i64) -> Result<(usize, usiz
         }
 
         let project_dir_name = entry.file_name().to_string_lossy().to_string();
-        let project_path = decode_project_name(&project_dir_name);
+        let project_path = extract_project_path_from_sessions(&entry.path())
+            .unwrap_or_else(|| decode_project_name(&project_dir_name));
         let mut project_sessions = 0;
         let mut project_messages = 0;
 
@@ -1642,6 +1676,10 @@ const SPA_HTML: &str = r##"<!DOCTYPE html>
 // --- CLI Cache (On-Disk DuckDB) ---
 
 fn cache_db_path() -> Result<PathBuf> {
+    // New name: MMR_DB_PATH. Keep MEMORY_DB_PATH for backwards compatibility.
+    if let Ok(p) = std::env::var("MMR_DB_PATH") {
+        return Ok(PathBuf::from(p));
+    }
     if let Ok(p) = std::env::var("MEMORY_DB_PATH") {
         return Ok(PathBuf::from(p));
     }
@@ -1651,7 +1689,15 @@ fn cache_db_path() -> Result<PathBuf> {
         .or_else(|| dirs::home_dir().map(|h| h.join(".cache")))
         .context("Could not determine cache directory")?;
 
-    Ok(base.join("memory").join("memory.duckdb"))
+    let new_path = base.join("mmr").join("mmr.duckdb");
+    let legacy_path = base.join("memory").join("memory.duckdb");
+    if new_path.exists() {
+        return Ok(new_path);
+    }
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+    Ok(new_path)
 }
 
 fn validate_cache(conn: &Connection, cache_path: &Path) -> Result<()> {
@@ -1663,14 +1709,14 @@ fn validate_cache(conn: &Connection, cache_path: &Path) -> Result<()> {
         )
         .with_context(|| {
             format!(
-                "Cache at {} is not initialized. Run `memory ingest` to build it.",
+                "Cache at {} is not initialized. Run `mmr ingest` to build it.",
                 cache_path.display()
             )
         })?;
 
     if schema_version != CACHE_SCHEMA_VERSION {
         anyhow::bail!(
-            "Cache schema version mismatch (found {}, expected {}). Run `memory ingest` to rebuild the cache at {}.",
+            "Cache schema version mismatch (found {}, expected {}). Run `mmr ingest` to rebuild the cache at {}.",
             schema_version,
             CACHE_SCHEMA_VERSION,
             cache_path.display()
@@ -1684,7 +1730,7 @@ fn open_cache_db_for_cli() -> Result<Connection> {
     let cache_path = cache_db_path()?;
     if !cache_path.exists() {
         anyhow::bail!(
-            "Cache not found at {}. Run `memory ingest` to build it.",
+            "Cache not found at {}. Run `mmr ingest` to build it.",
             cache_path.display()
         );
     }
@@ -1707,7 +1753,7 @@ fn rebuild_cli_cache(quiet: bool) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        cache_dir.join(format!(".memory-cache-{}-{}.duckdb", std::process::id(), ts))
+        cache_dir.join(format!(".mmr-cache-{}-{}.duckdb", std::process::id(), ts))
     };
 
     if !quiet {
@@ -1767,7 +1813,7 @@ fn rebuild_cli_cache(quiet: bool) -> Result<()> {
 // --- CLI Definition ---
 
 #[derive(Parser)]
-#[command(name = "memory", about = "Search and browse AI conversation history")]
+#[command(name = "mmr", about = "Search and browse AI conversation history")]
 struct Cli {
     /// Pretty-print JSON output
     #[arg(long, global = true)]
@@ -2549,5 +2595,101 @@ mod tests {
         // IndexParams should no longer appear in the spec
         let spec_str = serde_json::to_string(&json).unwrap();
         assert!(!spec_str.contains("IndexParams"), "IndexParams should not appear in the OpenAPI spec");
+    }
+
+    /// Simulates Claude Code's encoding: `path.replace(/[^a-zA-Z0-9]/g, "-")`
+    /// Source: Claude Code binary, function CZT (minified)
+    fn claude_code_encode(path: &str) -> String {
+        path.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect()
+    }
+
+    /// All known project dir names from ~/.claude/projects/ mapped to their
+    /// actual cwd paths (extracted from the JSONL session files).
+    /// This is ground-truth data from the user's machine.
+    fn known_mappings() -> Vec<(&'static str, &'static str)> {
+        vec![
+            // Simple paths (no ambiguity: only `/` was replaced)
+            ("-Users-mish", "/Users/mish"),
+            ("-Users-mish-ClaudeOS", "/Users/mish/ClaudeOS"),
+            ("-Users-mish-memory", "/Users/mish/memory"),
+            ("-Users-mish-workspaces-experiments-agpy", "/Users/mish/workspaces/experiments/agpy"),
+            ("-Users-mish-workspaces-experiments-msi", "/Users/mish/workspaces/experiments/msi"),
+            ("-Users-mish-workspaces-games-goodboy", "/Users/mish/workspaces/games/goodboy"),
+            ("-Users-mish-workspaces-sandbox-agpy", "/Users/mish/workspaces/sandbox/agpy"),
+            ("-Users-mish-workspaces-tools-notebooklm", "/Users/mish/workspaces/tools/notebooklm"),
+            ("-Users-mish-workspaces-tools-wit", "/Users/mish/workspaces/tools/wit"),
+            // Dot-prefixed components: `.foo` -> `-foo`, producing `--` in encoded form
+            ("-Users-mish--claude-skills-wit", "/Users/mish/.claude/skills/wit"),
+            ("-Users-mish--warp-themes", "/Users/mish/.warp/themes"),
+            ("-Users-mish-workspaces-experiments-modal-rs--agents-tasks", "/Users/mish/workspaces/experiments/modal-rs/.agents/tasks"),
+            // Paths with literal dashes: `-` in original path also becomes `-` (LOSSY)
+            ("-Users-mish-workspaces-experiments-codex-auth", "/Users/mish/workspaces/experiments/codex-auth"),
+            ("-Users-mish-workspaces-experiments-modal-rs", "/Users/mish/workspaces/experiments/modal-rs"),
+            ("-Users-mish-workspaces-experiments-modal-rs-main-fixed", "/Users/mish/workspaces/experiments/modal-rs-main-fixed"),
+            ("-Users-mish-workspaces-experiments-modal-rs-main-updated", "/Users/mish/workspaces/experiments/modal-rs-main-updated"),
+            ("-Users-mish-workspaces-experiments-modal-rs-main-updated-crates-asi", "/Users/mish/workspaces/experiments/modal-rs-main-updated/crates/asi"),
+            ("-Users-mish-workspaces-tools-perplexity-finance", "/Users/mish/workspaces/tools/perplexity-finance"),
+            // Underscore in original path: `_` also becomes `-` (LOSSY)
+            ("-Users-mish-workspaces-experiments-modalrs-optimized", "/Users/mish/workspaces/experiments/modalrs_optimized"),
+        ]
+    }
+
+    #[test]
+    fn test_claude_code_encoding_rule() {
+        // Verify that our understanding of the encoding rule matches all
+        // known real-world project directories.
+        for (encoded, actual_path) in known_mappings() {
+            let computed = claude_code_encode(actual_path);
+            assert_eq!(
+                computed, encoded,
+                "Encoding mismatch for path {}: expected '{}', got '{}'",
+                actual_path, encoded, computed
+            );
+        }
+    }
+
+    #[test]
+    fn test_decode_project_name_is_identity_fallback() {
+        // decode_project_name is now a no-op fallback: it returns the raw dir
+        // name unchanged, since the encoding is lossy and cannot be reversed.
+        // The real path comes from extract_project_path_from_sessions().
+        assert_eq!(
+            decode_project_name("-Users-mish--claude-skills-wit"),
+            "-Users-mish--claude-skills-wit"
+        );
+        assert_eq!(
+            decode_project_name("-Users-mish-workspaces-experiments-codex-auth"),
+            "-Users-mish-workspaces-experiments-codex-auth"
+        );
+        assert_eq!(
+            decode_project_name("some-plain-name"),
+            "some-plain-name"
+        );
+    }
+
+    #[test]
+    fn test_encoding_is_lossy() {
+        // Prove that the encoding is fundamentally lossy: multiple distinct
+        // paths can produce the same encoded directory name.
+        let path_with_dash = "/Users/mish/my-project";
+        let path_with_slash = "/Users/mish/my/project";
+        let path_with_underscore = "/Users/mish/my_project";
+        let path_with_space = "/Users/mish/my project";
+        let path_with_dot = "/Users/mish/my.project";
+
+        let encoded_dash = claude_code_encode(path_with_dash);
+        let encoded_slash = claude_code_encode(path_with_slash);
+        let encoded_underscore = claude_code_encode(path_with_underscore);
+        let encoded_space = claude_code_encode(path_with_space);
+        let encoded_dot = claude_code_encode(path_with_dot);
+
+        // All five produce the exact same encoded string
+        assert_eq!(encoded_dash, encoded_slash);
+        assert_eq!(encoded_dash, encoded_underscore);
+        assert_eq!(encoded_dash, encoded_space);
+        assert_eq!(encoded_dash, encoded_dot);
+        assert_eq!(encoded_dash, "-Users-mish-my-project");
     }
 }
