@@ -196,6 +196,37 @@ fn cli_sessions_normalizes_codex_project_without_leading_slash() {
 }
 
 #[test]
+fn cli_sessions_defaults_source_to_codex() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+    let _ = run_cli(&["projects"], &home, &db_path);
+
+    let out = run_cli(
+        &["sessions", "--project", "Users/test/codex-proj"],
+        &home,
+        &db_path,
+    );
+
+    assert!(
+        out.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["source"].as_str().unwrap(), "codex");
+    assert_eq!(
+        json["project_name"].as_str().unwrap(),
+        "/Users/test/codex-proj"
+    );
+    assert_eq!(json["sessions"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn cli_projects_sessions_messages_support_limit_and_offset_flags() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

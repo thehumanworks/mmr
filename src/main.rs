@@ -2258,7 +2258,7 @@ async fn api_sessions(
 ) -> Json<ApiSessionsResponse> {
     let conn = db.lock().unwrap();
     let project_name = params.name.as_deref().unwrap_or("");
-    let source = params.source.as_deref().unwrap_or("claude");
+    let source = params.source.as_deref().unwrap_or("codex");
 
     let project_path: String = conn
         .query_row(
@@ -2775,7 +2775,7 @@ const SPA_HTML: &str = r##"<!DOCTYPE html>
 
         async function renderProject(app, params) {
             var name = params.get('name') || '';
-            var source = params.get('source') || 'claude';
+            var source = params.get('source') || 'codex';
             var apiUrl = '/api/sessions?name=' + E(name) + '&source=' + E(source);
             var data = await fetchJSON(apiUrl);
             var dirname = data.project_path.split('/').pop() || data.project_path;
@@ -3288,7 +3288,7 @@ fn cmd_sessions(
     limit: Option<usize>,
     offset: usize,
 ) -> Result<ApiSessionsResponse> {
-    let source = source.unwrap_or("claude");
+    let source = source.unwrap_or("codex");
     let project = resolve_project_for_source(conn, source, project);
 
     let project_path: String = conn
@@ -3912,6 +3912,15 @@ mod tests {
         let out = cmd_sessions(&conn, "Users/test/codex-proj", Some("codex"), None, 0).unwrap();
         assert_eq!(out.project_name, "/Users/test/codex-proj");
         assert_eq!(out.project_path, "/Users/test/codex-proj");
+        assert_eq!(out.sessions.len(), 1);
+    }
+
+    #[test]
+    fn test_cmd_sessions_defaults_source_to_codex() {
+        let conn = setup_test_db();
+        let out = cmd_sessions(&conn, "Users/test/codex-proj", None, None, 0).unwrap();
+        assert_eq!(out.source, "codex");
+        assert_eq!(out.project_name, "/Users/test/codex-proj");
         assert_eq!(out.sessions.len(), 1);
     }
 
