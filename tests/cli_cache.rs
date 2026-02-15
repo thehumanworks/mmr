@@ -158,3 +158,39 @@ fn incremental_refresh_removes_deleted_source_files() {
     let second = run_cli(&["projects"], &home, &db_path);
     assert_eq!(projects_total_messages(&second), 2);
 }
+
+#[test]
+fn cli_sessions_normalizes_codex_project_without_leading_slash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+    let _ = run_cli(&["projects"], &home, &db_path);
+
+    let out = run_cli(
+        &[
+            "sessions",
+            "--source",
+            "codex",
+            "--project",
+            "Users/test/codex-proj",
+        ],
+        &home,
+        &db_path,
+    );
+
+    assert!(
+        out.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json["project_name"].as_str().unwrap(),
+        "/Users/test/codex-proj"
+    );
+    assert_eq!(json["sessions"].as_array().unwrap().len(), 1);
+}

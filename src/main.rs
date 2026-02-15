@@ -3203,20 +3203,57 @@ fn cmd_projects(conn: &Connection, source: Option<&str>) -> Result<ApiProjectsRe
     })
 }
 
+fn resolve_project_for_source(conn: &Connection, source: &str, project: &str) -> String {
+    if source != "codex" {
+        return project.to_string();
+    }
+
+    let mut candidates = Vec::new();
+    let trimmed = project.trim();
+    if !trimmed.is_empty() {
+        candidates.push(trimmed.to_string());
+        if trimmed.starts_with('/') {
+            let without = trimmed.trim_start_matches('/');
+            if !without.is_empty() {
+                candidates.push(without.to_string());
+            }
+        } else {
+            candidates.push(format!("/{}", trimmed));
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+
+    for candidate in candidates {
+        let found: Result<String, _> = conn.query_row(
+            "SELECT name FROM projects WHERE source = 'codex' AND (name = ? OR original_path = ?) LIMIT 1",
+            params![&candidate, &candidate],
+            |row| row.get(0),
+        );
+        if let Ok(name) = found {
+            return name;
+        }
+    }
+
+    project.to_string()
+}
+
 fn cmd_sessions(
     conn: &Connection,
     project: &str,
     source: Option<&str>,
 ) -> Result<ApiSessionsResponse> {
     let source = source.unwrap_or("claude");
+    let project = resolve_project_for_source(conn, source, project);
 
     let project_path: String = conn
         .query_row(
             "SELECT original_path FROM projects WHERE name = ? AND source = ?",
-            params![project, source],
+            params![&project, source],
             |row| row.get(0),
         )
-        .unwrap_or_else(|_| project.to_string());
+        .unwrap_or_else(|_| project.clone());
 
     let mut stmt = conn.prepare(
         "SELECT session_id, first_timestamp, last_timestamp, message_count, user_messages, assistant_messages
@@ -3224,7 +3261,7 @@ fn cmd_sessions(
     )?;
 
     let sessions: Vec<ApiSession> = stmt
-        .query_map(params![project, source], |row| {
+        .query_map(params![&project, source], |row| {
             let sid: String = row.get(0)?;
             Ok((sid, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i32>(3)?, row.get::<_, i32>(4)?, row.get::<_, i32>(5)?))
         })?
@@ -3233,7 +3270,7 @@ fn cmd_sessions(
             let preview: String = conn
                 .query_row(
                     "SELECT content_text FROM messages WHERE session_id = ? AND project = ? AND source = ? AND role = 'user' ORDER BY id ASC LIMIT 1",
-                    params![&sid, project, source],
+                    params![&sid, &project, source],
                     |row| row.get(0),
                 )
                 .unwrap_or_default();
@@ -3256,7 +3293,7 @@ fn cmd_sessions(
         .collect();
 
     Ok(ApiSessionsResponse {
-        project_name: project.to_string(),
+        project_name: project,
         project_path,
         source: source.to_string(),
         sessions,
@@ -3356,7 +3393,12 @@ fn cmd_search(
         });
     }
 
-    let project_filter = project.unwrap_or("");
+    let resolved_project = match (project, source) {
+        (Some(p), Some("codex")) => resolve_project_for_source(conn, "codex", p),
+        (Some(p), _) => p.to_string(),
+        (None, _) => String::new(),
+    };
+    let project_filter = resolved_project.as_str();
     let source_filter = source.unwrap_or("");
     let offset = page * per_page;
 
@@ -3828,6 +3870,22 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0]["session_id"].as_str().unwrap(), "sess-claude-1");
         assert_eq!(sessions[0]["message_count"].as_i64().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_cmd_sessions_normalizes_codex_project_without_leading_slash() {
+        let conn = setup_test_db();
+        let out = cmd_sessions(&conn, "Users/test/codex-proj", Some("codex")).unwrap();
+        assert_eq!(out.project_name, "/Users/test/codex-proj");
+        assert_eq!(out.project_path, "/Users/test/codex-proj");
+        assert_eq!(out.sessions.len(), 1);
+    }
+
+    #[test]
+    fn test_resolve_project_for_source_normalizes_codex_path() {
+        let conn = setup_test_db();
+        let resolved = resolve_project_for_source(&conn, "codex", "Users/test/codex-proj");
+        assert_eq!(resolved, "/Users/test/codex-proj");
     }
 
     #[tokio::test]

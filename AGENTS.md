@@ -21,6 +21,8 @@ Only new appended bytes are parsed for unchanged files; rewritten/truncated file
 
 `mmr ingest` (alias: `mmr refresh`) remains available as an explicit full cache rebuild path. Override cache location with `MMR_DB_PATH` (legacy: `MEMORY_DB_PATH`). Server mode remains in-memory.
 
+For Codex project lookups in CLI commands, project keys are absolute `cwd` paths. The CLI normalizes missing-leading-slash inputs (for example `Users/mish/memory` resolves to `/Users/mish/memory`).
+
 ## `get_memory` Tool Clarification
 
 `get_memory` reads a host-managed “stored memory” payload keyed by a `memory_id`. It does **not**
