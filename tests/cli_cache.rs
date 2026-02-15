@@ -194,3 +194,82 @@ fn cli_sessions_normalizes_codex_project_without_leading_slash() {
     );
     assert_eq!(json["sessions"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn cli_projects_sessions_messages_support_limit_and_offset_flags() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+    let _ = run_cli(&["projects"], &home, &db_path);
+
+    let projects = run_cli(
+        &["projects", "--limit", "1", "--offset", "1"],
+        &home,
+        &db_path,
+    );
+    assert!(
+        projects.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&projects.stderr),
+        String::from_utf8_lossy(&projects.stdout)
+    );
+    let projects_json: serde_json::Value = serde_json::from_slice(&projects.stdout).unwrap();
+    assert_eq!(projects_json["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        projects_json["projects"][0]["name"].as_str().unwrap(),
+        "-Users-test-proj"
+    );
+
+    let sessions = run_cli(
+        &[
+            "sessions",
+            "--source",
+            "codex",
+            "--project",
+            "/Users/test/codex-proj",
+            "--limit",
+            "1",
+            "--offset",
+            "0",
+        ],
+        &home,
+        &db_path,
+    );
+    assert!(
+        sessions.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&sessions.stderr),
+        String::from_utf8_lossy(&sessions.stdout)
+    );
+    let sessions_json: serde_json::Value = serde_json::from_slice(&sessions.stdout).unwrap();
+    assert_eq!(sessions_json["sessions"].as_array().unwrap().len(), 1);
+
+    let messages = run_cli(
+        &[
+            "messages",
+            "--session",
+            "sess-claude-1",
+            "--limit",
+            "1",
+            "--offset",
+            "1",
+        ],
+        &home,
+        &db_path,
+    );
+    assert!(
+        messages.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&messages.stderr),
+        String::from_utf8_lossy(&messages.stdout)
+    );
+    let messages_json: serde_json::Value = serde_json::from_slice(&messages.stdout).unwrap();
+    assert_eq!(messages_json["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        messages_json["messages"][0]["role"].as_str().unwrap(),
+        "user"
+    );
+}

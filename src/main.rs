@@ -3096,12 +3096,25 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// List all projects
-    Projects,
+    Projects {
+        /// Maximum number of projects to return
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Number of projects to skip
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+    },
     /// List sessions for a project
     Sessions {
         /// Project name
         #[arg(long)]
         project: String,
+        /// Maximum number of sessions to return
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Number of sessions to skip
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
     },
     /// Get messages for a session
     Messages {
@@ -3111,6 +3124,9 @@ enum Commands {
         /// Return only the last N messages
         #[arg(long)]
         limit: Option<usize>,
+        /// Number of messages to skip
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
     },
     /// Search across all conversations
     Search {
@@ -3137,14 +3153,40 @@ enum Commands {
 
 // --- CLI Command Implementations ---
 
-fn cmd_projects(conn: &Connection, source: Option<&str>) -> Result<ApiProjectsResponse> {
+fn pagination_clause(limit: Option<usize>, offset: usize) -> String {
+    let mut clause = String::new();
+    if let Some(limit) = limit {
+        clause.push_str(&format!(" LIMIT {}", limit));
+    }
+    if offset > 0 {
+        if limit.is_none() {
+            clause.push_str(" LIMIT 9223372036854775807");
+        }
+        clause.push_str(&format!(" OFFSET {}", offset));
+    }
+    clause
+}
+
+fn cmd_projects(
+    conn: &Connection,
+    source: Option<&str>,
+    limit: Option<usize>,
+    offset: usize,
+) -> Result<ApiProjectsResponse> {
+    let pagination = pagination_clause(limit, offset);
     let (query_sql, has_source) = match source {
         Some(s) if s == "claude" || s == "codex" => (
-            "SELECT name, source, original_path, session_count, message_count, last_activity FROM projects WHERE source = ? ORDER BY last_activity DESC".to_string(),
+            format!(
+                "SELECT name, source, original_path, session_count, message_count, last_activity FROM projects WHERE source = ? ORDER BY last_activity DESC{}",
+                pagination
+            ),
             true,
         ),
         _ => (
-            "SELECT name, source, original_path, session_count, message_count, last_activity FROM projects ORDER BY last_activity DESC".to_string(),
+            format!(
+                "SELECT name, source, original_path, session_count, message_count, last_activity FROM projects ORDER BY last_activity DESC{}",
+                pagination
+            ),
             false,
         ),
     };
@@ -3243,6 +3285,8 @@ fn cmd_sessions(
     conn: &Connection,
     project: &str,
     source: Option<&str>,
+    limit: Option<usize>,
+    offset: usize,
 ) -> Result<ApiSessionsResponse> {
     let source = source.unwrap_or("claude");
     let project = resolve_project_for_source(conn, source, project);
@@ -3255,10 +3299,12 @@ fn cmd_sessions(
         )
         .unwrap_or_else(|_| project.clone());
 
-    let mut stmt = conn.prepare(
+    let query_sql = format!(
         "SELECT session_id, first_timestamp, last_timestamp, message_count, user_messages, assistant_messages
-         FROM sessions WHERE project = ? AND source = ? ORDER BY last_timestamp DESC",
-    )?;
+         FROM sessions WHERE project = ? AND source = ? ORDER BY last_timestamp DESC{}",
+        pagination_clause(limit, offset)
+    );
+    let mut stmt = conn.prepare(&query_sql)?;
 
     let sessions: Vec<ApiSession> = stmt
         .query_map(params![&project, source], |row| {
@@ -3304,6 +3350,7 @@ fn cmd_messages(
     conn: &Connection,
     session_id: &str,
     limit: Option<usize>,
+    offset: usize,
 ) -> Result<ApiMessagesResponse> {
     let (project_name, source): (String, String) = conn
         .query_row(
@@ -3321,15 +3368,16 @@ fn cmd_messages(
         )
         .unwrap_or_else(|_| project_name.clone());
 
-    let messages: Vec<ApiMessage> = if let Some(limit) = limit {
-        let mut stmt = conn.prepare(
-            "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
+    let query_sql = format!(
+        "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
              FROM messages
              WHERE session_id = ?
-             ORDER BY id DESC
-             LIMIT ?",
-        )?;
-        stmt.query_map(params![session_id, limit as i64], |row| {
+             ORDER BY id DESC{}",
+        pagination_clause(limit, offset)
+    );
+    let mut stmt = conn.prepare(&query_sql)?;
+    let messages: Vec<ApiMessage> = stmt
+        .query_map(params![session_id], |row| {
             Ok(ApiMessage {
                 role: row.get::<_, String>(0)?,
                 content: row.get::<_, String>(1)?,
@@ -3342,29 +3390,7 @@ fn cmd_messages(
             })
         })?
         .filter_map(|r| r.ok())
-        .collect()
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
-             FROM messages
-             WHERE session_id = ?
-             ORDER BY id DESC",
-        )?;
-        stmt.query_map(params![session_id], |row| {
-            Ok(ApiMessage {
-                role: row.get::<_, String>(0)?,
-                content: row.get::<_, String>(1)?,
-                model: row.get::<_, String>(2)?,
-                timestamp: row.get::<_, String>(3)?,
-                is_subagent: row.get::<_, bool>(4)?,
-                msg_type: row.get::<_, String>(5)?,
-                input_tokens: row.get::<_, i64>(6)?,
-                output_tokens: row.get::<_, i64>(7)?,
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect()
-    };
+        .collect();
 
     Ok(ApiMessagesResponse {
         session_id: session_id.to_string(),
@@ -3587,24 +3613,32 @@ fn run_cli(cli: Cli) -> Result<()> {
             let source = source.as_deref();
 
             let json_output = match other {
-                Commands::Projects => {
-                    let result = cmd_projects(&conn, source)?;
+                Commands::Projects { limit, offset } => {
+                    let result = cmd_projects(&conn, source, limit, offset)?;
                     if pretty {
                         serde_json::to_string_pretty(&result)?
                     } else {
                         serde_json::to_string(&result)?
                     }
                 }
-                Commands::Sessions { project } => {
-                    let result = cmd_sessions(&conn, &project, source)?;
+                Commands::Sessions {
+                    project,
+                    limit,
+                    offset,
+                } => {
+                    let result = cmd_sessions(&conn, &project, source, limit, offset)?;
                     if pretty {
                         serde_json::to_string_pretty(&result)?
                     } else {
                         serde_json::to_string(&result)?
                     }
                 }
-                Commands::Messages { session, limit } => {
-                    let result = cmd_messages(&conn, &session, limit)?;
+                Commands::Messages {
+                    session,
+                    limit,
+                    offset,
+                } => {
+                    let result = cmd_messages(&conn, &session, limit, offset)?;
                     if pretty {
                         serde_json::to_string_pretty(&result)?
                     } else {
@@ -3875,7 +3909,7 @@ mod tests {
     #[test]
     fn test_cmd_sessions_normalizes_codex_project_without_leading_slash() {
         let conn = setup_test_db();
-        let out = cmd_sessions(&conn, "Users/test/codex-proj", Some("codex")).unwrap();
+        let out = cmd_sessions(&conn, "Users/test/codex-proj", Some("codex"), None, 0).unwrap();
         assert_eq!(out.project_name, "/Users/test/codex-proj");
         assert_eq!(out.project_path, "/Users/test/codex-proj");
         assert_eq!(out.sessions.len(), 1);
@@ -3886,6 +3920,44 @@ mod tests {
         let conn = setup_test_db();
         let resolved = resolve_project_for_source(&conn, "codex", "Users/test/codex-proj");
         assert_eq!(resolved, "/Users/test/codex-proj");
+    }
+
+    #[test]
+    fn test_cmd_projects_applies_limit_and_offset_without_reordering() {
+        let conn = setup_test_db();
+        let out = cmd_projects(&conn, None, Some(1), 1).unwrap();
+        assert_eq!(out.projects.len(), 1);
+        assert_eq!(out.projects[0].name, "-Users-test-proj");
+        assert_eq!(out.projects[0].source, "claude");
+        assert_eq!(out.total_messages, 4);
+        assert_eq!(out.total_sessions, 2);
+    }
+
+    #[test]
+    fn test_cmd_sessions_applies_limit_and_offset_without_reordering() {
+        let conn = setup_test_db();
+        conn.execute(
+            "INSERT INTO sessions (session_id, project, source, first_timestamp, last_timestamp, message_count, user_messages, assistant_messages) VALUES ('sess-claude-2', '-Users-test-proj', 'claude', '2025-01-01T00:02:00', '2025-01-01T00:03:00', 1, 1, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, source, project, project_path, session_id, is_subagent, message_uuid, parent_uuid, msg_type, role, content_text, model, timestamp, cwd, git_branch, slug, version, input_tokens, output_tokens) VALUES (5, 'claude', '-Users-test-proj', '/Users/test/proj', 'sess-claude-2', FALSE, 'u2', '', 'user', 'user', 'second session question', '', '2025-01-01T00:02:00', '', '', '', '', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        let out = cmd_sessions(&conn, "-Users-test-proj", Some("claude"), Some(1), 1).unwrap();
+        assert_eq!(out.sessions.len(), 1);
+        assert_eq!(out.sessions[0].session_id, "sess-claude-1");
+    }
+
+    #[test]
+    fn test_cmd_messages_applies_limit_and_offset_without_reordering() {
+        let conn = setup_test_db();
+        let out = cmd_messages(&conn, "sess-claude-1", Some(1), 1).unwrap();
+        assert_eq!(out.messages.len(), 1);
+        assert_eq!(out.messages[0].role, "user");
     }
 
     #[tokio::test]
