@@ -68,8 +68,53 @@ Because session IDs are globally unique, a `session_id` alone is sufficient to i
 | version | VARCHAR | CLI version |
 | input_tokens | BIGINT | Token usage |
 | output_tokens | BIGINT | Token usage |
+| source_file | VARCHAR | Absolute JSONL path used for this row |
+| source_offset | BIGINT | Byte offset of the source JSONL line |
 
 **PK**: `id`
+
+#### `ingest_files`
+| Column | Type | Notes |
+|---|---|---|
+| source | VARCHAR | `'claude'` or `'codex'` |
+| file_path | VARCHAR | Absolute JSONL file path |
+| project | VARCHAR | Project key for this file |
+| project_path | VARCHAR | Human path for this file |
+| session_id | VARCHAR | Session ID for this file |
+| is_subagent | BOOLEAN | Claude subagent file marker |
+| last_offset | BIGINT | Last ingested byte offset |
+| file_size | BIGINT | Last seen file size |
+| file_mtime_unix | BIGINT | Last seen file mtime (unix seconds) |
+| last_ingested_unix | BIGINT | Last refresh time |
+| last_message_timestamp | VARCHAR | Last ingested message timestamp |
+| last_message_key | VARCHAR | Last ingested message watermark key |
+
+**PK**: `(source, file_path)`
+
+#### `ingest_projects`
+| Column | Type | Notes |
+|---|---|---|
+| source | VARCHAR | `'claude'` or `'codex'` |
+| project | VARCHAR | Project key |
+| project_path | VARCHAR | Project path |
+| first_seen_unix | BIGINT | First time project was observed |
+| last_seen_unix | BIGINT | Most recent time project was observed |
+| last_ingested_unix | BIGINT | Most recent time project was ingested |
+
+**PK**: `(source, project)`
+
+#### `ingest_sessions`
+| Column | Type | Notes |
+|---|---|---|
+| source | VARCHAR | `'claude'` or `'codex'` |
+| project | VARCHAR | Project key |
+| project_path | VARCHAR | Project path |
+| session_id | VARCHAR | Session identifier |
+| last_message_timestamp | VARCHAR | Latest ingested message timestamp |
+| last_message_key | VARCHAR | Latest ingested message watermark key |
+| last_ingested_unix | BIGINT | Most recent ingestion time |
+
+**PK**: `(source, session_id)`
 
 ### Full-Text Search
 
@@ -79,11 +124,20 @@ Search uses `fts_main_messages.match_bm25()` for ranked results, with LIKE fallb
 
 ## Ingestion
 
-1. `ingest_claude()` — walks `~/.claude/projects/{project-dir}/{uuid}.jsonl`, plus subagent files in `{uuid}/subagents/`
-2. `ingest_codex()` — walks `~/.codex/sessions/` and `~/.codex/archived_sessions/` recursively
-3. `sessions` table populated via aggregate INSERT from `messages` grouped by `(session_id, project, source)`
+CLI refresh path is incremental and file-diff based:
 
-Server mode uses an in-memory DuckDB (full re-ingestion on every startup). CLI query commands use an on-disk DuckDB cache built/refreshed via `mmr ingest`.
+1. Discover all Claude/Codex JSONL files.
+2. For each file, compare `(file_size, file_mtime_unix)` to `ingest_files`.
+3. If unchanged, skip.
+4. If append-only, seek to `last_offset` and ingest only new lines.
+5. If rewritten/truncated, delete only rows from that `source_file` and reparse that file.
+6. If a previously tracked file disappears, remove that file's rows and checkpoint.
+7. Rebuild `sessions`, `projects`, and `ingest_sessions` from `messages` when data changed.
+8. Rebuild FTS only when data changed.
+
+Server mode still uses an in-memory DuckDB with full ingest at startup.
+
+CLI query commands now auto-refresh the on-disk cache on every invocation (`projects`, `sessions`, `messages`, `search`, `stats`). `mmr ingest` remains available as an explicit full cache rebuild path.
 
 ## API
 

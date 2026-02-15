@@ -8,8 +8,12 @@ use axum::{
 use clap::{Parser, Subcommand};
 use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -74,7 +78,9 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             slug            VARCHAR,
             version         VARCHAR,
             input_tokens    BIGINT,
-            output_tokens   BIGINT
+            output_tokens   BIGINT,
+            source_file     VARCHAR DEFAULT '',
+            source_offset   BIGINT DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS projects (
@@ -104,6 +110,58 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             key   VARCHAR PRIMARY KEY,
             value VARCHAR NOT NULL
         );
+
+        -- Per-file incremental checkpoints. These rows are used to ingest only
+        -- appended data on each refresh.
+        CREATE TABLE IF NOT EXISTS ingest_files (
+            source                  VARCHAR NOT NULL,
+            file_path               VARCHAR NOT NULL,
+            project                 VARCHAR NOT NULL,
+            project_path            VARCHAR NOT NULL,
+            session_id              VARCHAR NOT NULL,
+            is_subagent             BOOLEAN DEFAULT FALSE,
+            last_offset             BIGINT DEFAULT 0,
+            file_size               BIGINT DEFAULT 0,
+            file_mtime_unix         BIGINT DEFAULT 0,
+            last_ingested_unix      BIGINT DEFAULT 0,
+            last_message_timestamp  VARCHAR DEFAULT '',
+            last_message_key        VARCHAR DEFAULT '',
+            meta_model              VARCHAR DEFAULT '',
+            meta_git_branch         VARCHAR DEFAULT '',
+            meta_version            VARCHAR DEFAULT '',
+            PRIMARY KEY (source, file_path)
+        );
+
+        -- Per-project watermark metadata across sources.
+        CREATE TABLE IF NOT EXISTS ingest_projects (
+            source              VARCHAR NOT NULL,
+            project             VARCHAR NOT NULL,
+            project_path        VARCHAR NOT NULL,
+            first_seen_unix     BIGINT DEFAULT 0,
+            last_seen_unix      BIGINT DEFAULT 0,
+            last_ingested_unix  BIGINT DEFAULT 0,
+            PRIMARY KEY (source, project)
+        );
+
+        -- Per-session latest message watermark.
+        CREATE TABLE IF NOT EXISTS ingest_sessions (
+            source                  VARCHAR NOT NULL,
+            project                 VARCHAR NOT NULL,
+            project_path            VARCHAR NOT NULL,
+            session_id              VARCHAR NOT NULL,
+            last_message_timestamp  VARCHAR DEFAULT '',
+            last_message_key        VARCHAR DEFAULT '',
+            last_ingested_unix      BIGINT DEFAULT 0,
+            PRIMARY KEY (source, session_id)
+        );
+        ",
+    )?;
+
+    // Lightweight schema migrations for caches created by older versions.
+    conn.execute_batch(
+        "
+        ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_file VARCHAR DEFAULT '';
+        ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_offset BIGINT DEFAULT 0;
         ",
     )?;
 
@@ -149,10 +207,7 @@ fn extract_text_content(content: &serde_json::Value) -> String {
                                 .get("name")
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("unknown");
-                            let input = obj
-                                .get("input")
-                                .map(|i| i.to_string())
-                                .unwrap_or_default();
+                            let input = obj.get("input").map(|i| i.to_string()).unwrap_or_default();
                             parts.push(format!("[tool_use: {}] {}", name, input));
                         }
                         Some("tool_result") => {
@@ -200,12 +255,7 @@ fn extract_project_path_from_sessions(project_dir: &Path) -> Option<String> {
     let mut entries: Vec<_> = std::fs::read_dir(project_dir)
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|ext| ext.to_str())
-                == Some("jsonl")
-        })
+        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
         .collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
 
@@ -269,11 +319,7 @@ fn ingest_claude_jsonl_file(
                 }
 
                 let model = msg.model.as_deref().unwrap_or("").to_string();
-                let (input_t, output_t) = msg
-                    .usage
-                    .as_ref()
-                    .map(extract_usage)
-                    .unwrap_or((0, 0));
+                let (input_t, output_t) = msg.usage.as_ref().map(extract_usage).unwrap_or((0, 0));
                 (role, text, model, input_t, output_t)
             } else {
                 continue;
@@ -316,7 +362,10 @@ fn ingest_claude(conn: &Connection, id_counter: &mut i64) -> Result<(usize, usiz
         .join("projects");
 
     if !claude_dir.exists() {
-        tracing::warn!("Claude projects directory not found at {}", claude_dir.display());
+        tracing::warn!(
+            "Claude projects directory not found at {}",
+            claude_dir.display()
+        );
         return Ok((0, 0, 0));
     }
 
@@ -427,18 +476,46 @@ fn ingest_codex_jsonl_file(
         };
 
         let line_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        let timestamp = val.get("timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        let timestamp = val
+            .get("timestamp")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
 
         match line_type {
             "session_meta" => {
                 if let Some(payload) = val.get("payload") {
-                    session_id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    cwd = payload.get("cwd").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    cli_version = payload.get("cli_version").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    model_provider = payload.get("model_provider").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    session_timestamp = payload.get("timestamp").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    session_id = payload
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    cwd = payload
+                        .get("cwd")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    cli_version = payload
+                        .get("cli_version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    model_provider = payload
+                        .get("model_provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    session_timestamp = payload
+                        .get("timestamp")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     if let Some(git) = payload.get("git") {
-                        git_branch = git.get("branch").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        git_branch = git
+                            .get("branch")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                     }
                 }
             }
@@ -446,7 +523,10 @@ fn ingest_codex_jsonl_file(
                 if let Some(payload) = val.get("payload") {
                     let evt_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     if evt_type == "user_message" {
-                        let text = payload.get("message").and_then(|m| m.as_str()).unwrap_or("");
+                        let text = payload
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("");
                         if text.trim().is_empty() {
                             continue;
                         }
@@ -479,13 +559,15 @@ fn ingest_codex_jsonl_file(
 
                     if role == "assistant" {
                         // Extract output_text from content array
-                        if let Some(content_arr) = payload.get("content").and_then(|c| c.as_array()) {
+                        if let Some(content_arr) = payload.get("content").and_then(|c| c.as_array())
+                        {
                             let mut parts = Vec::new();
                             for item in content_arr {
                                 if let Some(obj) = item.as_object() {
                                     let ct = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
                                     if ct == "output_text" {
-                                        if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
+                                        if let Some(text) = obj.get("text").and_then(|t| t.as_str())
+                                        {
                                             parts.push(text.to_string());
                                         }
                                     }
@@ -598,6 +680,1102 @@ fn collect_jsonl_recursive(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Res
     Ok(())
 }
 
+#[derive(Default)]
+struct IncrementalRefreshStats {
+    inserted_messages: usize,
+    removed_messages: usize,
+    changed_files: usize,
+    unchanged_files: usize,
+}
+
+#[derive(Clone, Debug)]
+struct IngestFileState {
+    project: String,
+    project_path: String,
+    session_id: String,
+    is_subagent: bool,
+    last_offset: i64,
+    file_size: i64,
+    file_mtime_unix: i64,
+    last_message_timestamp: String,
+    last_message_key: String,
+    meta_model: String,
+    meta_git_branch: String,
+    meta_version: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CodexSessionMeta {
+    session_id: String,
+    cwd: String,
+    model_provider: String,
+    git_branch: String,
+    cli_version: String,
+}
+
+#[derive(Default)]
+struct FileIngestOutcome {
+    inserted_messages: usize,
+    final_offset: u64,
+    last_message_timestamp: String,
+    last_message_key: String,
+}
+
+#[derive(Default)]
+struct ClaudeFileIngestOutcome {
+    base: FileIngestOutcome,
+    session_id: String,
+}
+
+#[derive(Default)]
+struct CodexFileIngestOutcome {
+    base: FileIngestOutcome,
+    meta: CodexSessionMeta,
+}
+
+enum FileRefreshMode {
+    Skip,
+    Append(u64),
+    Rewrite,
+}
+
+fn now_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn metadata_mtime_unix(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn file_set_key(source: &str, file_path: &str) -> String {
+    format!("{source}\t{file_path}")
+}
+
+fn load_ingest_file_state(
+    conn: &Connection,
+    source: &str,
+    file_path: &str,
+) -> Result<Option<IngestFileState>> {
+    let mut stmt = conn.prepare(
+        "SELECT project, project_path, session_id, is_subagent, last_offset, file_size, file_mtime_unix,
+                last_message_timestamp, last_message_key, meta_model, meta_git_branch, meta_version
+         FROM ingest_files
+         WHERE source = ? AND file_path = ?",
+    )?;
+    let mut rows = stmt.query(params![source, file_path])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(IngestFileState {
+            project: row.get(0)?,
+            project_path: row.get(1)?,
+            session_id: row.get(2)?,
+            is_subagent: row.get(3)?,
+            last_offset: row.get(4)?,
+            file_size: row.get(5)?,
+            file_mtime_unix: row.get(6)?,
+            last_message_timestamp: row.get(7)?,
+            last_message_key: row.get(8)?,
+            meta_model: row.get(9)?,
+            meta_git_branch: row.get(10)?,
+            meta_version: row.get(11)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn upsert_ingest_file_state(
+    conn: &Connection,
+    source: &str,
+    file_path: &str,
+    state: &IngestFileState,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ingest_files (
+            source, file_path, project, project_path, session_id, is_subagent,
+            last_offset, file_size, file_mtime_unix, last_ingested_unix,
+            last_message_timestamp, last_message_key, meta_model, meta_git_branch, meta_version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (source, file_path) DO UPDATE SET
+            project = excluded.project,
+            project_path = excluded.project_path,
+            session_id = excluded.session_id,
+            is_subagent = excluded.is_subagent,
+            last_offset = excluded.last_offset,
+            file_size = excluded.file_size,
+            file_mtime_unix = excluded.file_mtime_unix,
+            last_ingested_unix = excluded.last_ingested_unix,
+            last_message_timestamp = excluded.last_message_timestamp,
+            last_message_key = excluded.last_message_key,
+            meta_model = excluded.meta_model,
+            meta_git_branch = excluded.meta_git_branch,
+            meta_version = excluded.meta_version",
+        params![
+            source,
+            file_path,
+            &state.project,
+            &state.project_path,
+            &state.session_id,
+            state.is_subagent,
+            state.last_offset,
+            state.file_size,
+            state.file_mtime_unix,
+            now_unix_secs(),
+            &state.last_message_timestamp,
+            &state.last_message_key,
+            &state.meta_model,
+            &state.meta_git_branch,
+            &state.meta_version,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_ingest_project(
+    conn: &Connection,
+    source: &str,
+    project: &str,
+    project_path: &str,
+) -> Result<()> {
+    let now = now_unix_secs();
+    conn.execute(
+        "INSERT INTO ingest_projects (
+            source, project, project_path, first_seen_unix, last_seen_unix, last_ingested_unix
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (source, project) DO UPDATE SET
+            project_path = excluded.project_path,
+            last_seen_unix = excluded.last_seen_unix,
+            last_ingested_unix = excluded.last_ingested_unix",
+        params![source, project, project_path, now, now, now],
+    )?;
+    Ok(())
+}
+
+fn decide_file_refresh_mode(
+    existing: Option<&IngestFileState>,
+    file_size: u64,
+    file_mtime: i64,
+) -> FileRefreshMode {
+    let Some(state) = existing else {
+        return FileRefreshMode::Append(0);
+    };
+
+    if file_size as i64 == state.file_size && file_mtime == state.file_mtime_unix {
+        return FileRefreshMode::Skip;
+    }
+
+    if file_size > state.last_offset as u64
+        && file_size >= state.file_size as u64
+        && file_mtime >= state.file_mtime_unix
+    {
+        return FileRefreshMode::Append(state.last_offset as u64);
+    }
+
+    FileRefreshMode::Rewrite
+}
+
+fn delete_messages_for_file(conn: &Connection, source: &str, file_path: &str) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE source = ? AND source_file = ?",
+        params![source, file_path],
+        |row| row.get(0),
+    )?;
+    if count > 0 {
+        conn.execute(
+            "DELETE FROM messages WHERE source = ? AND source_file = ?",
+            params![source, file_path],
+        )?;
+    }
+    Ok(count as usize)
+}
+
+fn ingest_claude_jsonl_file_from_offset(
+    conn: &Connection,
+    path: &Path,
+    project_name: &str,
+    project_path: &str,
+    default_session_id: &str,
+    is_subagent: bool,
+    start_offset: u64,
+    counter: &mut i64,
+) -> Result<ClaudeFileIngestOutcome> {
+    let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    reader.seek(SeekFrom::Start(start_offset))?;
+
+    let source_file = path_to_string(path);
+    let mut current_offset = start_offset;
+    let mut line = String::new();
+    let mut result = ClaudeFileIngestOutcome {
+        session_id: default_session_id.to_string(),
+        ..Default::default()
+    };
+
+    loop {
+        line.clear();
+        let bytes_read = reader.read_line(&mut line)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line_offset = current_offset;
+        current_offset += bytes_read as u64;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let parsed: ClaudeJsonlLine = match serde_json::from_str(&line) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        let msg_type = parsed.msg_type.as_deref().unwrap_or("");
+        if msg_type != "user" && msg_type != "assistant" {
+            continue;
+        }
+
+        let (role, content_text, model, input_tokens, output_tokens) =
+            if let Some(ref msg) = parsed.message {
+                let role = msg.role.as_deref().unwrap_or("").to_string();
+                let text = msg
+                    .content
+                    .as_ref()
+                    .map(extract_text_content)
+                    .unwrap_or_default();
+                if text.trim().is_empty() {
+                    continue;
+                }
+                let model = msg.model.as_deref().unwrap_or("").to_string();
+                let (input_t, output_t) = msg.usage.as_ref().map(extract_usage).unwrap_or((0, 0));
+                (role, text, model, input_t, output_t)
+            } else {
+                continue;
+            };
+
+        if let Some(session_id) = parsed.session_id.as_deref() {
+            if !session_id.is_empty() {
+                result.session_id = session_id.to_string();
+            }
+        }
+
+        *counter += 1;
+        conn.execute(
+            "INSERT INTO messages (
+                id, source, project, project_path, session_id, is_subagent, message_uuid, parent_uuid,
+                msg_type, role, content_text, model, timestamp, cwd, git_branch, slug, version,
+                input_tokens, output_tokens, source_file, source_offset
+             ) VALUES (?, 'claude', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                *counter,
+                project_name,
+                project_path,
+                &result.session_id,
+                is_subagent,
+                parsed.uuid.as_deref().unwrap_or(""),
+                parsed.parent_uuid.as_deref().unwrap_or(""),
+                msg_type,
+                role,
+                content_text,
+                model,
+                parsed.timestamp.as_deref().unwrap_or(""),
+                parsed.cwd.as_deref().unwrap_or(""),
+                parsed.git_branch.as_deref().unwrap_or(""),
+                parsed.slug.as_deref().unwrap_or(""),
+                parsed.version.as_deref().unwrap_or(""),
+                input_tokens,
+                output_tokens,
+                &source_file,
+                line_offset as i64,
+            ],
+        )?;
+
+        result.base.inserted_messages += 1;
+        result.base.last_message_timestamp = parsed.timestamp.unwrap_or_default();
+        result.base.last_message_key = parsed
+            .uuid
+            .unwrap_or_else(|| format!("{}:{}", result.session_id, line_offset));
+    }
+
+    result.base.final_offset = current_offset;
+    Ok(result)
+}
+
+fn probe_codex_session_meta(path: &Path) -> Result<CodexSessionMeta> {
+    let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut meta = CodexSessionMeta::default();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if val.get("type").and_then(|t| t.as_str()) != Some("session_meta") {
+            continue;
+        }
+
+        if let Some(payload) = val.get("payload") {
+            meta.session_id = payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            meta.cwd = payload
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            meta.model_provider = payload
+                .get("model_provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            meta.cli_version = payload
+                .get("cli_version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(git) = payload.get("git") {
+                meta.git_branch = git
+                    .get("branch")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+            }
+        }
+        break;
+    }
+
+    Ok(meta)
+}
+
+fn ingest_codex_jsonl_file_from_offset(
+    conn: &Connection,
+    path: &Path,
+    start_offset: u64,
+    seed_meta: &CodexSessionMeta,
+    counter: &mut i64,
+) -> Result<CodexFileIngestOutcome> {
+    let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    reader.seek(SeekFrom::Start(start_offset))?;
+
+    let source_file = path_to_string(path);
+    let mut current_offset = start_offset;
+    let mut line = String::new();
+    let mut result = CodexFileIngestOutcome {
+        meta: seed_meta.clone(),
+        ..Default::default()
+    };
+
+    loop {
+        line.clear();
+        let bytes_read = reader.read_line(&mut line)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let line_offset = current_offset;
+        current_offset += bytes_read as u64;
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let line_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let timestamp = val.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+
+        match line_type {
+            "session_meta" => {
+                if let Some(payload) = val.get("payload") {
+                    let sid = payload.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    if !sid.is_empty() {
+                        result.meta.session_id = sid.to_string();
+                    }
+                    let cwd = payload.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+                    if !cwd.is_empty() {
+                        result.meta.cwd = cwd.to_string();
+                    }
+                    let provider = payload
+                        .get("model_provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !provider.is_empty() {
+                        result.meta.model_provider = provider.to_string();
+                    }
+                    let version = payload
+                        .get("cli_version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !version.is_empty() {
+                        result.meta.cli_version = version.to_string();
+                    }
+                    if let Some(git) = payload.get("git") {
+                        let branch = git.get("branch").and_then(|v| v.as_str()).unwrap_or("");
+                        if !branch.is_empty() {
+                            result.meta.git_branch = branch.to_string();
+                        }
+                    }
+                }
+            }
+            "event_msg" => {
+                if let Some(payload) = val.get("payload") {
+                    let evt_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if evt_type != "user_message" {
+                        continue;
+                    }
+                    let text = payload
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("");
+                    if text.trim().is_empty()
+                        || result.meta.session_id.is_empty()
+                        || result.meta.cwd.is_empty()
+                    {
+                        continue;
+                    }
+
+                    *counter += 1;
+                    conn.execute(
+                        "INSERT INTO messages (
+                            id, source, project, project_path, session_id, is_subagent, message_uuid, parent_uuid,
+                            msg_type, role, content_text, model, timestamp, cwd, git_branch, slug, version,
+                            input_tokens, output_tokens, source_file, source_offset
+                         ) VALUES (?, 'codex', ?, ?, ?, FALSE, '', '', 'user', 'user', ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)",
+                        params![
+                            *counter,
+                            &result.meta.cwd,
+                            &result.meta.cwd,
+                            &result.meta.session_id,
+                            text,
+                            &result.meta.model_provider,
+                            timestamp,
+                            &result.meta.cwd,
+                            &result.meta.git_branch,
+                            &result.meta.cli_version,
+                            &source_file,
+                            line_offset as i64,
+                        ],
+                    )?;
+
+                    result.base.inserted_messages += 1;
+                    result.base.last_message_timestamp = timestamp.to_string();
+                    result.base.last_message_key =
+                        format!("{}:{line_offset}", result.meta.session_id);
+                }
+            }
+            "response_item" => {
+                if let Some(payload) = val.get("payload") {
+                    if payload.get("role").and_then(|r| r.as_str()) != Some("assistant") {
+                        continue;
+                    }
+                    if result.meta.session_id.is_empty() || result.meta.cwd.is_empty() {
+                        continue;
+                    }
+                    let Some(content_arr) = payload.get("content").and_then(|c| c.as_array())
+                    else {
+                        continue;
+                    };
+
+                    let mut parts = Vec::new();
+                    for item in content_arr {
+                        if let Some(obj) = item.as_object() {
+                            if obj.get("type").and_then(|t| t.as_str()) == Some("output_text") {
+                                if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
+                                    parts.push(text.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    let text = parts.join("\n");
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+
+                    *counter += 1;
+                    conn.execute(
+                        "INSERT INTO messages (
+                            id, source, project, project_path, session_id, is_subagent, message_uuid, parent_uuid,
+                            msg_type, role, content_text, model, timestamp, cwd, git_branch, slug, version,
+                            input_tokens, output_tokens, source_file, source_offset
+                         ) VALUES (?, 'codex', ?, ?, ?, FALSE, '', '', 'assistant', 'assistant', ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?)",
+                        params![
+                            *counter,
+                            &result.meta.cwd,
+                            &result.meta.cwd,
+                            &result.meta.session_id,
+                            text,
+                            &result.meta.model_provider,
+                            timestamp,
+                            &result.meta.cwd,
+                            &result.meta.git_branch,
+                            &result.meta.cli_version,
+                            &source_file,
+                            line_offset as i64,
+                        ],
+                    )?;
+
+                    result.base.inserted_messages += 1;
+                    result.base.last_message_timestamp = timestamp.to_string();
+                    result.base.last_message_key =
+                        format!("{}:{line_offset}", result.meta.session_id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    result.base.final_offset = current_offset;
+    Ok(result)
+}
+
+fn process_claude_file_incremental(
+    conn: &Connection,
+    path: &Path,
+    project_name: &str,
+    project_path: &str,
+    is_subagent: bool,
+    id_counter: &mut i64,
+    seen_files: &mut HashSet<String>,
+    refresh_stats: &mut IncrementalRefreshStats,
+) -> Result<()> {
+    let source = "claude";
+    let file_path = path_to_string(path);
+    seen_files.insert(file_set_key(source, &file_path));
+
+    let metadata = std::fs::metadata(path)?;
+    let file_size = metadata.len();
+    let file_mtime = metadata_mtime_unix(&metadata);
+    let existing = load_ingest_file_state(conn, source, &file_path)?;
+    let mode = decide_file_refresh_mode(existing.as_ref(), file_size, file_mtime);
+
+    let default_session_id = existing
+        .as_ref()
+        .map(|s| s.session_id.clone())
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string()
+        });
+
+    match mode {
+        FileRefreshMode::Skip => {
+            refresh_stats.unchanged_files += 1;
+            if !project_name.is_empty() {
+                upsert_ingest_project(conn, source, project_name, project_path)?;
+            }
+            return Ok(());
+        }
+        FileRefreshMode::Append(start_offset) => {
+            let mut seed_last_ts = existing
+                .as_ref()
+                .map(|s| s.last_message_timestamp.clone())
+                .unwrap_or_default();
+            let mut seed_last_key = existing
+                .as_ref()
+                .map(|s| s.last_message_key.clone())
+                .unwrap_or_default();
+            let outcome = ingest_claude_jsonl_file_from_offset(
+                conn,
+                path,
+                project_name,
+                project_path,
+                &default_session_id,
+                is_subagent,
+                start_offset,
+                id_counter,
+            )?;
+            if !outcome.base.last_message_timestamp.is_empty() {
+                seed_last_ts = outcome.base.last_message_timestamp.clone();
+            }
+            if !outcome.base.last_message_key.is_empty() {
+                seed_last_key = outcome.base.last_message_key.clone();
+            }
+
+            refresh_stats.inserted_messages += outcome.base.inserted_messages;
+            if outcome.base.inserted_messages > 0 || existing.is_none() {
+                refresh_stats.changed_files += 1;
+            } else {
+                refresh_stats.unchanged_files += 1;
+            }
+
+            let state = IngestFileState {
+                project: project_name.to_string(),
+                project_path: project_path.to_string(),
+                session_id: outcome.session_id,
+                is_subagent,
+                last_offset: outcome.base.final_offset as i64,
+                file_size: file_size as i64,
+                file_mtime_unix: file_mtime,
+                last_message_timestamp: seed_last_ts,
+                last_message_key: seed_last_key,
+                meta_model: String::new(),
+                meta_git_branch: String::new(),
+                meta_version: String::new(),
+            };
+            upsert_ingest_file_state(conn, source, &file_path, &state)?;
+            if !project_name.is_empty() {
+                upsert_ingest_project(conn, source, project_name, project_path)?;
+            }
+        }
+        FileRefreshMode::Rewrite => {
+            let removed = delete_messages_for_file(conn, source, &file_path)?;
+            refresh_stats.removed_messages += removed;
+            let outcome = ingest_claude_jsonl_file_from_offset(
+                conn,
+                path,
+                project_name,
+                project_path,
+                &default_session_id,
+                is_subagent,
+                0,
+                id_counter,
+            )?;
+
+            refresh_stats.inserted_messages += outcome.base.inserted_messages;
+            refresh_stats.changed_files += 1;
+
+            let state = IngestFileState {
+                project: project_name.to_string(),
+                project_path: project_path.to_string(),
+                session_id: outcome.session_id,
+                is_subagent,
+                last_offset: outcome.base.final_offset as i64,
+                file_size: file_size as i64,
+                file_mtime_unix: file_mtime,
+                last_message_timestamp: outcome.base.last_message_timestamp,
+                last_message_key: outcome.base.last_message_key,
+                meta_model: String::new(),
+                meta_git_branch: String::new(),
+                meta_version: String::new(),
+            };
+            upsert_ingest_file_state(conn, source, &file_path, &state)?;
+            if !project_name.is_empty() {
+                upsert_ingest_project(conn, source, project_name, project_path)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn process_codex_file_incremental(
+    conn: &Connection,
+    path: &Path,
+    id_counter: &mut i64,
+    seen_files: &mut HashSet<String>,
+    refresh_stats: &mut IncrementalRefreshStats,
+) -> Result<()> {
+    let source = "codex";
+    let file_path = path_to_string(path);
+    seen_files.insert(file_set_key(source, &file_path));
+
+    let metadata = std::fs::metadata(path)?;
+    let file_size = metadata.len();
+    let file_mtime = metadata_mtime_unix(&metadata);
+    let existing = load_ingest_file_state(conn, source, &file_path)?;
+    let mode = decide_file_refresh_mode(existing.as_ref(), file_size, file_mtime);
+
+    let mut seed_meta = if let Some(state) = existing.as_ref() {
+        CodexSessionMeta {
+            session_id: state.session_id.clone(),
+            cwd: state.project_path.clone(),
+            model_provider: state.meta_model.clone(),
+            git_branch: state.meta_git_branch.clone(),
+            cli_version: state.meta_version.clone(),
+        }
+    } else {
+        probe_codex_session_meta(path)?
+    };
+    if seed_meta.session_id.is_empty() {
+        seed_meta.session_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+    }
+
+    match mode {
+        FileRefreshMode::Skip => {
+            refresh_stats.unchanged_files += 1;
+            if !seed_meta.cwd.is_empty() {
+                upsert_ingest_project(conn, source, &seed_meta.cwd, &seed_meta.cwd)?;
+            }
+            return Ok(());
+        }
+        FileRefreshMode::Append(start_offset) => {
+            let mut seed_last_ts = existing
+                .as_ref()
+                .map(|s| s.last_message_timestamp.clone())
+                .unwrap_or_default();
+            let mut seed_last_key = existing
+                .as_ref()
+                .map(|s| s.last_message_key.clone())
+                .unwrap_or_default();
+            let outcome = ingest_codex_jsonl_file_from_offset(
+                conn,
+                path,
+                start_offset,
+                &seed_meta,
+                id_counter,
+            )?;
+            if !outcome.base.last_message_timestamp.is_empty() {
+                seed_last_ts = outcome.base.last_message_timestamp.clone();
+            }
+            if !outcome.base.last_message_key.is_empty() {
+                seed_last_key = outcome.base.last_message_key.clone();
+            }
+
+            refresh_stats.inserted_messages += outcome.base.inserted_messages;
+            if outcome.base.inserted_messages > 0 || existing.is_none() {
+                refresh_stats.changed_files += 1;
+            } else {
+                refresh_stats.unchanged_files += 1;
+            }
+
+            let project = if !outcome.meta.cwd.is_empty() {
+                outcome.meta.cwd.clone()
+            } else {
+                existing
+                    .as_ref()
+                    .map(|s| s.project.clone())
+                    .unwrap_or_default()
+            };
+            let state = IngestFileState {
+                project: project.clone(),
+                project_path: project.clone(),
+                session_id: outcome.meta.session_id.clone(),
+                is_subagent: false,
+                last_offset: outcome.base.final_offset as i64,
+                file_size: file_size as i64,
+                file_mtime_unix: file_mtime,
+                last_message_timestamp: seed_last_ts,
+                last_message_key: seed_last_key,
+                meta_model: outcome.meta.model_provider.clone(),
+                meta_git_branch: outcome.meta.git_branch.clone(),
+                meta_version: outcome.meta.cli_version.clone(),
+            };
+            upsert_ingest_file_state(conn, source, &file_path, &state)?;
+            if !project.is_empty() {
+                upsert_ingest_project(conn, source, &project, &project)?;
+            }
+        }
+        FileRefreshMode::Rewrite => {
+            let removed = delete_messages_for_file(conn, source, &file_path)?;
+            refresh_stats.removed_messages += removed;
+            let outcome =
+                ingest_codex_jsonl_file_from_offset(conn, path, 0, &seed_meta, id_counter)?;
+
+            refresh_stats.inserted_messages += outcome.base.inserted_messages;
+            refresh_stats.changed_files += 1;
+
+            let project = if !outcome.meta.cwd.is_empty() {
+                outcome.meta.cwd.clone()
+            } else {
+                existing
+                    .as_ref()
+                    .map(|s| s.project.clone())
+                    .unwrap_or_default()
+            };
+            let state = IngestFileState {
+                project: project.clone(),
+                project_path: project.clone(),
+                session_id: outcome.meta.session_id.clone(),
+                is_subagent: false,
+                last_offset: outcome.base.final_offset as i64,
+                file_size: file_size as i64,
+                file_mtime_unix: file_mtime,
+                last_message_timestamp: outcome.base.last_message_timestamp,
+                last_message_key: outcome.base.last_message_key,
+                meta_model: outcome.meta.model_provider.clone(),
+                meta_git_branch: outcome.meta.git_branch.clone(),
+                meta_version: outcome.meta.cli_version.clone(),
+            };
+            upsert_ingest_file_state(conn, source, &file_path, &state)?;
+            if !project.is_empty() {
+                upsert_ingest_project(conn, source, &project, &project)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cleanup_removed_files(
+    conn: &Connection,
+    seen_files: &HashSet<String>,
+    refresh_stats: &mut IncrementalRefreshStats,
+) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT source, file_path FROM ingest_files")?;
+    let existing_rows: Vec<(String, String)> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (source, file_path) in existing_rows {
+        let key = file_set_key(&source, &file_path);
+        if seen_files.contains(&key) {
+            continue;
+        }
+        let removed = delete_messages_for_file(conn, &source, &file_path)?;
+        refresh_stats.removed_messages += removed;
+        refresh_stats.changed_files += 1;
+        conn.execute(
+            "DELETE FROM ingest_files WHERE source = ? AND file_path = ?",
+            params![source, file_path],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn rebuild_derived_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        DELETE FROM sessions;
+        DELETE FROM projects;
+        DELETE FROM ingest_sessions;
+
+        INSERT INTO sessions (
+            session_id, project, source, first_timestamp, last_timestamp, message_count, user_messages, assistant_messages
+        )
+        SELECT
+            session_id,
+            project,
+            source,
+            MIN(timestamp) as first_timestamp,
+            MAX(timestamp) as last_timestamp,
+            COUNT(*) as message_count,
+            SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) as user_messages,
+            SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) as assistant_messages
+        FROM messages
+        WHERE is_subagent = FALSE
+        GROUP BY session_id, project, source;
+
+        INSERT INTO projects (
+            name, source, original_path, session_count, message_count, last_activity
+        )
+        SELECT
+            m.project as name,
+            m.source as source,
+            MAX(m.project_path) as original_path,
+            (
+                SELECT COUNT(*) FROM sessions s
+                WHERE s.project = m.project AND s.source = m.source
+            ) as session_count,
+            COUNT(*) as message_count,
+            COALESCE((
+                SELECT MAX(s.last_timestamp) FROM sessions s
+                WHERE s.project = m.project AND s.source = m.source
+            ), '') as last_activity
+        FROM messages m
+        GROUP BY m.project, m.source;
+        ",
+    )?;
+
+    conn.execute(
+        "INSERT INTO ingest_sessions (
+            source, project, project_path, session_id, last_message_timestamp, last_message_key, last_ingested_unix
+         )
+         SELECT
+            source,
+            project,
+            MAX(project_path),
+            session_id,
+            MAX(timestamp) as last_message_timestamp,
+            COALESCE(MAX(NULLIF(message_uuid, '')), CAST(MAX(source_offset) AS VARCHAR)) as last_message_key,
+            ?
+         FROM messages
+         GROUP BY source, project, session_id",
+        params![now_unix_secs()],
+    )?;
+
+    Ok(())
+}
+
+fn count_for_source(conn: &Connection, table: &str, source: &str) -> Result<usize> {
+    let sql = format!("SELECT COUNT(*) FROM {table} WHERE source = ?");
+    let n: i64 = conn.query_row(&sql, params![source], |row| row.get(0))?;
+    Ok(n as usize)
+}
+
+fn compute_ingest_stats(conn: &Connection) -> Result<IngestStats> {
+    Ok(IngestStats {
+        claude_projects: count_for_source(conn, "projects", "claude")?,
+        claude_sessions: count_for_source(conn, "sessions", "claude")?,
+        claude_messages: count_for_source(conn, "messages", "claude")?,
+        codex_projects: count_for_source(conn, "projects", "codex")?,
+        codex_sessions: count_for_source(conn, "sessions", "codex")?,
+        codex_messages: count_for_source(conn, "messages", "codex")?,
+    })
+}
+
+fn refresh_incremental_cache(conn: &Connection, quiet: bool) -> Result<IngestStats> {
+    let mut id_counter: i64 =
+        conn.query_row("SELECT COALESCE(MAX(id), 0) FROM messages", [], |row| {
+            row.get(0)
+        })?;
+
+    let mut refresh_stats = IncrementalRefreshStats::default();
+    let mut seen_files = HashSet::new();
+
+    let claude_dir = dirs::home_dir()
+        .context("No home directory")?
+        .join(".claude")
+        .join("projects");
+    if claude_dir.exists() {
+        let mut project_entries: Vec<_> = std::fs::read_dir(&claude_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|f| f.is_dir()).unwrap_or(false))
+            .collect();
+        project_entries.sort_by_key(|e| e.file_name());
+
+        for entry in project_entries {
+            let project_dir_name = entry.file_name().to_string_lossy().to_string();
+            let project_path = extract_project_path_from_sessions(&entry.path())
+                .unwrap_or_else(|| decode_project_name(&project_dir_name));
+
+            let mut session_entries: Vec<_> = std::fs::read_dir(entry.path())?
+                .filter_map(|e| e.ok())
+                .collect();
+            session_entries.sort_by_key(|e| e.file_name());
+
+            for session_entry in session_entries {
+                let session_path = session_entry.path();
+                if session_path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                process_claude_file_incremental(
+                    conn,
+                    &session_path,
+                    &project_dir_name,
+                    &project_path,
+                    false,
+                    &mut id_counter,
+                    &mut seen_files,
+                    &mut refresh_stats,
+                )?;
+
+                let session_id = session_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let subagents_dir = entry.path().join(&session_id).join("subagents");
+                if subagents_dir.exists() {
+                    let mut sub_entries: Vec<_> = std::fs::read_dir(&subagents_dir)?
+                        .filter_map(|e| e.ok())
+                        .collect();
+                    sub_entries.sort_by_key(|e| e.file_name());
+                    for sub_entry in sub_entries {
+                        let sub_path = sub_entry.path();
+                        if sub_path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                            continue;
+                        }
+                        process_claude_file_incremental(
+                            conn,
+                            &sub_path,
+                            &project_dir_name,
+                            &project_path,
+                            true,
+                            &mut id_counter,
+                            &mut seen_files,
+                            &mut refresh_stats,
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+
+    let codex_dir = dirs::home_dir()
+        .context("No home directory")?
+        .join(".codex");
+    if codex_dir.exists() {
+        let mut codex_files = Vec::new();
+        let sessions_dir = codex_dir.join("sessions");
+        if sessions_dir.exists() {
+            collect_jsonl_recursive(&sessions_dir, &mut codex_files)?;
+        }
+        let archived_dir = codex_dir.join("archived_sessions");
+        if archived_dir.exists() {
+            collect_jsonl_recursive(&archived_dir, &mut codex_files)?;
+        }
+        codex_files.sort();
+        for file_path in codex_files {
+            process_codex_file_incremental(
+                conn,
+                &file_path,
+                &mut id_counter,
+                &mut seen_files,
+                &mut refresh_stats,
+            )?;
+        }
+    }
+
+    cleanup_removed_files(conn, &seen_files, &mut refresh_stats)?;
+
+    let has_changes = refresh_stats.changed_files > 0;
+    if has_changes {
+        rebuild_derived_tables(conn)?;
+        let message_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))?;
+        if message_count > 0 {
+            create_fts_index(conn)?;
+        }
+    }
+
+    let projects_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))?;
+    let sessions_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))?;
+    if projects_count == 0 && sessions_count == 0 {
+        rebuild_derived_tables(conn)?;
+        let message_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))?;
+        if message_count > 0 {
+            create_fts_index(conn)?;
+        }
+    }
+
+    let stats = compute_ingest_stats(conn)?;
+    write_cache_meta(conn, &stats)?;
+
+    if !quiet {
+        eprintln!(
+            "Incremental refresh: +{} messages, -{} messages, {} changed files ({} unchanged)",
+            refresh_stats.inserted_messages,
+            refresh_stats.removed_messages,
+            refresh_stats.changed_files,
+            refresh_stats.unchanged_files
+        );
+    }
+
+    Ok(stats)
+}
+
 // --- Combined Ingestion ---
 
 struct IngestStats {
@@ -655,7 +1833,7 @@ fn ingest_all(conn: &Connection) -> Result<IngestStats> {
     })
 }
 
-const CACHE_SCHEMA_VERSION: &str = "1";
+const CACHE_SCHEMA_VERSION: &str = "2";
 
 fn write_cache_meta(conn: &Connection, stats: &IngestStats) -> Result<()> {
     let refreshed_at_unix = std::time::SystemTime::now()
@@ -829,7 +2007,18 @@ async fn spa_handler() -> Html<String> {
 }
 
 // Search row type now includes source as the 10th field
-type SearchRow = (i64, String, String, String, String, String, String, String, bool, String);
+type SearchRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    bool,
+    String,
+);
 
 #[allow(clippy::type_complexity)]
 fn run_search(
@@ -840,7 +2029,8 @@ fn run_search(
     per_page: usize,
     offset: usize,
 ) -> (usize, Vec<SearchRow>) {
-    if let Ok(result) = try_fts_search(conn, query, project_filter, source_filter, per_page, offset) {
+    if let Ok(result) = try_fts_search(conn, query, project_filter, source_filter, per_page, offset)
+    {
         return result;
     }
     like_search(conn, query, project_filter, source_filter, per_page, offset)
@@ -885,16 +2075,34 @@ fn try_fts_search(
 
     let count: i64 = match bind_values.len() {
         1 => conn.query_row(&count_sql, params![bind_values[0]], |row| row.get(0))?,
-        2 => conn.query_row(&count_sql, params![bind_values[0], bind_values[1]], |row| row.get(0))?,
-        3 => conn.query_row(&count_sql, params![bind_values[0], bind_values[1], bind_values[2]], |row| row.get(0))?,
+        2 => conn.query_row(&count_sql, params![bind_values[0], bind_values[1]], |row| {
+            row.get(0)
+        })?,
+        3 => conn.query_row(
+            &count_sql,
+            params![bind_values[0], bind_values[1], bind_values[2]],
+            |row| row.get(0),
+        )?,
         _ => unreachable!(),
     };
 
     let mut stmt = conn.prepare(&search_sql)?;
     let rows: Vec<SearchRow> = match bind_values.len() {
-        1 => stmt.query_map(params![bind_values[0]], map_search_row)?.filter_map(|r| r.ok()).collect(),
-        2 => stmt.query_map(params![bind_values[0], bind_values[1]], map_search_row)?.filter_map(|r| r.ok()).collect(),
-        3 => stmt.query_map(params![bind_values[0], bind_values[1], bind_values[2]], map_search_row)?.filter_map(|r| r.ok()).collect(),
+        1 => stmt
+            .query_map(params![bind_values[0]], map_search_row)?
+            .filter_map(|r| r.ok())
+            .collect(),
+        2 => stmt
+            .query_map(params![bind_values[0], bind_values[1]], map_search_row)?
+            .filter_map(|r| r.ok())
+            .collect(),
+        3 => stmt
+            .query_map(
+                params![bind_values[0], bind_values[1], bind_values[2]],
+                map_search_row,
+            )?
+            .filter_map(|r| r.ok())
+            .collect(),
         _ => unreachable!(),
     };
 
@@ -934,17 +2142,44 @@ fn like_search(
     );
 
     let count: i64 = match bind_values.len() {
-        1 => conn.query_row(&count_sql, params![bind_values[0]], |row| row.get(0)).unwrap_or(0),
-        2 => conn.query_row(&count_sql, params![bind_values[0], bind_values[1]], |row| row.get(0)).unwrap_or(0),
-        3 => conn.query_row(&count_sql, params![bind_values[0], bind_values[1], bind_values[2]], |row| row.get(0)).unwrap_or(0),
+        1 => conn
+            .query_row(&count_sql, params![bind_values[0]], |row| row.get(0))
+            .unwrap_or(0),
+        2 => conn
+            .query_row(&count_sql, params![bind_values[0], bind_values[1]], |row| {
+                row.get(0)
+            })
+            .unwrap_or(0),
+        3 => conn
+            .query_row(
+                &count_sql,
+                params![bind_values[0], bind_values[1], bind_values[2]],
+                |row| row.get(0),
+            )
+            .unwrap_or(0),
         _ => unreachable!(),
     };
 
     let mut stmt = conn.prepare(&search_sql).unwrap();
     let rows: Vec<SearchRow> = match bind_values.len() {
-        1 => stmt.query_map(params![bind_values[0]], map_search_row).unwrap().filter_map(|r| r.ok()).collect(),
-        2 => stmt.query_map(params![bind_values[0], bind_values[1]], map_search_row).unwrap().filter_map(|r| r.ok()).collect(),
-        3 => stmt.query_map(params![bind_values[0], bind_values[1], bind_values[2]], map_search_row).unwrap().filter_map(|r| r.ok()).collect(),
+        1 => stmt
+            .query_map(params![bind_values[0]], map_search_row)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect(),
+        2 => stmt
+            .query_map(params![bind_values[0], bind_values[1]], map_search_row)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect(),
+        3 => stmt
+            .query_map(
+                params![bind_values[0], bind_values[1], bind_values[2]],
+                map_search_row,
+            )
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect(),
         _ => unreachable!(),
     };
 
@@ -974,9 +2209,7 @@ fn map_search_row(row: &duckdb::Row) -> duckdb::Result<SearchRow> {
     responses((status = 200, body = ApiProjectsResponse)),
     tag = "projects"
 )]
-async fn api_projects(
-    State(db): State<AppState>,
-) -> Json<ApiProjectsResponse> {
+async fn api_projects(State(db): State<AppState>) -> Json<ApiProjectsResponse> {
     let conn = db.lock().unwrap();
 
     let mut stmt = conn
@@ -1178,12 +2411,19 @@ async fn api_search(
         });
     }
 
-    let (total_count, rows) = run_search(&conn, query, project_filter, source_filter, per_page, offset);
+    let (total_count, rows) = run_search(
+        &conn,
+        query,
+        project_filter,
+        source_filter,
+        per_page,
+        offset,
+    );
 
     let results: Vec<ApiSearchResult> = rows
         .into_iter()
-        .map(|(id, project, project_path, session_id, role, content, model, timestamp, is_subagent, source)| {
-            ApiSearchResult {
+        .map(
+            |(
                 id,
                 project,
                 project_path,
@@ -1194,8 +2434,21 @@ async fn api_search(
                 timestamp,
                 is_subagent,
                 source,
-            }
-        })
+            )| {
+                ApiSearchResult {
+                    id,
+                    project,
+                    project_path,
+                    session_id,
+                    role,
+                    content,
+                    model,
+                    timestamp,
+                    is_subagent,
+                    source,
+                }
+            },
+        )
         .collect();
 
     Json(ApiSearchResponse {
@@ -1714,44 +2967,41 @@ fn cache_db_path() -> Result<PathBuf> {
     Ok(new_path)
 }
 
-fn validate_cache(conn: &Connection, cache_path: &Path) -> Result<()> {
-    let schema_version: String = conn
+fn open_cache_db_for_cli(quiet: bool) -> Result<Connection> {
+    let cache_path = cache_db_path()?;
+    let cache_dir = cache_path
+        .parent()
+        .context("Cache path has no parent directory")?;
+    std::fs::create_dir_all(cache_dir)?;
+
+    let mut conn = Connection::open(&cache_path)?;
+    init_db(&conn)?;
+
+    let schema_version: Option<String> = conn
         .query_row(
             "SELECT value FROM cache_meta WHERE key = 'schema_version'",
             [],
             |row| row.get(0),
         )
-        .with_context(|| {
-            format!(
-                "Cache at {} is not initialized. Run `mmr ingest` to build it.",
-                cache_path.display()
-            )
-        })?;
-
-    if schema_version != CACHE_SCHEMA_VERSION {
-        anyhow::bail!(
-            "Cache schema version mismatch (found {}, expected {}). Run `mmr ingest` to rebuild the cache at {}.",
-            schema_version,
-            CACHE_SCHEMA_VERSION,
-            cache_path.display()
-        );
+        .ok();
+    if let Some(version) = schema_version {
+        if version != CACHE_SCHEMA_VERSION {
+            if !quiet {
+                eprintln!(
+                    "Cache schema changed ({} -> {}). Rebuilding cache at {}.",
+                    version,
+                    CACHE_SCHEMA_VERSION,
+                    cache_path.display()
+                );
+            }
+            drop(conn);
+            let _ = std::fs::remove_file(&cache_path);
+            conn = Connection::open(&cache_path)?;
+            init_db(&conn)?;
+        }
     }
 
-    Ok(())
-}
-
-fn open_cache_db_for_cli() -> Result<Connection> {
-    let cache_path = cache_db_path()?;
-    if !cache_path.exists() {
-        anyhow::bail!(
-            "Cache not found at {}. Run `mmr ingest` to build it.",
-            cache_path.display()
-        );
-    }
-
-    let conn = Connection::open(&cache_path)?;
-    load_fts(&conn)?;
-    validate_cache(&conn, &cache_path)?;
+    refresh_incremental_cache(&conn, quiet)?;
     Ok(conn)
 }
 
@@ -1775,35 +3025,20 @@ fn rebuild_cli_cache(quiet: bool) -> Result<()> {
         eprintln!("Ingesting conversation history...");
     }
 
-    let ingest_result: Result<()> = (|| {
+    let ingest_result: Result<IngestStats> = (|| {
         let conn = Connection::open(&tmp_path)?;
         init_db(&conn)?;
-
-        let stats = ingest_all(&conn)?;
-        if !quiet {
-            eprintln!(
-                "  Claude: {} messages from {} sessions across {} projects",
-                stats.claude_messages, stats.claude_sessions, stats.claude_projects
-            );
-            eprintln!(
-                "  Codex:  {} messages from {} sessions across {} projects",
-                stats.codex_messages, stats.codex_sessions, stats.codex_projects
-            );
-            let total_messages = stats.claude_messages + stats.codex_messages;
-            let total_sessions = stats.claude_sessions + stats.codex_sessions;
-            eprintln!("  Total:  {} messages, {} sessions", total_messages, total_sessions);
-            eprintln!("Building FTS index...");
-        }
-
-        create_fts_index(&conn)?;
-        write_cache_meta(&conn, &stats)?;
-        Ok(())
+        let stats = refresh_incremental_cache(&conn, quiet)?;
+        Ok(stats)
     })();
 
-    if let Err(e) = ingest_result {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(e);
-    }
+    let stats = match ingest_result {
+        Ok(stats) => stats,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
+    };
 
     // Swap the new cache into place. Prefer atomic rename. If the destination exists and
     // rename fails (e.g. on Windows), remove then rename.
@@ -1817,12 +3052,25 @@ fn rebuild_cli_cache(quiet: bool) -> Result<()> {
     }
 
     if !quiet {
+        eprintln!(
+            "  Claude: {} messages from {} sessions across {} projects",
+            stats.claude_messages, stats.claude_sessions, stats.claude_projects
+        );
+        eprintln!(
+            "  Codex:  {} messages from {} sessions across {} projects",
+            stats.codex_messages, stats.codex_sessions, stats.codex_projects
+        );
+        let total_messages = stats.claude_messages + stats.codex_messages;
+        let total_sessions = stats.claude_sessions + stats.codex_sessions;
+        eprintln!(
+            "  Total:  {} messages, {} sessions",
+            total_messages, total_sessions
+        );
         eprintln!("Cache ready.");
     }
 
     Ok(())
 }
-
 
 // --- CLI Definition ---
 
@@ -1955,7 +3203,11 @@ fn cmd_projects(conn: &Connection, source: Option<&str>) -> Result<ApiProjectsRe
     })
 }
 
-fn cmd_sessions(conn: &Connection, project: &str, source: Option<&str>) -> Result<ApiSessionsResponse> {
+fn cmd_sessions(
+    conn: &Connection,
+    project: &str,
+    source: Option<&str>,
+) -> Result<ApiSessionsResponse> {
     let source = source.unwrap_or("claude");
 
     let project_path: String = conn
@@ -2011,7 +3263,11 @@ fn cmd_sessions(conn: &Connection, project: &str, source: Option<&str>) -> Resul
     })
 }
 
-fn cmd_messages(conn: &Connection, session_id: &str, limit: Option<usize>) -> Result<ApiMessagesResponse> {
+fn cmd_messages(
+    conn: &Connection,
+    session_id: &str,
+    limit: Option<usize>,
+) -> Result<ApiMessagesResponse> {
     let (project_name, source): (String, String) = conn
         .query_row(
             "SELECT project, source FROM sessions WHERE session_id = ?",
@@ -2036,21 +3292,20 @@ fn cmd_messages(conn: &Connection, session_id: &str, limit: Option<usize>) -> Re
              ORDER BY id DESC
              LIMIT ?",
         )?;
-        stmt
-            .query_map(params![session_id, limit as i64], |row| {
-                Ok(ApiMessage {
-                    role: row.get::<_, String>(0)?,
-                    content: row.get::<_, String>(1)?,
-                    model: row.get::<_, String>(2)?,
-                    timestamp: row.get::<_, String>(3)?,
-                    is_subagent: row.get::<_, bool>(4)?,
-                    msg_type: row.get::<_, String>(5)?,
-                    input_tokens: row.get::<_, i64>(6)?,
-                    output_tokens: row.get::<_, i64>(7)?,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect()
+        stmt.query_map(params![session_id, limit as i64], |row| {
+            Ok(ApiMessage {
+                role: row.get::<_, String>(0)?,
+                content: row.get::<_, String>(1)?,
+                model: row.get::<_, String>(2)?,
+                timestamp: row.get::<_, String>(3)?,
+                is_subagent: row.get::<_, bool>(4)?,
+                msg_type: row.get::<_, String>(5)?,
+                input_tokens: row.get::<_, i64>(6)?,
+                output_tokens: row.get::<_, i64>(7)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect()
     } else {
         let mut stmt = conn.prepare(
             "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens
@@ -2105,12 +3360,13 @@ fn cmd_search(
     let source_filter = source.unwrap_or("");
     let offset = page * per_page;
 
-    let (total_count, rows) = run_search(conn, query, project_filter, source_filter, per_page, offset);
+    let (total_count, rows) =
+        run_search(conn, query, project_filter, source_filter, per_page, offset);
 
     let results: Vec<ApiSearchResult> = rows
         .into_iter()
-        .map(|(id, project, project_path, session_id, role, content, model, timestamp, is_subagent, source)| {
-            ApiSearchResult {
+        .map(
+            |(
                 id,
                 project,
                 project_path,
@@ -2121,8 +3377,21 @@ fn cmd_search(
                 timestamp,
                 is_subagent,
                 source,
-            }
-        })
+            )| {
+                ApiSearchResult {
+                    id,
+                    project,
+                    project_path,
+                    session_id,
+                    role,
+                    content,
+                    model,
+                    timestamp,
+                    is_subagent,
+                    source,
+                }
+            },
+        )
         .collect();
 
     Ok(ApiSearchResponse {
@@ -2272,7 +3541,7 @@ fn run_cli(cli: Cli) -> Result<()> {
         Commands::Ingest => rebuild_cli_cache(quiet),
         Commands::Serve => unreachable!(), // handled before calling run_cli
         other => {
-            let conn = open_cache_db_for_cli()?;
+            let conn = open_cache_db_for_cli(quiet)?;
             let source = source.as_deref();
 
             let json_output = match other {
@@ -2306,7 +3575,8 @@ fn run_cli(cli: Cli) -> Result<()> {
                     page,
                     limit,
                 } => {
-                    let result = cmd_search(&conn, &query, project.as_deref(), source, page, limit)?;
+                    let result =
+                        cmd_search(&conn, &query, project.as_deref(), source, page, limit)?;
                     if pretty {
                         serde_json::to_string_pretty(&result)?
                     } else {
@@ -2382,7 +3652,10 @@ async fn main() -> Result<()> {
     );
     let total_messages = stats.claude_messages + stats.codex_messages;
     let total_sessions = stats.claude_sessions + stats.codex_sessions;
-    println!("  Total:  {} messages, {} sessions", total_messages, total_sessions);
+    println!(
+        "  Total:  {} messages, {} sessions",
+        total_messages, total_sessions
+    );
 
     println!("Building FTS index...");
     create_fts_index(&conn)?;
@@ -2403,12 +3676,18 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .merge(api_router)
-        .route("/openapi.json", get({
-            let json = openapi_json.clone();
-            move || async move {
-                ([(axum::http::header::CONTENT_TYPE, "application/json")], json)
-            }
-        }))
+        .route(
+            "/openapi.json",
+            get({
+                let json = openapi_json.clone();
+                move || async move {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        json,
+                    )
+                }
+            }),
+        )
         .fallback(get(spa_handler))
         .with_state(state);
 
@@ -2489,12 +3768,18 @@ mod tests {
 
         Router::new()
             .merge(api_router)
-            .route("/openapi.json", get({
-                let json = openapi_json.clone();
-                move || async move {
-                    ([(axum::http::header::CONTENT_TYPE, "application/json")], json)
-                }
-            }))
+            .route(
+                "/openapi.json",
+                get({
+                    let json = openapi_json.clone();
+                    move || async move {
+                        (
+                            [(axum::http::header::CONTENT_TYPE, "application/json")],
+                            json,
+                        )
+                    }
+                }),
+            )
             .fallback(get(spa_handler))
             .with_state(state)
     }
@@ -2519,7 +3804,8 @@ mod tests {
         let projects = json["projects"].as_array().unwrap();
         assert_eq!(projects.len(), 2);
 
-        let sources: Vec<&str> = projects.iter()
+        let sources: Vec<&str> = projects
+            .iter()
             .map(|p| p["source"].as_str().unwrap())
             .collect();
         assert!(sources.contains(&"claude"));
@@ -2531,7 +3817,8 @@ mod tests {
     #[tokio::test]
     async fn test_sessions_for_project() {
         let app = build_test_app(setup_test_db());
-        let (status, json) = get_json(app, "/api/sessions?name=-Users-test-proj&source=claude").await;
+        let (status, json) =
+            get_json(app, "/api/sessions?name=-Users-test-proj&source=claude").await;
         assert_eq!(status, StatusCode::OK);
 
         assert_eq!(json["project_name"].as_str().unwrap(), "-Users-test-proj");
@@ -2608,7 +3895,10 @@ mod tests {
         assert!(json["paths"]["/api/projects"].is_object());
         // IndexParams should no longer appear in the spec
         let spec_str = serde_json::to_string(&json).unwrap();
-        assert!(!spec_str.contains("IndexParams"), "IndexParams should not appear in the OpenAPI spec");
+        assert!(
+            !spec_str.contains("IndexParams"),
+            "IndexParams should not appear in the OpenAPI spec"
+        );
     }
 
     /// Simulates Claude Code's encoding: `path.replace(/[^a-zA-Z0-9]/g, "-")`
@@ -2628,25 +3918,70 @@ mod tests {
             ("-Users-mish", "/Users/mish"),
             ("-Users-mish-ClaudeOS", "/Users/mish/ClaudeOS"),
             ("-Users-mish-memory", "/Users/mish/memory"),
-            ("-Users-mish-workspaces-experiments-agpy", "/Users/mish/workspaces/experiments/agpy"),
-            ("-Users-mish-workspaces-experiments-msi", "/Users/mish/workspaces/experiments/msi"),
-            ("-Users-mish-workspaces-games-goodboy", "/Users/mish/workspaces/games/goodboy"),
-            ("-Users-mish-workspaces-sandbox-agpy", "/Users/mish/workspaces/sandbox/agpy"),
-            ("-Users-mish-workspaces-tools-notebooklm", "/Users/mish/workspaces/tools/notebooklm"),
-            ("-Users-mish-workspaces-tools-wit", "/Users/mish/workspaces/tools/wit"),
+            (
+                "-Users-mish-workspaces-experiments-agpy",
+                "/Users/mish/workspaces/experiments/agpy",
+            ),
+            (
+                "-Users-mish-workspaces-experiments-msi",
+                "/Users/mish/workspaces/experiments/msi",
+            ),
+            (
+                "-Users-mish-workspaces-games-goodboy",
+                "/Users/mish/workspaces/games/goodboy",
+            ),
+            (
+                "-Users-mish-workspaces-sandbox-agpy",
+                "/Users/mish/workspaces/sandbox/agpy",
+            ),
+            (
+                "-Users-mish-workspaces-tools-notebooklm",
+                "/Users/mish/workspaces/tools/notebooklm",
+            ),
+            (
+                "-Users-mish-workspaces-tools-wit",
+                "/Users/mish/workspaces/tools/wit",
+            ),
             // Dot-prefixed components: `.foo` -> `-foo`, producing `--` in encoded form
-            ("-Users-mish--claude-skills-wit", "/Users/mish/.claude/skills/wit"),
+            (
+                "-Users-mish--claude-skills-wit",
+                "/Users/mish/.claude/skills/wit",
+            ),
             ("-Users-mish--warp-themes", "/Users/mish/.warp/themes"),
-            ("-Users-mish-workspaces-experiments-modal-rs--agents-tasks", "/Users/mish/workspaces/experiments/modal-rs/.agents/tasks"),
+            (
+                "-Users-mish-workspaces-experiments-modal-rs--agents-tasks",
+                "/Users/mish/workspaces/experiments/modal-rs/.agents/tasks",
+            ),
             // Paths with literal dashes: `-` in original path also becomes `-` (LOSSY)
-            ("-Users-mish-workspaces-experiments-codex-auth", "/Users/mish/workspaces/experiments/codex-auth"),
-            ("-Users-mish-workspaces-experiments-modal-rs", "/Users/mish/workspaces/experiments/modal-rs"),
-            ("-Users-mish-workspaces-experiments-modal-rs-main-fixed", "/Users/mish/workspaces/experiments/modal-rs-main-fixed"),
-            ("-Users-mish-workspaces-experiments-modal-rs-main-updated", "/Users/mish/workspaces/experiments/modal-rs-main-updated"),
-            ("-Users-mish-workspaces-experiments-modal-rs-main-updated-crates-asi", "/Users/mish/workspaces/experiments/modal-rs-main-updated/crates/asi"),
-            ("-Users-mish-workspaces-tools-perplexity-finance", "/Users/mish/workspaces/tools/perplexity-finance"),
+            (
+                "-Users-mish-workspaces-experiments-codex-auth",
+                "/Users/mish/workspaces/experiments/codex-auth",
+            ),
+            (
+                "-Users-mish-workspaces-experiments-modal-rs",
+                "/Users/mish/workspaces/experiments/modal-rs",
+            ),
+            (
+                "-Users-mish-workspaces-experiments-modal-rs-main-fixed",
+                "/Users/mish/workspaces/experiments/modal-rs-main-fixed",
+            ),
+            (
+                "-Users-mish-workspaces-experiments-modal-rs-main-updated",
+                "/Users/mish/workspaces/experiments/modal-rs-main-updated",
+            ),
+            (
+                "-Users-mish-workspaces-experiments-modal-rs-main-updated-crates-asi",
+                "/Users/mish/workspaces/experiments/modal-rs-main-updated/crates/asi",
+            ),
+            (
+                "-Users-mish-workspaces-tools-perplexity-finance",
+                "/Users/mish/workspaces/tools/perplexity-finance",
+            ),
             // Underscore in original path: `_` also becomes `-` (LOSSY)
-            ("-Users-mish-workspaces-experiments-modalrs-optimized", "/Users/mish/workspaces/experiments/modalrs_optimized"),
+            (
+                "-Users-mish-workspaces-experiments-modalrs-optimized",
+                "/Users/mish/workspaces/experiments/modalrs_optimized",
+            ),
         ]
     }
 
@@ -2677,10 +4012,7 @@ mod tests {
             decode_project_name("-Users-mish-workspaces-experiments-codex-auth"),
             "-Users-mish-workspaces-experiments-codex-auth"
         );
-        assert_eq!(
-            decode_project_name("some-plain-name"),
-            "some-plain-name"
-        );
+        assert_eq!(decode_project_name("some-plain-name"), "some-plain-name");
     }
 
     #[test]
