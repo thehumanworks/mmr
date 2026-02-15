@@ -72,7 +72,7 @@ fn cli_projects_auto_builds_cache() {
     let db_path = tmp.path().join("cache.duckdb");
     let out = run_cli(&["projects"], &home, &db_path);
     let total_messages = projects_total_messages(&out);
-    assert_eq!(total_messages, 4);
+    assert_eq!(total_messages, 2);
     assert!(
         db_path.exists(),
         "expected cache db at {}",
@@ -89,19 +89,19 @@ fn cli_projects_auto_refreshes_incremental_diff() {
 
     let db_path = tmp.path().join("cache.duckdb");
 
-    let first = run_cli(&["projects"], &home, &db_path);
-    assert_eq!(projects_total_messages(&first), 4);
+    let first = run_cli(&["--source", "claude", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&first), 2);
 
     append_file(
         &claude_session,
         "\n{\"type\":\"user\",\"sessionId\":\"sess-claude-1\",\"message\":{\"role\":\"user\",\"content\":\"new question\"},\"timestamp\":\"2025-01-01T00:02:00\",\"uuid\":\"u2\"}\n{\"type\":\"assistant\",\"sessionId\":\"sess-claude-1\",\"message\":{\"role\":\"assistant\",\"content\":\"new answer\",\"model\":\"claude-3-opus\",\"usage\":{\"input_tokens\":80,\"output_tokens\":30}},\"timestamp\":\"2025-01-01T00:03:00\",\"uuid\":\"a2\",\"parentUuid\":\"u2\"}",
     );
 
-    let second = run_cli(&["projects"], &home, &db_path);
-    assert_eq!(projects_total_messages(&second), 6);
+    let second = run_cli(&["--source", "claude", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&second), 4);
 
-    let third = run_cli(&["projects"], &home, &db_path);
-    assert_eq!(projects_total_messages(&third), 6);
+    let third = run_cli(&["--source", "claude", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&third), 4);
 }
 
 #[test]
@@ -112,8 +112,8 @@ fn incremental_state_tracks_offsets_and_last_message() {
     let (claude_session, _) = seed_small_fixture(&home);
 
     let db_path = tmp.path().join("cache.duckdb");
-    let out = run_cli(&["projects"], &home, &db_path);
-    assert_eq!(projects_total_messages(&out), 4);
+    let out = run_cli(&["--source", "claude", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&out), 2);
 
     let conn = Connection::open(&db_path).unwrap();
 
@@ -150,12 +150,12 @@ fn incremental_refresh_removes_deleted_source_files() {
 
     let db_path = tmp.path().join("cache.duckdb");
 
-    let first = run_cli(&["projects"], &home, &db_path);
+    let first = run_cli(&["--source", "all", "projects"], &home, &db_path);
     assert_eq!(projects_total_messages(&first), 4);
 
     fs::remove_file(codex_session).unwrap();
 
-    let second = run_cli(&["projects"], &home, &db_path);
+    let second = run_cli(&["--source", "all", "projects"], &home, &db_path);
     assert_eq!(projects_total_messages(&second), 2);
 }
 
@@ -237,7 +237,9 @@ fn cli_projects_sessions_messages_support_limit_and_offset_flags() {
     let _ = run_cli(&["projects"], &home, &db_path);
 
     let projects = run_cli(
-        &["projects", "--limit", "1", "--offset", "1"],
+        &[
+            "--source", "all", "projects", "--limit", "1", "--offset", "1",
+        ],
         &home,
         &db_path,
     );
@@ -303,4 +305,28 @@ fn cli_projects_sessions_messages_support_limit_and_offset_flags() {
         messages_json["messages"][0]["role"].as_str().unwrap(),
         "user"
     );
+}
+
+#[test]
+fn cli_messages_prints_chronological_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+    let _ = run_cli(&["projects"], &home, &db_path);
+
+    let out = run_cli(&["messages", "--session", "sess-claude-1"], &home, &db_path);
+    assert!(
+        out.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
 }

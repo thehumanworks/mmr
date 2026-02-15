@@ -3081,8 +3081,8 @@ struct Cli {
     #[arg(long, global = true)]
     pretty: bool,
 
-    /// Filter by source: claude, codex
-    #[arg(long, global = true)]
+    /// Filter by source: claude, codex (default: codex)
+    #[arg(long, global = true, default_value = "codex")]
     source: Option<String>,
 
     /// Suppress ingestion progress (stderr)
@@ -3376,7 +3376,7 @@ fn cmd_messages(
         pagination_clause(limit, offset)
     );
     let mut stmt = conn.prepare(&query_sql)?;
-    let messages: Vec<ApiMessage> = stmt
+    let mut messages: Vec<ApiMessage> = stmt
         .query_map(params![session_id], |row| {
             Ok(ApiMessage {
                 role: row.get::<_, String>(0)?,
@@ -3391,6 +3391,9 @@ fn cmd_messages(
         })?
         .filter_map(|r| r.ok())
         .collect();
+    // Keep LIMIT/OFFSET semantics anchored on newest messages, but print
+    // the selected window chronologically for transcript-style readability.
+    messages.reverse();
 
     Ok(ApiMessagesResponse {
         session_id: session_id.to_string(),
@@ -3967,6 +3970,15 @@ mod tests {
         let out = cmd_messages(&conn, "sess-claude-1", Some(1), 1).unwrap();
         assert_eq!(out.messages.len(), 1);
         assert_eq!(out.messages[0].role, "user");
+    }
+
+    #[test]
+    fn test_cmd_messages_returns_chronological_order() {
+        let conn = setup_test_db();
+        let out = cmd_messages(&conn, "sess-claude-1", None, 0).unwrap();
+        assert_eq!(out.messages.len(), 2);
+        assert_eq!(out.messages[0].role, "user");
+        assert_eq!(out.messages[1].role, "assistant");
     }
 
     #[tokio::test]

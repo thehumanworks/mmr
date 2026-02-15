@@ -73,7 +73,11 @@ fn benchmark_incremental_refresh_is_faster_than_full_rebuild() {
     append_file(&claude_session, &build_large_claude_session(1, base_pairs));
 
     let inc_start = Instant::now();
-    let inc_out = run_cli(&["--quiet", "projects"], &home, &db_path);
+    let inc_out = run_cli(
+        &["--quiet", "--source", "claude", "projects"],
+        &home,
+        &db_path,
+    );
     let inc_elapsed = inc_start.elapsed();
     assert!(
         inc_out.status.success(),
