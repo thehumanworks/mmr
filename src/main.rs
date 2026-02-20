@@ -3352,21 +3352,74 @@ fn cmd_messages(
     limit: Option<usize>,
     offset: usize,
 ) -> Result<ApiMessagesResponse> {
-    let (project_name, source): (String, String) = conn
+    let mut rebuilt = false;
+
+    let mut session_ctx: Option<(String, String)> = conn
         .query_row(
             "SELECT project, source FROM sessions WHERE session_id = ?",
             params![session_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .unwrap_or_else(|_| (String::new(), String::new()));
+        .ok();
 
-    let project_path: String = conn
-        .query_row(
+    if session_ctx.is_none() {
+        let has_non_subagent_messages: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM messages
+                WHERE session_id = ? AND is_subagent = FALSE
+             )",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        if has_non_subagent_messages {
+            rebuild_derived_tables(conn)?;
+            rebuilt = true;
+            session_ctx = conn
+                .query_row(
+                    "SELECT project, source FROM sessions WHERE session_id = ?",
+                    params![session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .ok();
+        }
+    }
+
+    let (mut project_name, mut source) =
+        session_ctx.unwrap_or_else(|| (String::new(), String::new()));
+    let mut project_path: Option<String> = if project_name.is_empty() {
+        None
+    } else {
+        conn.query_row(
             "SELECT original_path FROM projects WHERE name = ? AND source = ?",
             params![&project_name, &source],
             |row| row.get(0),
         )
-        .unwrap_or_else(|_| project_name.clone());
+        .ok()
+    };
+
+    if !project_name.is_empty() && project_path.is_none() && !rebuilt {
+        rebuild_derived_tables(conn)?;
+        session_ctx = conn
+            .query_row(
+                "SELECT project, source FROM sessions WHERE session_id = ?",
+                params![session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        if let Some((p, s)) = session_ctx {
+            project_name = p;
+            source = s;
+        }
+        project_path = conn
+            .query_row(
+                "SELECT original_path FROM projects WHERE name = ? AND source = ?",
+                params![&project_name, &source],
+                |row| row.get(0),
+            )
+            .ok();
+    }
+
+    let project_path = project_path.unwrap_or_else(|| project_name.clone());
 
     let query_sql = format!(
         "SELECT role, content_text, model, timestamp, is_subagent, msg_type, input_tokens, output_tokens

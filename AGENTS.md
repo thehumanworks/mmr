@@ -21,6 +21,8 @@ Only new appended bytes are parsed for unchanged files; rewritten/truncated file
 
 `mmr ingest` (alias: `mmr refresh`) remains available as an explicit full cache rebuild path. Override cache location with `MMR_DB_PATH` (legacy: `MEMORY_DB_PATH`). Server mode remains in-memory.
 
+`mmr messages --session <ID>` also includes an on-demand derived-table repair path: if the session has non-subagent messages but missing `sessions`/`projects` rows, it rebuilds derived tables once before returning output.
+
 For Codex project lookups in CLI commands, project keys are absolute `cwd` paths. The CLI normalizes missing-leading-slash inputs (for example `Users/mish/memory` resolves to `/Users/mish/memory`).
 
 ## `get_memory` Tool Clarification

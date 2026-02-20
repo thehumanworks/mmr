@@ -330,3 +330,60 @@ fn cli_messages_prints_chronological_order() {
     assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
     assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
 }
+
+#[test]
+fn cli_messages_repairs_missing_session_and_project_rows_on_refresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+    let first = run_cli(&["projects"], &home, &db_path);
+    assert!(
+        first.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&first.stderr),
+        String::from_utf8_lossy(&first.stdout)
+    );
+
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "DELETE FROM sessions WHERE session_id = 'sess-claude-1' AND project = '-Users-test-proj' AND source = 'claude'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM projects WHERE name = '-Users-test-proj' AND source = 'claude'",
+            [],
+        )
+        .unwrap();
+    }
+
+    let out = run_cli(&["messages", "--session", "sess-claude-1"], &home, &db_path);
+    assert!(
+        out.status.success(),
+        "command failed, stderr={} stdout={}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["session_id"].as_str().unwrap(), "sess-claude-1");
+    assert_eq!(json["project_name"].as_str().unwrap(), "-Users-test-proj");
+    assert_eq!(json["source"].as_str().unwrap(), "claude");
+    assert_eq!(json["messages"].as_array().unwrap().len(), 2);
+
+    let conn = Connection::open(&db_path).unwrap();
+    let (session_count, project_count): (i64, i64) = conn
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM sessions WHERE session_id = 'sess-claude-1' AND project = '-Users-test-proj' AND source = 'claude'),
+                (SELECT COUNT(*) FROM projects WHERE name = '-Users-test-proj' AND source = 'claude')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(session_count, 1);
+    assert_eq!(project_count, 1);
+}
