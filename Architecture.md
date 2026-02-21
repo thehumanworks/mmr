@@ -124,7 +124,7 @@ Search uses `fts_main_messages.match_bm25()` for ranked results, with LIKE fallb
 
 ## Ingestion
 
-CLI refresh path is incremental and file-diff based:
+CLI incremental refresh path (used by background SWR workers and `--refresh`/`-r`) is file-diff based:
 
 1. Discover all Claude/Codex JSONL files.
 2. For each file, compare `(file_size, file_mtime_unix)` to `ingest_files`.
@@ -137,7 +137,14 @@ CLI refresh path is incremental and file-diff based:
 
 Server mode still uses an in-memory DuckDB with full ingest at startup.
 
-CLI query commands now auto-refresh the on-disk cache on every invocation (`projects`, `sessions`, `messages`, `search`, `stats`). `mmr ingest` remains available as an explicit full cache rebuild path.
+CLI query commands use stale-while-revalidate on the on-disk cache by default (`projects`, `sessions`, `messages`, `search`, `stats`):
+- serve current cache contents immediately;
+- then best-effort spawn a detached incremental refresh worker (refreshes a temporary cache snapshot, then atomically swaps it into place);
+- guard worker creation with a lock + cooldown so repeated commands do not stampede.
+
+Pass `--refresh` (or `-r`) to force synchronous incremental refresh before query execution.
+
+`mmr ingest` remains available as an explicit full cache rebuild path.
 
 ## API
 

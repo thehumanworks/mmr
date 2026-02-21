@@ -74,7 +74,7 @@ fn benchmark_incremental_refresh_is_faster_than_full_rebuild() {
 
     let inc_start = Instant::now();
     let inc_out = run_cli(
-        &["--quiet", "--source", "claude", "projects"],
+        &["--quiet", "--source", "claude", "--refresh", "projects"],
         &home,
         &db_path,
     );

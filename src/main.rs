@@ -9,8 +9,8 @@ use clap::{Parser, Subcommand};
 use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -744,6 +744,13 @@ fn now_unix_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+fn now_unix_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 fn metadata_mtime_unix(meta: &std::fs::Metadata) -> i64 {
@@ -2942,6 +2949,12 @@ const SPA_HTML: &str = r##"<!DOCTYPE html>
 
 // --- CLI Cache (On-Disk DuckDB) ---
 
+const BG_REFRESH_LOCK_FILE: &str = ".mmr-refresh.lock";
+const BG_REFRESH_COOLDOWN_FILE: &str = ".mmr-refresh.cooldown";
+const BG_REFRESH_LOCK_ENV: &str = "MMR_BG_REFRESH_LOCK_PATH";
+const BG_REFRESH_COOLDOWN_MILLIS: i64 = 2_000;
+const BG_REFRESH_STALE_LOCK_SECS: i64 = 15 * 60;
+
 fn cache_db_path() -> Result<PathBuf> {
     // New name: MMR_DB_PATH. Keep MEMORY_DB_PATH for backwards compatibility.
     if let Ok(p) = std::env::var("MMR_DB_PATH") {
@@ -2967,7 +2980,203 @@ fn cache_db_path() -> Result<PathBuf> {
     Ok(new_path)
 }
 
-fn open_cache_db_for_cli(quiet: bool) -> Result<Connection> {
+struct LockFileGuard {
+    path: PathBuf,
+    enabled: bool,
+}
+
+impl LockFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            enabled: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.enabled = false;
+    }
+}
+
+impl Drop for LockFileGuard {
+    fn drop(&mut self) {
+        if self.enabled {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn maybe_remove_stale_refresh_lock(lock_path: &Path) {
+    let Ok(meta) = std::fs::metadata(lock_path) else {
+        return;
+    };
+
+    let mtime = metadata_mtime_unix(&meta);
+    if mtime <= 0 {
+        return;
+    }
+
+    let age = now_unix_secs().saturating_sub(mtime);
+    if age > BG_REFRESH_STALE_LOCK_SECS {
+        let _ = std::fs::remove_file(lock_path);
+    }
+}
+
+fn try_acquire_refresh_lock(lock_path: &Path) -> Result<Option<LockFileGuard>> {
+    maybe_remove_stale_refresh_lock(lock_path);
+
+    match OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(lock_path)
+    {
+        Ok(mut file) => {
+            writeln!(file, "{} {}", std::process::id(), now_unix_secs())?;
+            Ok(Some(LockFileGuard::new(lock_path.to_path_buf())))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn read_cooldown_timestamp(path: &Path) -> Option<i64> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    raw.trim().parse::<i64>().ok()
+}
+
+fn maybe_spawn_background_refresh() -> Result<()> {
+    let cache_path = cache_db_path()?;
+    let cache_dir = cache_path
+        .parent()
+        .context("Cache path has no parent directory")?;
+    std::fs::create_dir_all(cache_dir)?;
+
+    let lock_path = cache_dir.join(BG_REFRESH_LOCK_FILE);
+    let cooldown_path = cache_dir.join(BG_REFRESH_COOLDOWN_FILE);
+
+    let mut lock = match try_acquire_refresh_lock(&lock_path)? {
+        Some(lock) => lock,
+        None => return Ok(()),
+    };
+
+    let now_ms = now_unix_millis();
+    if let Some(last) = read_cooldown_timestamp(&cooldown_path) {
+        if now_ms.saturating_sub(last) < BG_REFRESH_COOLDOWN_MILLIS {
+            return Ok(());
+        }
+    }
+
+    let _ = std::fs::write(&cooldown_path, format!("{now_ms}\n"));
+
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(_) => return Ok(()),
+    };
+
+    let spawned = std::process::Command::new(exe)
+        .arg("--quiet")
+        .arg("__background-refresh")
+        .env(BG_REFRESH_LOCK_ENV, &lock_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    if spawned.is_err() {
+        let _ = std::fs::remove_file(&cooldown_path);
+        return Ok(());
+    }
+
+    lock.disarm();
+    Ok(())
+}
+
+fn background_refresh_lock_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os(BG_REFRESH_LOCK_ENV) {
+        return Ok(PathBuf::from(path));
+    }
+    let cache_path = cache_db_path()?;
+    let cache_dir = cache_path
+        .parent()
+        .context("Cache path has no parent directory")?;
+    Ok(cache_dir.join(BG_REFRESH_LOCK_FILE))
+}
+
+fn cache_tmp_path(cache_dir: &Path, prefix: &str) -> PathBuf {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    cache_dir.join(format!("{prefix}-{}-{}.duckdb", std::process::id(), ts))
+}
+
+fn swap_cache_into_place(tmp_path: &Path, cache_path: &Path) -> Result<()> {
+    // Swap the new cache into place. Prefer atomic rename. If the destination exists and
+    // rename fails (e.g. on Windows), remove then rename.
+    if let Err(e) = std::fs::rename(tmp_path, cache_path) {
+        if cache_path.exists() {
+            std::fs::remove_file(cache_path)?;
+            std::fs::rename(tmp_path, cache_path)?;
+        } else {
+            return Err(e.into());
+        }
+    }
+    Ok(())
+}
+
+fn refresh_cli_cache_snapshot(quiet: bool) -> Result<()> {
+    let cache_path = cache_db_path()?;
+    let cache_dir = cache_path
+        .parent()
+        .context("Cache path has no parent directory")?;
+    std::fs::create_dir_all(cache_dir)?;
+
+    let tmp_path = cache_tmp_path(cache_dir, ".mmr-cache-swr");
+
+    if cache_path.exists() && std::fs::copy(&cache_path, &tmp_path).is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    let refresh_result: Result<()> = (|| {
+        let mut conn = Connection::open(&tmp_path)?;
+        init_db(&conn)?;
+
+        let schema_version: Option<String> = conn
+            .query_row(
+                "SELECT value FROM cache_meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        if let Some(version) = schema_version {
+            if version != CACHE_SCHEMA_VERSION {
+                drop(conn);
+                let _ = std::fs::remove_file(&tmp_path);
+                conn = Connection::open(&tmp_path)?;
+                init_db(&conn)?;
+            }
+        }
+
+        refresh_incremental_cache(&conn, quiet)?;
+        Ok(())
+    })();
+
+    if let Err(e) = refresh_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    swap_cache_into_place(&tmp_path, &cache_path)?;
+    Ok(())
+}
+
+fn run_background_refresh_worker() -> Result<()> {
+    let _lock_guard = LockFileGuard::new(background_refresh_lock_path()?);
+    let _ = refresh_cli_cache_snapshot(true);
+    Ok(())
+}
+
+fn open_cache_db_for_cli(quiet: bool, refresh: bool) -> Result<Connection> {
     let cache_path = cache_db_path()?;
     let cache_dir = cache_path
         .parent()
@@ -3001,7 +3210,10 @@ fn open_cache_db_for_cli(quiet: bool) -> Result<Connection> {
         }
     }
 
-    refresh_incremental_cache(&conn, quiet)?;
+    if refresh {
+        refresh_incremental_cache(&conn, quiet)?;
+    }
+
     Ok(conn)
 }
 
@@ -3012,13 +3224,7 @@ fn rebuild_cli_cache(quiet: bool) -> Result<()> {
         .context("Cache path has no parent directory")?;
     std::fs::create_dir_all(cache_dir)?;
 
-    let tmp_path = {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        cache_dir.join(format!(".mmr-cache-{}-{}.duckdb", std::process::id(), ts))
-    };
+    let tmp_path = cache_tmp_path(cache_dir, ".mmr-cache");
 
     if !quiet {
         eprintln!("Building CLI cache at {}", cache_path.display());
@@ -3040,16 +3246,7 @@ fn rebuild_cli_cache(quiet: bool) -> Result<()> {
         }
     };
 
-    // Swap the new cache into place. Prefer atomic rename. If the destination exists and
-    // rename fails (e.g. on Windows), remove then rename.
-    if let Err(e) = std::fs::rename(&tmp_path, &cache_path) {
-        if cache_path.exists() {
-            std::fs::remove_file(&cache_path)?;
-            std::fs::rename(&tmp_path, &cache_path)?;
-        } else {
-            return Err(e.into());
-        }
-    }
+    swap_cache_into_place(&tmp_path, &cache_path)?;
 
     if !quiet {
         eprintln!(
@@ -3088,6 +3285,10 @@ struct Cli {
     /// Suppress ingestion progress (stderr)
     #[arg(long, global = true)]
     quiet: bool,
+
+    /// Refresh cache incrementally before running a query command
+    #[arg(short = 'r', long, global = true)]
+    refresh: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -3149,6 +3350,8 @@ enum Commands {
     Ingest,
     /// Start the web server (default when no subcommand given)
     Serve,
+    #[command(name = "__background-refresh", hide = true)]
+    BackgroundRefresh,
 }
 
 // --- CLI Command Implementations ---
@@ -3656,6 +3859,7 @@ fn run_cli(cli: Cli) -> Result<()> {
         pretty,
         source,
         quiet,
+        refresh,
         command,
     } = cli;
 
@@ -3663,9 +3867,10 @@ fn run_cli(cli: Cli) -> Result<()> {
 
     match command {
         Commands::Ingest => rebuild_cli_cache(quiet),
+        Commands::BackgroundRefresh => run_background_refresh_worker(),
         Commands::Serve => unreachable!(), // handled before calling run_cli
         other => {
-            let conn = open_cache_db_for_cli(quiet)?;
+            let conn = open_cache_db_for_cli(quiet, refresh)?;
             let source = source.as_deref();
 
             let json_output = match other {
@@ -3723,10 +3928,15 @@ fn run_cli(cli: Cli) -> Result<()> {
                         serde_json::to_string(&result)?
                     }
                 }
-                Commands::Ingest | Commands::Serve => unreachable!("handled above"),
+                Commands::Ingest | Commands::Serve | Commands::BackgroundRefresh => {
+                    unreachable!("handled above")
+                }
             };
 
             println!("{}", json_output);
+            if !refresh {
+                let _ = maybe_spawn_background_refresh();
+            }
             Ok(())
         }
     }

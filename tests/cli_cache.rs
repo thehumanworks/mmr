@@ -2,6 +2,7 @@ use duckdb::{params, Connection};
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -34,6 +35,48 @@ fn projects_total_messages(output: &Output) -> i64 {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     json["total_messages"].as_i64().unwrap()
+}
+
+fn wait_for_projects_total_messages(args: &[&str], home: &Path, db_path: &Path, expected: i64) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_total = i64::MIN;
+
+    while Instant::now() < deadline {
+        let out = run_cli(args, home, db_path);
+        let total = projects_total_messages(&out);
+        if total == expected {
+            return;
+        }
+        last_total = total;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    panic!(
+        "timed out waiting for total_messages={}, last observed={}",
+        expected, last_total
+    );
+}
+
+fn wait_for_full_fixture_ingest(home: &Path, db_path: &Path) {
+    wait_for_projects_total_messages(&["--source", "all", "projects"], home, db_path, 4);
+}
+
+fn read_i64_file(path: &Path) -> i64 {
+    fs::read_to_string(path)
+        .unwrap()
+        .trim()
+        .parse::<i64>()
+        .unwrap()
+}
+
+fn ingest_last_ingested_unix(db_path: &Path, source: &str, file_path: &Path) -> i64 {
+    let conn = Connection::open(db_path).unwrap();
+    conn.query_row(
+        "SELECT last_ingested_unix FROM ingest_files WHERE source = ? AND file_path = ?",
+        params![source, file_path.to_string_lossy().to_string()],
+        |row| row.get(0),
+    )
+    .unwrap()
 }
 
 fn seed_small_fixture(home: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -72,12 +115,13 @@ fn cli_projects_auto_builds_cache() {
     let db_path = tmp.path().join("cache.duckdb");
     let out = run_cli(&["projects"], &home, &db_path);
     let total_messages = projects_total_messages(&out);
-    assert_eq!(total_messages, 2);
+    assert_eq!(total_messages, 0);
     assert!(
         db_path.exists(),
         "expected cache db at {}",
         db_path.display()
     );
+    wait_for_projects_total_messages(&["projects"], &home, &db_path, 2);
 }
 
 #[test]
@@ -90,7 +134,8 @@ fn cli_projects_auto_refreshes_incremental_diff() {
     let db_path = tmp.path().join("cache.duckdb");
 
     let first = run_cli(&["--source", "claude", "projects"], &home, &db_path);
-    assert_eq!(projects_total_messages(&first), 2);
+    assert_eq!(projects_total_messages(&first), 0);
+    wait_for_projects_total_messages(&["--source", "claude", "projects"], &home, &db_path, 2);
 
     append_file(
         &claude_session,
@@ -98,10 +143,46 @@ fn cli_projects_auto_refreshes_incremental_diff() {
     );
 
     let second = run_cli(&["--source", "claude", "projects"], &home, &db_path);
-    assert_eq!(projects_total_messages(&second), 4);
+    assert_eq!(projects_total_messages(&second), 2);
+
+    wait_for_projects_total_messages(&["--source", "claude", "projects"], &home, &db_path, 4);
 
     let third = run_cli(&["--source", "claude", "projects"], &home, &db_path);
     assert_eq!(projects_total_messages(&third), 4);
+}
+
+#[test]
+fn cli_projects_refresh_flag_forces_synchronous_refresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let (claude_session, _) = seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+    let cooldown_path = db_path.parent().unwrap().join(".mmr-refresh.cooldown");
+
+    let first = run_cli(
+        &["--source", "claude", "--refresh", "projects"],
+        &home,
+        &db_path,
+    );
+    assert_eq!(projects_total_messages(&first), 2);
+    assert!(
+        !cooldown_path.exists(),
+        "refresh flag should skip background refresh worker scheduling"
+    );
+
+    append_file(
+        &claude_session,
+        "\n{\"type\":\"user\",\"sessionId\":\"sess-claude-1\",\"message\":{\"role\":\"user\",\"content\":\"new question\"},\"timestamp\":\"2025-01-01T00:02:00\",\"uuid\":\"u2\"}\n{\"type\":\"assistant\",\"sessionId\":\"sess-claude-1\",\"message\":{\"role\":\"assistant\",\"content\":\"new answer\",\"model\":\"claude-3-opus\",\"usage\":{\"input_tokens\":80,\"output_tokens\":30}},\"timestamp\":\"2025-01-01T00:03:00\",\"uuid\":\"a2\",\"parentUuid\":\"u2\"}",
+    );
+
+    let second = run_cli(&["--source", "claude", "-r", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&second), 4);
+    assert!(
+        !cooldown_path.exists(),
+        "short refresh flag should also skip background refresh scheduling"
+    );
 }
 
 #[test]
@@ -112,7 +193,11 @@ fn incremental_state_tracks_offsets_and_last_message() {
     let (claude_session, _) = seed_small_fixture(&home);
 
     let db_path = tmp.path().join("cache.duckdb");
-    let out = run_cli(&["--source", "claude", "projects"], &home, &db_path);
+    let out = run_cli(
+        &["--source", "claude", "--refresh", "projects"],
+        &home,
+        &db_path,
+    );
     assert_eq!(projects_total_messages(&out), 2);
 
     let conn = Connection::open(&db_path).unwrap();
@@ -150,13 +235,122 @@ fn incremental_refresh_removes_deleted_source_files() {
 
     let db_path = tmp.path().join("cache.duckdb");
 
-    let first = run_cli(&["--source", "all", "projects"], &home, &db_path);
+    let first = run_cli(
+        &["--source", "all", "--refresh", "projects"],
+        &home,
+        &db_path,
+    );
     assert_eq!(projects_total_messages(&first), 4);
 
     fs::remove_file(codex_session).unwrap();
 
-    let second = run_cli(&["--source", "all", "projects"], &home, &db_path);
+    let second = run_cli(
+        &["--source", "all", "--refresh", "projects"],
+        &home,
+        &db_path,
+    );
     assert_eq!(projects_total_messages(&second), 2);
+}
+
+#[test]
+fn background_refresh_eventually_removes_deleted_source_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let (_, codex_session) = seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+
+    let first = run_cli(&["--source", "all", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&first), 0);
+    wait_for_projects_total_messages(&["--source", "all", "projects"], &home, &db_path, 4);
+
+    fs::remove_file(codex_session).unwrap();
+
+    let second = run_cli(&["--source", "all", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&second), 4);
+    wait_for_projects_total_messages(&["--source", "all", "projects"], &home, &db_path, 2);
+}
+
+#[test]
+fn background_refresh_reuses_incremental_state_for_unchanged_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let (claude_session, codex_session) = seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+
+    let initial = run_cli(
+        &["--source", "all", "--refresh", "projects"],
+        &home,
+        &db_path,
+    );
+    assert_eq!(projects_total_messages(&initial), 4);
+
+    let codex_before = ingest_last_ingested_unix(&db_path, "codex", &codex_session);
+    assert!(codex_before > 0);
+
+    std::thread::sleep(Duration::from_millis(1_100));
+
+    append_file(
+        &claude_session,
+        "\n{\"type\":\"user\",\"sessionId\":\"sess-claude-1\",\"message\":{\"role\":\"user\",\"content\":\"new question\"},\"timestamp\":\"2025-01-01T00:02:00\",\"uuid\":\"u2\"}\n{\"type\":\"assistant\",\"sessionId\":\"sess-claude-1\",\"message\":{\"role\":\"assistant\",\"content\":\"new answer\",\"model\":\"claude-3-opus\",\"usage\":{\"input_tokens\":80,\"output_tokens\":30}},\"timestamp\":\"2025-01-01T00:03:00\",\"uuid\":\"a2\",\"parentUuid\":\"u2\"}",
+    );
+
+    let stale = run_cli(&["--source", "claude", "projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&stale), 2);
+    wait_for_projects_total_messages(&["--source", "claude", "projects"], &home, &db_path, 4);
+
+    let codex_after = ingest_last_ingested_unix(&db_path, "codex", &codex_session);
+    assert_eq!(
+        codex_before, codex_after,
+        "unchanged codex file should retain prior checkpoint when SWR refresh runs incrementally"
+    );
+}
+
+#[test]
+fn cli_background_refresh_cooldown_prevents_spawn_stampede() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    seed_small_fixture(&home);
+
+    let db_path = tmp.path().join("cache.duckdb");
+    let first = run_cli(&["projects"], &home, &db_path);
+    assert_eq!(projects_total_messages(&first), 0);
+
+    let cooldown_path = db_path.parent().unwrap().join(".mmr-refresh.cooldown");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !cooldown_path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        cooldown_path.exists(),
+        "expected cooldown file at {}",
+        cooldown_path.display()
+    );
+
+    let first_spawn = read_i64_file(&cooldown_path);
+
+    for _ in 0..5 {
+        std::thread::sleep(Duration::from_millis(40));
+        let out = run_cli(&["projects"], &home, &db_path);
+        assert!(
+            out.status.success(),
+            "command failed, stderr={} stdout={}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    let second_spawn = read_i64_file(&cooldown_path);
+    assert_eq!(
+        first_spawn, second_spawn,
+        "cooldown timestamp should remain unchanged during rapid repeated queries"
+    );
+
+    wait_for_projects_total_messages(&["projects"], &home, &db_path, 2);
 }
 
 #[test]
@@ -168,6 +362,7 @@ fn cli_sessions_normalizes_codex_project_without_leading_slash() {
 
     let db_path = tmp.path().join("cache.duckdb");
     let _ = run_cli(&["projects"], &home, &db_path);
+    wait_for_projects_total_messages(&["projects"], &home, &db_path, 2);
 
     let out = run_cli(
         &[
@@ -204,6 +399,7 @@ fn cli_sessions_defaults_source_to_codex() {
 
     let db_path = tmp.path().join("cache.duckdb");
     let _ = run_cli(&["projects"], &home, &db_path);
+    wait_for_projects_total_messages(&["projects"], &home, &db_path, 2);
 
     let out = run_cli(
         &["sessions", "--project", "Users/test/codex-proj"],
@@ -235,6 +431,7 @@ fn cli_projects_sessions_messages_support_limit_and_offset_flags() {
 
     let db_path = tmp.path().join("cache.duckdb");
     let _ = run_cli(&["projects"], &home, &db_path);
+    wait_for_full_fixture_ingest(&home, &db_path);
 
     let projects = run_cli(
         &[
@@ -316,6 +513,7 @@ fn cli_messages_prints_chronological_order() {
 
     let db_path = tmp.path().join("cache.duckdb");
     let _ = run_cli(&["projects"], &home, &db_path);
+    wait_for_full_fixture_ingest(&home, &db_path);
 
     let out = run_cli(&["messages", "--session", "sess-claude-1"], &home, &db_path);
     assert!(
@@ -346,6 +544,7 @@ fn cli_messages_repairs_missing_session_and_project_rows_on_refresh() {
         String::from_utf8_lossy(&first.stderr),
         String::from_utf8_lossy(&first.stdout)
     );
+    wait_for_full_fixture_ingest(&home, &db_path);
 
     {
         let conn = Connection::open(&db_path).unwrap();

@@ -11,7 +11,15 @@ It is **distinct** from the agent runtime `get_memory` tool.
 
 ## CLI Cache
 
-CLI query commands (`projects`, `sessions`, `messages`, `search`, `stats`) now run an automatic **incremental refresh** on every invocation before returning JSON. The refresh is diff-based:
+CLI query commands (`projects`, `sessions`, `messages`, `search`, `stats`) now follow **stale-while-revalidate** semantics by default:
+
+- They return current on-disk cache results immediately.
+- After responding, they best-effort spawn a detached background incremental refresh so the next run is fresher.
+- The worker refreshes a temporary cache snapshot and atomically swaps it into place.
+- A lock + cooldown gate prevents stampedes from repeated invocations.
+- Pass `--refresh` (or `-r`) to force a synchronous incremental refresh before returning results.
+
+The background refresh itself is diff-based:
 
 - `ingest_files` tracks per-source JSONL checkpoints (`last_offset`, file size/mtime, and last message watermark).
 - `ingest_projects` tracks first/last seen + last ingested times per project across `claude` and `codex`.

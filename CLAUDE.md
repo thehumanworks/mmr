@@ -21,7 +21,7 @@ cargo test               # Run tests
 
 With no subcommand (or `serve`), starts the web server.
 
-With a subcommand, runs as a CLI tool outputting JSON to stdout. CLI query subcommands (`projects`, `sessions`, `messages`, `search`, `stats`) auto-refresh an on-disk DuckDB cache incrementally before returning output. `mmr ingest` (alias: `mmr refresh`) is still available as an explicit full cache rebuild.
+With a subcommand, runs as a CLI tool outputting JSON to stdout. CLI query subcommands (`projects`, `sessions`, `messages`, `search`, `stats`) default to stale-while-revalidate: read current on-disk cache immediately, then best-effort trigger a detached incremental refresh in the background. The worker refreshes a temporary cache snapshot and atomically swaps it into place. Pass `--refresh`/`-r` to force synchronous incremental refresh before returning output. `mmr ingest` (alias: `mmr refresh`) is still available as an explicit full cache rebuild.
 
 ```
 mmr [OPTIONS] <COMMAND>
@@ -39,12 +39,14 @@ Global Options:
   --pretty           Pretty-print JSON output
   --source <SOURCE>  Filter by source: claude, codex
   --quiet            Suppress ingest progress (stderr)
+  -r, --refresh      Refresh cache incrementally before query commands
 ```
 
 Examples:
 ```bash
 mmr ingest
 mmr projects --pretty
+mmr --refresh projects --pretty
 mmr sessions --project <NAME> --source claude --pretty
 mmr messages --session <ID> --limit 3 --pretty
 mmr search "some query" --pretty
@@ -62,7 +64,9 @@ Single-file app (`src/main.rs`, ~1860 lines including tests).
 - Server mode (no subcommand or `serve`): creates an in-memory DuckDB, ingests data, builds FTS, and starts the Axum web server.
 - CLI mode (any other subcommand):
   - `ingest`: explicit full cache rebuild into on-disk DuckDB.
-  - query subcommands (`projects`, `sessions`, `messages`, `search`, `stats`): open cache DB, run incremental diff refresh, then execute `cmd_*`, printing JSON to stdout.
+  - query subcommands (`projects`, `sessions`, `messages`, `search`, `stats`): open cache DB and execute `cmd_*`.
+    - default: return current cache immediately, then best-effort spawn detached incremental refresh worker.
+    - with `--refresh`/`-r`: run synchronous incremental refresh before query execution.
 
 The web server continues to use in-memory storage; persistence is only used for the CLI cache.
 
@@ -70,7 +74,7 @@ The web server continues to use in-memory storage; persistence is only used for 
 
 1. **JSONL Parsing Types** (lines ~15-41): `ClaudeJsonlLine`, `ClaudeMessagePayload` — serde structs for Claude's JSONL format. Codex parsing uses `serde_json::Value` directly.
 
-2. **DB Setup & Ingestion**: `init_db()` loads DuckDB FTS and creates tables (`messages`, `projects`, `sessions`, `cache_meta`) plus incremental state tables (`ingest_files`, `ingest_projects`, `ingest_sessions`). `messages` includes `source_file` + `source_offset` for line-level provenance. Server mode still uses full ingest (`ingest_claude()` + `ingest_codex()` + `ingest_all()`). CLI mode uses `refresh_incremental_cache()` to parse only new file bytes and repair rewritten/deleted files.
+2. **DB Setup & Ingestion**: `init_db()` loads DuckDB FTS and creates tables (`messages`, `projects`, `sessions`, `cache_meta`) plus incremental state tables (`ingest_files`, `ingest_projects`, `ingest_sessions`). `messages` includes `source_file` + `source_offset` for line-level provenance. Server mode still uses full ingest (`ingest_claude()` + `ingest_codex()` + `ingest_all()`). CLI mode supports both stale-while-revalidate (default) and synchronous refresh (`--refresh`/`-r`) using `refresh_incremental_cache()` to ingest only new file bytes and repair rewritten/deleted files.
  
     **Claude Code project path encoding**: Claude Code encodes project directory paths via `path.replace(/[^a-zA-Z0-9]/g, "-")` — every non-alphanumeric character (`/`, `.`, `-`, `_`, space) becomes `-`. This is a **lossy, irreversible** encoding (e.g. `/foo/bar-baz` and `/foo/bar/baz` both encode to `-foo-bar-baz`). Instead of attempting to decode the dir name, `extract_project_path_from_sessions()` reads the `cwd` field from JSONL session data to recover the true path. `decode_project_name()` is a no-op identity fallback used only when no session data contains a `cwd`.
 
@@ -89,7 +93,7 @@ The web server continues to use in-memory storage; persistence is only used for 
 
 7. **SPA Frontend** (lines ~1198-1591): `SPA_HTML` const — full HTML document with embedded CSS and JavaScript. Client-side routing via `history.pushState()`, fetches from `/api/*` endpoints. Source tab filtering on the index page is done client-side.
 
-8. **CLI Definition & Commands**: Clap `Parser`/`Subcommand` structs (`Cli`, `Commands`). `mmr ingest` performs explicit full cache rebuild. Query subcommands always call incremental refresh first, then execute the `cmd_*` query function.
+8. **CLI Definition & Commands**: Clap `Parser`/`Subcommand` structs (`Cli`, `Commands`). `mmr ingest` performs explicit full cache rebuild. Query subcommands default to stale cache reads + background incremental refresh (lock/cooldown protected), with `--refresh`/`-r` for synchronous incremental refresh.
 
 9. **OpenAPI & Router Wiring**: `ApiDoc` struct with `#[derive(OpenApi)]`. Routes registered via `OpenApiRouter` which auto-collects specs. Spec served at `GET /openapi.json`. Non-API routes fall back to `spa_handler`.
 
@@ -98,7 +102,7 @@ The web server continues to use in-memory storage; persistence is only used for 
 ## Key Technical Details
 
 - DuckDB in-memory with bundled build (`duckdb` crate `features = ["bundled"]`)
-- CLI cache: on-disk DuckDB (default under OS cache dir; override with `MMR_DB_PATH` (legacy: `MEMORY_DB_PATH`)), refreshed incrementally on every query command.
+- CLI cache: on-disk DuckDB (default under OS cache dir; override with `MMR_DB_PATH` (legacy: `MEMORY_DB_PATH`)); query commands default to stale-while-revalidate and accept `--refresh`/`-r` for synchronous incremental refresh.
 - FTS: `PRAGMA create_fts_index` with `fts_main_messages.match_bm25()` for ranked search
 - CLI parsing via `clap` v4 with derive macros; no subcommand defaults to web server
 - Shared state is `Arc<Mutex<Connection>>` (aliased as `AppState`) for web server mode
