@@ -9,6 +9,21 @@ This repo is a local tool to ingest and browse conversation history from the hos
 
 It is **distinct** from the agent runtime `get_memory` tool.
 
+## Code Layout
+
+The Rust implementation is now split by concern instead of a monolithic `src/main.rs`.
+
+- `src/app`: top-level runtime wiring (`run` / server bootstrap)
+- `src/db`: schema, FTS, derived-table and cache-meta DB logic
+- `src/ingest`: Claude/Codex parsers + full/incremental refresh pipeline
+- `src/cache`: on-disk cache and SWR background refresh orchestration
+- `src/query`: shared read/query behavior used by both CLI and API
+- `src/cli`: clap argument contract and CLI command runner
+- `src/api`: DTOs, params, handlers, router/OpenAPI, and SPA fallback
+
+When adding behavior, prefer extending the existing focused module rather than re-introducing
+cross-cutting logic in entrypoints.
+
 ## CLI Cache
 
 CLI query commands (`projects`, `sessions`, `messages`, `search`, `stats`) now follow **stale-while-revalidate** semantics by default:

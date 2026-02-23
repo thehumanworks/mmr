@@ -1,0 +1,392 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI Chat History</title>
+    <style>
+    @view-transition { navigation: auto; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.3s; }
+    body { font-family: 'OpenAI Sans', -apple-system, BlinkMacSystemFont, sans-serif; background: #000; color: #fafafa; line-height: 1.6; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    header { background: #000; padding: 1.5rem 2rem; }
+    header h1 { font-family: 'Bitstream Charter', 'Charter', Georgia, serif; color: #fafafa; font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 0.5rem; }
+    header .stats { color: #71717a; font-size: 0.85rem; margin-top: 0.5rem; font-weight: 400; }
+    header .back { color: #a1a1aa; text-decoration: none; font-size: 0.85rem; display: inline-block; margin-bottom: 0.75rem; font-weight: 500; transition: color 0.2s; cursor: pointer; }
+    header .back:hover { color: #fafafa; }
+    nav.tabs { display: flex; gap: 0.5rem; padding: 0 2rem 0.5rem; background: #000; }
+    nav.tabs a { padding: 0.5rem 1rem; color: #71717a; text-decoration: none; font-size: 0.85rem; font-weight: 500; border-radius: 6px; transition: all 0.2s; cursor: pointer; }
+    nav.tabs a:hover { color: #fafafa; background: #18181b; }
+    nav.tabs a.active { color: #fafafa; background: #18181b; }
+    nav.source-tabs { display: flex; gap: 0.375rem; padding: 0.25rem 2rem 1rem; background: #000; }
+    nav.source-tabs a { padding: 0.35rem 0.75rem; color: #52525b; text-decoration: none; font-size: 0.75rem; font-weight: 600; border-radius: 20px; border: 1px solid #27272a; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; }
+    nav.source-tabs a:hover { color: #a1a1aa; border-color: #3f3f46; }
+    nav.source-tabs a.active { color: #fafafa; background: #27272a; border-color: #3f3f46; }
+    .search-bar { padding: 0 2rem 1.5rem; background: #000; }
+    .search-bar form { display: flex; gap: 0.5rem; max-width: 800px; margin: 0 auto; }
+    .search-bar input[type="text"] { flex: 1; padding: 0.65rem 0.875rem; background: #18181b; border: none; border-radius: 8px; color: #fafafa; font-size: 0.9rem; font-weight: 400; transition: background 0.2s; }
+    .search-bar input:focus { outline: none; background: #27272a; }
+    .search-bar button { padding: 0.65rem 1.25rem; background: #fafafa; color: #000; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9rem; font-weight: 600; transition: all 0.2s; }
+    .search-bar button:hover { background: #e4e4e7; transform: translateY(-1px); }
+    main { max-width: 1200px; margin: 0 auto; padding: 0 2rem 2rem; }
+    main h2 { font-family: 'Bitstream Charter', 'Charter', Georgia, serif; color: #fafafa; font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; padding-bottom: 0.75rem; letter-spacing: -0.01em; text-align: center; }
+    .projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 0.875rem; }
+    .project-card { display: block; padding: 1.25rem; background: #0a0a0a; border-radius: 10px; text-decoration: none; color: inherit; transition: all 0.2s; cursor: pointer; }
+    .project-card:hover { background: #18181b; transform: translateY(-2px); }
+    .project-card-header { display: flex; align-items: center; gap: 0.5rem; }
+    .project-path { color: #fafafa; font-weight: 600; font-size: 0.95rem; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+    .project-stats { color: #71717a; font-size: 0.8rem; margin-top: 0.5rem; font-weight: 400; }
+    .sessions-list { display: flex; flex-direction: column; gap: 0.75rem; }
+    .session-card { display: block; padding: 1rem 1.25rem; background: #0a0a0a; border-radius: 10px; text-decoration: none; color: inherit; transition: all 0.2s; cursor: pointer; }
+    .session-card:hover { background: #18181b; transform: translateY(-1px); }
+    .session-header-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+    .session-id { color: #a1a1aa; font-family: 'SF Mono', 'Fira Code', monospace; font-weight: 600; font-size: 0.8rem; }
+    .session-time { color: #52525b; font-size: 0.75rem; font-weight: 400; }
+    .session-preview { color: #71717a; font-size: 0.85rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .session-stats { color: #52525b; font-size: 0.75rem; margin-top: 0.5rem; font-weight: 400; }
+    .conversation { display: flex; flex-direction: column; gap: 1.25rem; }
+    .message { padding: 1.25rem; border-radius: 12px; }
+    .message.user { background: #0a0a0a; }
+    .message.assistant { background: #18181b; }
+    .message-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; font-size: 0.8rem; }
+    .role { font-weight: 700; text-transform: uppercase; font-size: 0.65rem; padding: 0.2rem 0.5rem; border-radius: 4px; letter-spacing: 0.05em; }
+    .message.user .role { background: #27272a; color: #a1a1aa; }
+    .message.assistant .role { background: #3f3f46; color: #d4d4d8; }
+    .badge { font-size: 0.6rem; padding: 0.15rem 0.4rem; border-radius: 4px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; flex-shrink: 0; }
+    .badge.subagent { background: #3f3f46; color: #d4d4d8; }
+    .badge.model { background: #27272a; color: #a1a1aa; }
+    .badge.source-claude { background: #1e3a5f; color: #93c5fd; }
+    .badge.source-codex { background: #14532d; color: #86efac; }
+    .timestamp { color: #52525b; margin-left: auto; font-weight: 400; font-size: 0.75rem; }
+    .message-content { font-size: 0.9rem; line-height: 1.7; overflow-x: auto; font-weight: 400; }
+    .message-content pre { white-space: pre-wrap; word-wrap: break-word; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.82rem; max-height: 600px; overflow-y: auto; padding: 0.75rem; background: #000; border-radius: 8px; line-height: 1.5; }
+    .message-content p { margin: 0; }
+    .search-result { padding: 1rem 1.25rem; background: #0a0a0a; border-radius: 10px; margin-bottom: 0.75rem; transition: all 0.2s; }
+    .search-result:hover { background: #18181b; }
+    .result-header { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; flex-wrap: wrap; }
+    .result-header a { color: #a1a1aa; text-decoration: none; font-weight: 500; transition: color 0.2s; cursor: pointer; }
+    .result-header a:hover { color: #fafafa; }
+    .result-header .model { color: #52525b; font-weight: 400; }
+    .result-snippet { margin-top: 0.75rem; font-size: 0.85rem; color: #71717a; line-height: 1.6; word-break: break-word; }
+    .result-snippet mark { background: #713f12; color: #fafafa; padding: 0.1rem 0.3rem; border-radius: 3px; font-weight: 500; }
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 1rem; padding: 1.5rem; margin-top: 1rem; }
+    .pagination a { color: #a1a1aa; text-decoration: none; padding: 0.5rem 0.875rem; background: #0a0a0a; border-radius: 6px; font-weight: 500; transition: all 0.2s; cursor: pointer; }
+    .pagination a:hover { background: #18181b; color: #fafafa; }
+    .pagination span { color: #71717a; font-size: 0.85rem; font-weight: 400; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
+    th, td { padding: 0.75rem; text-align: left; }
+    th { color: #71717a; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    td { font-size: 0.85rem; color: #fafafa; font-weight: 400; }
+    tr:not(:last-child) td { border-bottom: 1px solid #18181b; }
+    .loading { text-align: center; padding: 3rem; color: #71717a; font-size: 0.9rem; }
+    .error { text-align: center; padding: 3rem; color: #ef4444; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+    <div id="app"><div class="loading">Loading...</div></div>
+    <script>
+    (function() {
+        const $ = document.getElementById.bind(document);
+        const E = encodeURIComponent;
+
+        function esc(s) {
+            if (!s) return '';
+            return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        function formatTokens(n) {
+            if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+            if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+            return String(n);
+        }
+
+        function sourceBadge(source) {
+            if (source === 'claude') return '<span class="badge source-claude">claude</span>';
+            if (source === 'codex') return '<span class="badge source-codex">codex</span>';
+            return '';
+        }
+
+        function sourceTabs(current, makeHref) {
+            function cls(v) { return v === current ? 'active' : ''; }
+            return '<nav class="source-tabs">'
+                + '<a class="'+cls('')+'" onclick="navigate(\''+makeHref('')+'\')">All</a>'
+                + '<a class="'+cls('claude')+'" onclick="navigate(\''+makeHref('claude')+'\')">Claude</a>'
+                + '<a class="'+cls('codex')+'" onclick="navigate(\''+makeHref('codex')+'\')">Codex</a>'
+                + '</nav>';
+        }
+
+        function makeSnippet(content, query, ctxChars) {
+            if (!query) return esc(content.substring(0, ctxChars * 2));
+            var lower = content.toLowerCase();
+            var qLower = query.toLowerCase();
+            var pos = lower.indexOf(qLower);
+            if (pos === -1) {
+                var t = content.substring(0, ctxChars * 2);
+                return esc(t) + (content.length > ctxChars * 2 ? '...' : '');
+            }
+            var start = Math.max(0, pos - ctxChars);
+            var end = Math.min(content.length, pos + query.length + ctxChars);
+            var slice = content.substring(start, end);
+            var escaped = esc(slice);
+            var qEsc = esc(query);
+            // Case-insensitive highlight
+            var re = new RegExp(qEsc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            var highlighted = escaped.replace(re, function(m) { return '<mark>' + m + '</mark>'; });
+            var prefix = start > 0 ? '...' : '';
+            var suffix = end < content.length ? '...' : '';
+            return prefix + highlighted + suffix;
+        }
+
+        function renderContent(content) {
+            var escaped = esc(content);
+            if (content.length > 200 || content.indexOf('\n') !== -1) {
+                return '<pre>' + escaped + '</pre>';
+            }
+            return '<p>' + escaped + '</p>';
+        }
+
+        function shortTs(ts) {
+            return ts ? ts.substring(0, 19) : '';
+        }
+
+        async function fetchJSON(url) {
+            var resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+        }
+
+        function getParams() {
+            return new URLSearchParams(window.location.search);
+        }
+
+        function navigate(url) {
+            history.pushState(null, '', url);
+            route();
+        }
+        window.navigate = navigate;
+
+        window.addEventListener('popstate', route);
+
+        // Intercept form submits for search
+        document.addEventListener('submit', function(e) {
+            var form = e.target;
+            if (form.tagName === 'FORM' && form.getAttribute('data-spa') === '1') {
+                e.preventDefault();
+                var fd = new FormData(form);
+                var params = new URLSearchParams();
+                for (var pair of fd.entries()) {
+                    if (pair[1]) params.set(pair[0], pair[1]);
+                }
+                navigate(form.action.replace(window.location.origin, '') + '?' + params.toString());
+            }
+        });
+
+        async function route() {
+            var path = window.location.pathname;
+            var params = getParams();
+            var app = $('app');
+            app.innerHTML = '<div class="loading">Loading...</div>';
+            try {
+                if (path === '/analytics') {
+                    await renderAnalytics(app);
+                } else if (path === '/session') {
+                    await renderSession(app, params);
+                } else if (path === '/project') {
+                    await renderProject(app, params);
+                } else if (path === '/search') {
+                    await renderSearch(app, params);
+                } else {
+                    await renderIndex(app, params);
+                }
+            } catch(err) {
+                app.innerHTML = '<div class="error">Error: ' + esc(err.message) + '</div>';
+            }
+        }
+
+        async function renderIndex(app, params) {
+            var source = params.get('source') || '';
+            var data = await fetchJSON('/api/projects');
+            var filtered = source ? data.projects.filter(function(p) { return p.source === source; }) : data.projects;
+            var html = '<header><h1>AI Chat History</h1>'
+                + '<div class="stats">' + data.total_messages + ' messages across ' + data.total_sessions + ' sessions in ' + data.projects.length + ' projects</div></header>';
+            html += '<nav class="tabs"><a class="active" onclick="navigate(\'/\')">Projects</a><a onclick="navigate(\'/analytics\')">Analytics</a></nav>';
+            html += sourceTabs(source, function(s) { return s ? '/?source=' + s : '/'; });
+            html += '<div class="search-bar"><form action="/search" data-spa="1">';
+            if (source) html += '<input type="hidden" name="source" value="' + esc(source) + '" />';
+            html += '<input type="text" name="q" placeholder="Search all conversations..." autofocus /><button type="submit">Search</button></form></div>';
+            html += '<main><h2>Projects</h2><div class="projects-grid">';
+            for (var i = 0; i < filtered.length; i++) {
+                var p = filtered[i];
+                var href = '/project?name=' + E(p.name) + '&source=' + E(p.source);
+                html += '<div class="project-card" onclick="navigate(\'' + href + '\')">'
+                    + '<div class="project-card-header"><div class="project-path">' + esc(p.original_path) + '</div>' + sourceBadge(p.source) + '</div>'
+                    + '<div class="project-stats">' + p.session_count + ' sessions &middot; ' + p.message_count + ' messages</div></div>';
+            }
+            html += '</div></main>';
+            app.innerHTML = html;
+        }
+
+        async function renderProject(app, params) {
+            var name = params.get('name') || '';
+            var source = params.get('source') || 'codex';
+            var apiUrl = '/api/sessions?name=' + E(name) + '&source=' + E(source);
+            var data = await fetchJSON(apiUrl);
+            var dirname = data.project_path.split('/').pop() || data.project_path;
+            var backUrl = source ? '/?source=' + E(source) : '/';
+            var html = '<header><a class="back" onclick="navigate(\'' + backUrl + '\')">&larr; All Projects</a>'
+                + '<h1>' + sourceBadge(data.source) + ' ' + esc(dirname) + '</h1>'
+                + '<div class="stats">' + esc(data.project_path) + ' &middot; ' + data.sessions.length + ' sessions</div></header>';
+            html += '<div class="search-bar"><form action="/search" data-spa="1">'
+                + '<input type="hidden" name="project" value="' + esc(name) + '" />'
+                + '<input type="hidden" name="source" value="' + esc(source) + '" />'
+                + '<input type="text" name="q" placeholder="Search within this project..." autofocus /><button type="submit">Search</button></form></div>';
+            html += '<main><div class="sessions-list">';
+            for (var i = 0; i < data.sessions.length; i++) {
+                var s = data.sessions[i];
+                var href = '/session?session=' + E(s.session_id);
+                var shortSid = s.session_id.substring(0, 8);
+                html += '<div class="session-card" onclick="navigate(\'' + href + '\')">'
+                    + '<div class="session-header-row"><span class="session-id">' + esc(shortSid) + '</span><span class="session-time">' + shortTs(s.first_timestamp) + '</span></div>'
+                    + '<div class="session-preview">' + esc(s.preview) + '</div>'
+                    + '<div class="session-stats">' + s.message_count + ' messages (' + s.user_messages + ' user, ' + s.assistant_messages + ' assistant)</div></div>';
+            }
+            html += '</div></main>';
+            app.innerHTML = html;
+        }
+
+        async function renderSession(app, params) {
+            var session = params.get('session') || '';
+            var apiUrl = '/api/messages?session=' + E(session);
+            var data = await fetchJSON(apiUrl);
+            var shortSid = data.session_id.substring(0, 8);
+            var backUrl = '/project?name=' + E(data.project_name) + '&source=' + E(data.source);
+            var html = '<header><a class="back" onclick="navigate(\'' + backUrl + '\')">&larr; ' + esc(data.project_path) + '</a>'
+                + '<h1>' + sourceBadge(data.source) + ' Session ' + esc(shortSid) + '</h1>'
+                + '<div class="stats">' + data.messages.length + ' messages</div></header>';
+            html += '<main class="conversation">';
+            for (var i = 0; i < data.messages.length; i++) {
+                var m = data.messages[i];
+                var roleClass = m.role === 'user' ? 'user' : 'assistant';
+                var subBadge = m.is_subagent ? '<span class="badge subagent">subagent</span>' : '';
+                var modelBadge = m.model ? '<span class="badge model">' + esc(m.model) + '</span>' : '';
+                html += '<div class="message ' + roleClass + '">'
+                    + '<div class="message-header"><span class="role">' + esc(m.role) + '</span>' + subBadge + modelBadge
+                    + '<span class="timestamp">' + shortTs(m.timestamp) + '</span></div>'
+                    + '<div class="message-content">' + renderContent(m.content) + '</div></div>';
+            }
+            html += '</main>';
+            app.innerHTML = html;
+        }
+
+        async function renderSearch(app, params) {
+            var query = params.get('q') || '';
+            var projectFilter = params.get('project') || '';
+            var sourceFilter = params.get('source') || '';
+            var page = parseInt(params.get('page') || '0', 10);
+            var apiUrl = '/api/search?q=' + E(query);
+            if (projectFilter) apiUrl += '&project=' + E(projectFilter);
+            if (sourceFilter) apiUrl += '&source=' + E(sourceFilter);
+            apiUrl += '&page=' + page;
+            var data = await fetchJSON(apiUrl);
+
+            var scopeParts = [];
+            if (projectFilter) scopeParts.push('in <strong>' + esc(projectFilter) + '</strong>');
+            if (sourceFilter) scopeParts.push('(' + esc(sourceFilter) + ')');
+            var scopeText = scopeParts.length ? ' ' + scopeParts.join(' ') : '';
+
+            var html = '<header><a class="back" onclick="navigate(\'/\')">&larr; All Projects</a>'
+                + '<h1>Search Results</h1>'
+                + '<div class="stats">' + data.total_count + ' results' + scopeText + '</div></header>';
+
+            html += sourceTabs(sourceFilter, function(s) {
+                var u = '/search';
+                var ps = [];
+                if (query) ps.push('q=' + E(query));
+                if (projectFilter) ps.push('project=' + E(projectFilter));
+                if (s) ps.push('source=' + s);
+                return ps.length ? u + '?' + ps.join('&') : u;
+            });
+
+            html += '<div class="search-bar"><form action="/search" data-spa="1">';
+            if (projectFilter) html += '<input type="hidden" name="project" value="' + esc(projectFilter) + '" />';
+            if (sourceFilter) html += '<input type="hidden" name="source" value="' + esc(sourceFilter) + '" />';
+            html += '<input type="text" name="q" value="' + esc(query) + '" placeholder="Search conversations..." autofocus /><button type="submit">Search</button></form></div>';
+
+            html += '<main>';
+            if (!query) {
+                html += '<p>Enter a search query above.</p>';
+            } else {
+                for (var i = 0; i < data.results.length; i++) {
+                    var r = data.results[i];
+                    var shortSid = r.session_id.substring(0, 8);
+                    var snippet = makeSnippet(r.content, query, 200);
+                    var subBadge = r.is_subagent ? '<span class="badge subagent">subagent</span>' : '';
+                    var projHref = '/project?name=' + E(r.project) + '&source=' + E(r.source);
+                    var sessHref = '/session?session=' + E(r.session_id);
+                    html += '<div class="search-result"><div class="result-header">'
+                        + '<span class="role ' + esc(r.role) + '">' + esc(r.role) + '</span>'
+                        + sourceBadge(r.source) + subBadge
+                        + ' <a onclick="navigate(\'' + projHref + '\')">' + esc(r.project_path) + '</a> &middot; '
+                        + '<a onclick="navigate(\'' + sessHref + '\')">Session ' + esc(shortSid) + '</a>'
+                        + '<span class="model">' + esc(r.model) + '</span>'
+                        + '<span class="timestamp">' + shortTs(r.timestamp) + '</span>'
+                        + '</div><div class="result-snippet">' + snippet + '</div></div>';
+                }
+
+                if (data.total_count > data.per_page) {
+                    html += '<div class="pagination">';
+                    var sp = sourceFilter ? '&source=' + E(sourceFilter) : '';
+                    var pp = projectFilter ? '&project=' + E(projectFilter) : '';
+                    if (page > 0) {
+                        html += '<a onclick="navigate(\'/search?q=' + E(query) + pp + sp + '&page=' + (page - 1) + '\')">&#8592; Previous</a>';
+                    }
+                    var totalPages = Math.ceil(data.total_count / data.per_page);
+                    html += '<span>Page ' + (page + 1) + ' of ' + totalPages + '</span>';
+                    if (page + 1 < totalPages) {
+                        html += '<a onclick="navigate(\'/search?q=' + E(query) + pp + sp + '&page=' + (page + 1) + '\')">Next &#8594;</a>';
+                    }
+                    html += '</div>';
+                }
+            }
+            html += '</main>';
+            app.innerHTML = html;
+        }
+
+        async function renderAnalytics(app) {
+            var data = await fetchJSON('/api/analytics');
+            var html = '<header><a class="back" onclick="navigate(\'/\')">&larr; All Projects</a><h1>Analytics</h1></header>';
+            html += '<nav class="tabs"><a onclick="navigate(\'/\')">Projects</a><a class="active" onclick="navigate(\'/analytics\')">Analytics</a></nav>';
+            html += '<main>';
+
+            // Source stats
+            html += '<h2>Overview by Source</h2><table><thead><tr><th>Source</th><th>Messages</th><th>Sessions</th><th>Projects</th></tr></thead><tbody>';
+            for (var i = 0; i < data.source_stats.length; i++) {
+                var s = data.source_stats[i];
+                html += '<tr><td>' + sourceBadge(s.source) + esc(s.source) + '</td><td>' + s.message_count + '</td><td>' + s.session_count + '</td><td>' + s.project_count + '</td></tr>';
+            }
+            html += '</tbody></table>';
+
+            // Model stats
+            html += '<h2>Token Usage by Model</h2><table><thead><tr><th>Model</th><th>Messages</th><th>Input Tokens</th><th>Output Tokens</th></tr></thead><tbody>';
+            for (var i = 0; i < data.model_stats.length; i++) {
+                var m = data.model_stats[i];
+                html += '<tr><td>' + sourceBadge(m.source) + esc(m.model) + '</td><td>' + m.message_count + '</td><td>' + formatTokens(m.input_tokens) + '</td><td>' + formatTokens(m.output_tokens) + '</td></tr>';
+            }
+            html += '</tbody></table>';
+
+            // Project stats
+            html += '<h2>Messages by Project</h2><table><thead><tr><th>Project</th><th>Total</th><th>User</th><th>Assistant</th></tr></thead><tbody>';
+            for (var i = 0; i < data.project_stats.length; i++) {
+                var p = data.project_stats[i];
+                html += '<tr><td>' + sourceBadge(p.source) + esc(p.project_path) + '</td><td>' + p.total_messages + '</td><td>' + p.user_messages + '</td><td>' + p.assistant_messages + '</td></tr>';
+            }
+            html += '</tbody></table>';
+
+            html += '</main>';
+            app.innerHTML = html;
+        }
+
+        // Initial route
+        route();
+    })();
+    </script>
+</body>
