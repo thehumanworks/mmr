@@ -33,6 +33,8 @@ Only new appended bytes are parsed for unchanged files; rewritten/truncated file
 
 For Codex project lookups in CLI commands, project keys are absolute `cwd` paths. The CLI normalizes missing-leading-slash inputs (for example `Users/mish/memory` resolves to `/Users/mish/memory`).
 
+`--source all` works as an unfiltered view for `projects`, `search`, and `stats`, but `sessions` is source-specific and should be called with explicit `--source codex` or `--source claude`.
+
 ## `get_memory` Tool Clarification
 
 `get_memory` reads a host-managed “stored memory” payload keyed by a `memory_id`. It does **not**
