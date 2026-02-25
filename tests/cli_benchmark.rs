@@ -60,7 +60,7 @@ fn benchmark_projects_query_parses_large_fixture() {
     }
 
     let started = Instant::now();
-    let output = Command::new(std::env::var("CARGO_BIN_EXE_mmr").unwrap())
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(["--source", "codex", "projects"])
         .env("HOME", &home)
         .output()

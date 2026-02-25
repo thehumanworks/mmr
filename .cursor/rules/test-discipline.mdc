@@ -7,6 +7,8 @@ alwaysApply: false
 # Test Discipline
 
 - Use isolated temp `HOME` fixtures for integration tests (`tests/common/mod.rs`).
+- For cwd-dependent CLI behavior (e.g. `mmr export` without `--project`), use `run_cli_in_dir` and seed fixture data whose project path matches a real dir under the temp HOME (e.g. `home.join("proj")` with a session whose `cwd` is that path), then run the CLI with that dir as `current_dir`.
+- In benchmark and integration tests that invoke the mmr binary, use `env!("CARGO_BIN_EXE_mmr")` for the binary path, not `std::env::var("CARGO_BIN_EXE_mmr")` — the env var can be unset when running with `--ignored`.
 - Assert response behavior, not just success status:
   - schema fields
   - source filtering

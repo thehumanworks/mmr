@@ -11,9 +11,10 @@ alwaysApply: false
   - `--source` accepts only `claude` or `codex`. Omitting `--source` means both sources.
   - `--source all` is not a valid value.
   - All commands (`projects`, `sessions`, `messages`) work without `--source`.
-- `sessions` and `messages` accept optional `--project` and `--session` filters.
+- `sessions`, `messages`, and `export` accept optional `--project` (and `messages` accepts `--session`).
   - When `--project` is given without `--source`, search both sources.
   - When neither filter is given, return all items across all projects/sources.
+- `export` with no `--project` infers project from cwd: Codex = canonical path, Claude = path with `/` → `-` and leading hyphen. Output is `ApiMessagesResponse` (same as `messages`). `--source` applies to export the same way (filters which source(s) are queried).
 - Keep `messages` pagination semantics: page from newest window, then return chronological order.
 - Each `ApiSession` and `ApiMessage` includes per-item `source` and `project_name` metadata.
 - Do not color JSON output; only color human-facing errors on `stderr`.

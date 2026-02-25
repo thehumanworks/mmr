@@ -27,6 +27,15 @@ impl TestFixture {
             .output()
             .expect("run mmr")
     }
+
+    pub fn run_cli_in_dir(&self, args: &[&str], cwd: &Path) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .args(args)
+            .env("HOME", &self.home)
+            .current_dir(cwd)
+            .output()
+            .expect("run mmr")
+    }
 }
 
 pub fn parse_stdout_json(output: &Output) -> serde_json::Value {

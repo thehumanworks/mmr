@@ -539,3 +539,112 @@ fn messages_filtered_by_project() {
         );
     }
 }
+
+// --- export ---
+
+#[test]
+fn export_with_project_returns_all_messages_for_project() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["export", "--project", "Users/test/codex-proj"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert!(json["messages"].is_array());
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
+    let messages = json["messages"].as_array().unwrap();
+    for msg in messages {
+        assert!(msg["source"].as_str().is_some());
+        assert!(msg["project_name"].as_str().is_some());
+        assert!(msg["session_id"].as_str().is_some());
+        assert!(msg["timestamp"].as_str().is_some());
+        assert!(msg["role"].as_str().is_some());
+        assert!(msg["content"].as_str().is_some());
+    }
+    // Ascending timestamp order
+    let timestamps: Vec<&str> = messages
+        .iter()
+        .map(|m| m["timestamp"].as_str().unwrap())
+        .collect();
+    let mut sorted = timestamps.clone();
+    sorted.sort();
+    assert_eq!(timestamps, sorted);
+}
+
+#[test]
+fn export_with_source_and_project_filters_by_source() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "export",
+        "--project",
+        "/Users/test/codex-proj",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
+    let messages = json["messages"].as_array().unwrap();
+    for msg in messages {
+        assert_eq!(msg["source"].as_str().unwrap(), "codex");
+    }
+}
+
+#[test]
+fn export_without_project_uses_cwd() {
+    let fixture = TestFixture::seeded();
+    let proj_dir = fixture.home.join("proj");
+    fs::create_dir_all(&proj_dir).expect("create proj dir");
+    let cwd_str = fs::canonicalize(&proj_dir)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let session_path = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-cwd-export.jsonl");
+    write_file(
+        &session_path,
+        &format!(
+            r#"{{"type":"session_meta","timestamp":"2025-01-04T00:00:00","payload":{{"id":"sess-cwd-export","cwd":"{}","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-04T00:00:00","git":{{"branch":"main"}}}}}}
+{{"type":"event_msg","timestamp":"2025-01-04T00:00:01","payload":{{"type":"user_message","message":"cwd export test"}}}}
+{{"type":"response_item","timestamp":"2025-01-04T00:01:00","payload":{{"role":"assistant","content":[{{"type":"output_text","text":"cwd export answer"}}]}}}}"#,
+            cwd_str
+        ),
+    );
+
+    let output = fixture.run_cli_in_dir(&["export"], &proj_dir);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert!(
+        !messages.is_empty(),
+        "expected at least one message from cwd project"
+    );
+    for msg in messages {
+        assert!(msg["source"].as_str().is_some());
+        assert!(msg["project_name"].as_str().is_some());
+        assert!(msg["session_id"].as_str().is_some());
+        assert!(msg["timestamp"].as_str().is_some());
+        assert!(msg["role"].as_str().is_some());
+        assert!(msg["content"].as_str().is_some());
+    }
+}
