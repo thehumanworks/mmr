@@ -1,0 +1,27 @@
+---
+description: Keep fixture-driven tests and benchmark checks aligned with CLI behavior
+globs: tests/**/*.rs
+alwaysApply: false
+---
+
+# Test Discipline
+
+- Use isolated temp `HOME` fixtures for integration tests (`tests/common/mod.rs`).
+- Assert response behavior, not just success status:
+  - schema fields
+  - source filtering
+  - sorting and pagination
+  - message ordering
+- Keep benchmark tests opt-in with `#[ignore]` and run them explicitly.
+- For behavior changes, update tests first, then implementation.
+
+## Example
+
+```bash
+# ✅ GOOD
+cargo test --test cli_contract
+cargo test --test cli_benchmark -- --ignored --nocapture
+
+# ❌ BAD
+cargo test && skip benchmark checks forever
+```

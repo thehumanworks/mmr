@@ -1,0 +1,25 @@
+---
+description: Run the full Rust verification loop before claiming completion
+alwaysApply: true
+---
+
+# Verification Loop
+
+- Run this sequence after meaningful code changes:
+  - `cargo fmt`
+  - `cargo test`
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo build --release`
+- Report failures with concrete command output and fix before finalizing.
+- Keep machine-readable output on `stdout`; diagnostics belong on `stderr`.
+
+## Example
+
+```bash
+# ✅ GOOD
+cargo test && cargo clippy --all-targets --all-features -- -D warnings
+
+# ❌ BAD (claiming success without verification)
+echo "looks good, should pass"
+```

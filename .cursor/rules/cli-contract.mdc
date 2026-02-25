@@ -1,0 +1,31 @@
+---
+description: Preserve mmr CLI JSON contract and source semantics
+globs: src/**/*.rs
+alwaysApply: false
+---
+
+# CLI Contract Rules
+
+- Keep response shapes in `src/model.rs` stable for `projects`, `sessions`, and `messages`.
+- Preserve source behavior:
+  - `--source` accepts only `claude` or `codex`. Omitting `--source` means both sources.
+  - `--source all` is not a valid value.
+  - All commands (`projects`, `sessions`, `messages`) work without `--source`.
+- `sessions` and `messages` accept optional `--project` and `--session` filters.
+  - When `--project` is given without `--source`, search both sources.
+  - When neither filter is given, return all items across all projects/sources.
+- Keep `messages` pagination semantics: page from newest window, then return chronological order.
+- Each `ApiSession` and `ApiMessage` includes per-item `source` and `project_name` metadata.
+- Do not color JSON output; only color human-facing errors on `stderr`.
+
+## Example
+
+```rust
+// ✅ GOOD
+let descending = chronological.into_iter().rev().collect::<Vec<_>>();
+let mut paged = apply_pagination(descending, limit, offset);
+paged.reverse();
+
+// ❌ BAD: breaks chronological return contract
+let paged = apply_pagination(chronological, limit, offset);
+```
