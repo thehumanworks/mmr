@@ -21,6 +21,14 @@ fn stdout_text(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout UTF-8")
 }
 
+fn first_input_text(body: &serde_json::Value) -> &str {
+    body["input"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["text"].as_str())
+        .expect("first input text")
+}
+
 fn run_cli_with_home(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(args)
@@ -800,7 +808,7 @@ fn remember_default_source_includes_claude_and_codex_messages() {
     );
 
     let body = captured.lock().expect("captured body").clone().unwrap();
-    let input = body["input"].as_str().unwrap();
+    let input = first_input_text(&body);
     assert!(
         input.contains("hello from claude"),
         "remember input should include claude transcript"
@@ -852,7 +860,7 @@ fn remember_default_mode_uses_latest_session() {
     );
 
     let body = captured.lock().expect("captured body").clone().unwrap();
-    let input = body["input"].as_str().unwrap();
+    let input = first_input_text(&body);
     assert!(input.contains("latest session question"));
     assert!(
         !input.contains("hello from claude"),
@@ -903,7 +911,7 @@ fn remember_with_source_filter_only_includes_requested_source() {
     );
 
     let body = captured.lock().expect("captured body").clone().unwrap();
-    let input = body["input"].as_str().unwrap();
+    let input = first_input_text(&body);
     assert!(input.contains("codex-only question"));
     assert!(
         !input.contains("hello from claude"),
@@ -912,7 +920,7 @@ fn remember_with_source_filter_only_includes_requested_source() {
 }
 
 #[test]
-fn remember_follow_up_uses_previous_interaction_id() {
+fn remember_prompt_uses_previous_interaction_id_for_continuations() {
     let fixture = TestFixture::seeded();
     let (base_url, captured, handle) = start_mock_gemini_server(
         r#"{"id":"interaction-3","outputs":[{"text":"follow-up summary"}]}"#,
@@ -925,8 +933,6 @@ fn remember_follow_up_uses_previous_interaction_id() {
             "interaction-previous",
             "--follow-up",
             "what should I do next?",
-            "--prompt",
-            "Focus only on open items.",
         ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
@@ -946,10 +952,10 @@ fn remember_follow_up_uses_previous_interaction_id() {
         body["previous_interaction_id"].as_str().unwrap(),
         "interaction-previous"
     );
-    assert_eq!(body["input"].as_str().unwrap(), "what should I do next?");
+    assert_eq!(first_input_text(&body), "what should I do next?");
     let system_instruction = body["system_instruction"].as_str().unwrap();
     assert!(system_instruction.contains("Memory Agent"));
-    assert!(system_instruction.contains("Focus only on open items."));
+    assert!(!system_instruction.contains("what should I do next?"));
 }
 
 #[test]
@@ -1025,4 +1031,118 @@ fn remember_output_format_md_trims_summary_and_interaction_id() {
     let stdout = stdout_text(&output);
     assert!(stdout.contains("status line\nnext line"));
     assert!(stdout.contains("Interaction ID: `interaction-trim`"));
+}
+
+#[test]
+fn remember_custom_instructions_replace_default_output_section_in_system_prompt() {
+    let fixture = TestFixture::seeded();
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-custom","outputs":[{"text":"custom output"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "remember",
+            "--continue-from",
+            "interaction-previous",
+            "--follow-up",
+            "test",
+            "--instructions",
+            "Return only a single keyword.",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let system = body["system_instruction"].as_str().unwrap();
+    assert!(
+        system.contains("Memory Agent"),
+        "base identity must be preserved"
+    );
+    assert!(
+        system.contains("Input Format"),
+        "base input format must be preserved"
+    );
+    assert!(
+        system.contains("Return only a single keyword."),
+        "custom instructions must appear in system prompt"
+    );
+    assert!(
+        !system.contains("Output Format"),
+        "default output format must be replaced by custom instructions"
+    );
+    assert!(
+        !system.contains("continuity brief"),
+        "default purpose must be replaced by custom instructions"
+    );
+    assert!(
+        !system.contains("Resume Instructions"),
+        "default output sections must be replaced by custom instructions"
+    );
+}
+
+#[test]
+fn remember_without_instructions_includes_default_purpose_and_output_sections() {
+    let fixture = TestFixture::seeded();
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-default","outputs":[{"text":"default output"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "remember",
+            "--continue-from",
+            "interaction-previous",
+            "--follow-up",
+            "test",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let system = body["system_instruction"].as_str().unwrap();
+    assert!(
+        system.contains("Memory Agent"),
+        "base identity must be present"
+    );
+    assert!(
+        system.contains("Input Format"),
+        "input format must be present"
+    );
+    assert!(
+        system.contains("Purpose"),
+        "default Purpose section must be present"
+    );
+    assert!(
+        system.contains("continuity brief"),
+        "default purpose text must be present"
+    );
+    assert!(
+        system.contains("Output Format"),
+        "default output format must be present"
+    );
+    assert!(
+        system.contains("Resume Instructions"),
+        "default output sections must be present"
+    );
 }

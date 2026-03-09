@@ -101,12 +101,12 @@ pub enum Commands {
         /// Continue from a previous Gemini interaction ID
         #[arg(long = "continue-from")]
         continue_from: Option<String>,
-        /// Follow-up prompt for a previous interaction (requires --continue-from)
-        #[arg(long = "follow-up", requires = "continue_from")]
+        /// Follow-up user message for a continuation (requires --continue-from)
+        #[arg(long = "follow-up")]
         follow_up: Option<String>,
-        /// Additional directives appended to the base memory-agent system prompt
+        /// Override the output format and rules portion of the system instructions (applies to first message and continuations)
         #[arg(long)]
-        prompt: Option<String>,
+        instructions: Option<String>,
         /// Output format for remember results
         #[arg(
             short = 'O',
@@ -246,7 +246,7 @@ pub fn run_cli(cli: Cli) -> Result<String> {
             mode,
             continue_from,
             follow_up,
-            prompt,
+            instructions,
             output_format,
             model,
         } => {
@@ -262,7 +262,7 @@ pub fn run_cli(cli: Cli) -> Result<String> {
                     mode: mode.into(),
                     continue_from: continue_from.as_deref(),
                     follow_up: follow_up.as_deref(),
-                    prompt: prompt.as_deref(),
+                    instructions: instructions.as_deref(),
                     model: model.as_deref(),
                 },
             )?;

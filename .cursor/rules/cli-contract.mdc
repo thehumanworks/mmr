@@ -15,6 +15,10 @@ alwaysApply: false
   - When `--project` is given without `--source`, search both sources.
   - When neither filter is given, return all items across all projects/sources.
 - `export` with no `--project` infers project from cwd: Codex = canonical path, Claude = path with `/` → `-` and leading hyphen. Output is `ApiMessagesResponse` (same as `messages`). `--source` applies to export the same way (filters which source(s) are queried).
+- `remember` sends session transcripts to Gemini with a two-part system prompt:
+  - Base (always present): agent identity + input format only. Must not contain output-directing language.
+  - Output instruction (replaceable): without `--instructions`, uses the default (Purpose, Output Format, Rules, Resume Instructions). With `--instructions`, the user's text fully replaces the default output instruction.
+  - The user prompt is neutral ("Analyze the following AI coding session transcript(s).") — the system instruction has sole authority over output behavior.
 - Keep `messages` pagination semantics: page from newest window, then return chronological order.
 - Each `ApiSession` and `ApiMessage` includes per-item `source` and `project_name` metadata.
 - Do not color JSON output; only color human-facing errors on `stderr`.

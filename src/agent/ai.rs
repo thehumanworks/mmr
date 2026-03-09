@@ -3,15 +3,21 @@ use std::cmp::Reverse;
 use anyhow::{Result, bail};
 use rayon::prelude::*;
 
-use crate::agent::gemini::{Gemini, GeminiGenerateRequest};
+use crate::agent::gemini::{Gemini, GeminiGenerateRequest, InteractionInput, InteractionInputType};
 use crate::model::{ApiMessage, ApiRememberResponse, SortBy, SortOptions, SortOrder, SourceFilter};
 use crate::query::QueryService;
 
-pub const MEMORY_AGENT_SYSTEM_INSTRUCTION: &str = r#"You are a Memory Agent — a specialized summarizer that processes AI coding session transcripts and produces structured continuity briefs. Your sole purpose is to enable an AI agent resuming work on this project to pick up exactly where the previous session left off, at the highest quality.
+/// Preserved in every call. Establishes agent identity and describes the input format.
+pub const MEMORY_AGENT_BASE_INSTRUCTION: &str = r#"You are a Memory Agent — a specialized AI that analyzes AI coding session transcripts.
 
 ## Input Format
 
-You receive a list of messages from one or more coding sessions, ordered most recent first. Each message has a role (user/assistant/tool), content, and a timestamp. Messages may span multiple sessions, each identified by a session_id.
+You receive a list of messages from one or more coding sessions, ordered most recent first. Each message has a role (user/assistant/tool), content, and a timestamp. Messages may span multiple sessions, each identified by a session_id."#;
+
+/// Default output format and rules appended to the base. Overridden by `--instructions`.
+const MEMORY_AGENT_DEFAULT_OUTPUT_INSTRUCTION: &str = r#"## Purpose
+
+Produce structured continuity briefs that enable an AI agent resuming work on this project to pick up exactly where the previous session left off, at the highest quality.
 
 ## Output Format
 
@@ -57,6 +63,15 @@ A short paragraph (2-4 sentences) telling the resuming agent exactly what to do 
 - If messages are from multiple sessions, note session boundaries only when the context shift matters.
 - If the conversation is too short or trivial to warrant a full summary, say so in one line and skip the sections."#;
 
+fn build_system_instruction(instructions: Option<&str>) -> String {
+    match instructions {
+        Some(custom) => format!("{MEMORY_AGENT_BASE_INSTRUCTION}\n\n{custom}"),
+        None => {
+            format!("{MEMORY_AGENT_BASE_INSTRUCTION}\n\n{MEMORY_AGENT_DEFAULT_OUTPUT_INSTRUCTION}")
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RememberMode {
     Latest,
@@ -69,7 +84,7 @@ pub struct RememberRequest<'a> {
     pub mode: RememberMode,
     pub continue_from: Option<&'a str>,
     pub follow_up: Option<&'a str>,
-    pub prompt: Option<&'a str>,
+    pub instructions: Option<&'a str>,
     pub model: Option<&'a str>,
 }
 
@@ -95,23 +110,20 @@ pub fn remember(
     }
 
     let gemini = Gemini::new(request.model, None)?;
-    let system_instruction = build_system_instruction(request.prompt);
+    let system_instruction = build_system_instruction(request.instructions);
 
-    let input = match (request.follow_up, request.continue_from) {
-        (Some(follow_up), Some(_)) => follow_up.to_string(),
-        _ => {
-            let sessions =
-                load_session_transcripts(service, request.project, request.source, request.mode);
-            let formatted = format_messages_for_input(&sessions);
-            format!(
-                "Analyze the following AI coding session transcript(s) and produce a continuity brief.\n\n{formatted}"
-            )
-        }
+    let input = if request.continue_from.is_some() {
+        request.follow_up.unwrap_or_default().to_string()
+    } else {
+        let sessions =
+            load_session_transcripts(service, request.project, request.source, request.mode);
+        let formatted = format_messages_for_input(&sessions);
+        format!("Analyze the following AI coding session transcript(s).\n\n{formatted}")
     };
 
     let result = gemini.generate(GeminiGenerateRequest {
-        input: &input,
-        system_instruction: Some(system_instruction.as_str()),
+        input: vec![InteractionInput::new(InteractionInputType::Text, &input)],
+        system_instruction: Some(&system_instruction),
         previous_interaction_id: request.continue_from,
     })?;
 
@@ -225,15 +237,6 @@ fn maybe_truncate_tool_message(role: &str, content: &str) -> String {
     format!("{}\n... [truncated]", &content[..end])
 }
 
-fn build_system_instruction(prompt: Option<&str>) -> String {
-    let prompt = match prompt {
-        Some(value) if !value.trim().is_empty() => value.trim(),
-        _ => return MEMORY_AGENT_SYSTEM_INSTRUCTION.to_string(),
-    };
-
-    format!("{MEMORY_AGENT_SYSTEM_INSTRUCTION}\n\n## Additional Directives\n{prompt}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,9 +257,73 @@ mod tests {
     }
 
     #[test]
-    fn prompt_is_additive_to_base_system_instruction() {
-        let instruction = build_system_instruction(Some("Keep it concise."));
-        assert!(instruction.contains("Memory Agent"));
-        assert!(instruction.contains("Keep it concise."));
+    fn custom_instructions_override_output_section_but_preserve_base() {
+        let custom = "Answer the user's question directly.";
+        let effective = build_system_instruction(Some(custom));
+        assert!(
+            effective.contains("Memory Agent"),
+            "base identity must be preserved"
+        );
+        assert!(
+            effective.contains("Input Format"),
+            "base input format must be preserved"
+        );
+        assert!(
+            effective.contains(custom),
+            "custom instructions must appear"
+        );
+        assert!(
+            !effective.contains("Output Format"),
+            "default output format must be replaced"
+        );
+        assert!(
+            !effective.contains("Resume Instructions"),
+            "default output sections must be replaced"
+        );
+        assert!(
+            !effective.contains("continuity brief"),
+            "default purpose must not leak into custom instructions"
+        );
+        assert!(
+            !effective.contains("Purpose"),
+            "default Purpose section must be replaced"
+        );
+    }
+
+    #[test]
+    fn default_instructions_include_full_output_section() {
+        let effective = build_system_instruction(None);
+        assert!(effective.contains("Memory Agent"));
+        assert!(effective.contains("Input Format"));
+        assert!(effective.contains("Purpose"));
+        assert!(effective.contains("continuity brief"));
+        assert!(effective.contains("Output Format"));
+        assert!(effective.contains("Resume Instructions"));
+        assert!(effective.contains("Rules"));
+    }
+
+    #[test]
+    fn base_instruction_contains_no_output_directing_language() {
+        let base = MEMORY_AGENT_BASE_INSTRUCTION;
+        assert!(
+            base.contains("Memory Agent"),
+            "base must establish agent identity"
+        );
+        assert!(
+            base.contains("Input Format"),
+            "base must describe the input format"
+        );
+        assert!(
+            !base.contains("continuity brief"),
+            "base must not direct output format"
+        );
+        assert!(
+            !base.contains("sole purpose"),
+            "base must not constrain the agent's purpose"
+        );
+        assert!(
+            !base.contains("highest quality"),
+            "base must not include output quality directives"
+        );
     }
 }
