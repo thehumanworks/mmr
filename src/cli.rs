@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::model::{ApiMessage, ApiMessagesResponse, SortBy, SortOptions, SortOrder, SourceFilter};
+use crate::agent::ai::{self, RememberMode};
+use crate::model::{
+    ApiMessage, ApiMessagesResponse, ApiRememberResponse, SortBy, SortOptions, SortOrder,
+    SourceFilter,
+};
 use crate::query::QueryService;
 
 #[derive(Parser, Debug)]
@@ -86,6 +90,58 @@ pub enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Generate a continuity brief from prior sessions and continue follow-ups
+    Remember {
+        /// Project name or path (omit to use current directory)
+        #[arg(long)]
+        project: Option<String>,
+        /// Session selection mode
+        #[arg(long, value_enum, default_value = "latest")]
+        mode: RememberModeArg,
+        /// Continue from a previous Gemini interaction ID
+        #[arg(long = "continue-from")]
+        continue_from: Option<String>,
+        /// Follow-up prompt for a previous interaction (requires --continue-from)
+        #[arg(long = "follow-up", requires = "continue_from")]
+        follow_up: Option<String>,
+        /// Additional directives appended to the base memory-agent system prompt
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Output format for remember results
+        #[arg(
+            short = 'O',
+            long = "output-format",
+            value_enum,
+            default_value = "json"
+        )]
+        output_format: RememberOutputFormatArg,
+        /// Gemini model to use
+        #[arg(long)]
+        model: Option<String>,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "kebab-case")]
+pub enum RememberModeArg {
+    Latest,
+    All,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "kebab-case")]
+pub enum RememberOutputFormatArg {
+    Json,
+    Md,
+}
+
+impl From<RememberModeArg> for RememberMode {
+    fn from(value: RememberModeArg) -> Self {
+        match value {
+            RememberModeArg::Latest => RememberMode::Latest,
+            RememberModeArg::All => RememberMode::All,
+        }
+    }
 }
 
 pub fn run_cli(cli: Cli) -> Result<String> {
@@ -185,6 +241,33 @@ pub fn run_cli(cli: Cli) -> Result<String> {
                 serialize(&response, cli.pretty)?
             }
         }
+        Commands::Remember {
+            project,
+            mode,
+            continue_from,
+            follow_up,
+            prompt,
+            output_format,
+            model,
+        } => {
+            let project = match project {
+                Some(project) => project,
+                None => current_dir_project().context("could not resolve current directory")?,
+            };
+            let response = ai::remember(
+                &service,
+                ai::RememberRequest {
+                    project: project.as_str(),
+                    source: cli.source,
+                    mode: mode.into(),
+                    continue_from: continue_from.as_deref(),
+                    follow_up: follow_up.as_deref(),
+                    prompt: prompt.as_deref(),
+                    model: model.as_deref(),
+                },
+            )?;
+            format_remember_response(&response, output_format, cli.pretty)?
+        }
     };
 
     Ok(response)
@@ -207,10 +290,85 @@ fn resolve_project_from_cwd() -> Result<(String, String)> {
     Ok((codex_path, claude_name))
 }
 
+fn current_dir_project() -> Result<String> {
+    Ok(std::env::current_dir()?.to_string_lossy().into_owned())
+}
+
 fn serialize<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
     if pretty {
         Ok(serde_json::to_string_pretty(value)?)
     } else {
         Ok(serde_json::to_string(value)?)
+    }
+}
+
+fn format_remember_response(
+    response: &ApiRememberResponse,
+    output_format: RememberOutputFormatArg,
+    pretty: bool,
+) -> Result<String> {
+    match output_format {
+        RememberOutputFormatArg::Json => serialize(response, pretty),
+        RememberOutputFormatArg::Md => Ok(remember_response_to_markdown(response)),
+    }
+}
+
+fn remember_response_to_markdown(response: &ApiRememberResponse) -> String {
+    let summary = if response.summary.trim().is_empty() {
+        "(No summary returned.)"
+    } else {
+        response.summary.trim()
+    };
+    let interaction_id = if response.interaction_id.trim().is_empty() {
+        "(none)"
+    } else {
+        response.interaction_id.trim()
+    };
+
+    format!(
+        "# Continuity Brief\n\n{}\n\n---\nInteraction ID: `{}`",
+        summary, interaction_id
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remember_markdown_transformation_includes_summary_and_interaction_id() {
+        let response = ApiRememberResponse {
+            summary: "Summary body".to_string(),
+            interaction_id: "abc-123".to_string(),
+        };
+
+        let markdown = remember_response_to_markdown(&response);
+        assert!(markdown.contains("# Continuity Brief"));
+        assert!(markdown.contains("Summary body"));
+        assert!(markdown.contains("Interaction ID: `abc-123`"));
+    }
+
+    #[test]
+    fn remember_markdown_transformation_handles_empty_values() {
+        let response = ApiRememberResponse {
+            summary: "  ".to_string(),
+            interaction_id: "".to_string(),
+        };
+
+        let markdown = remember_response_to_markdown(&response);
+        assert!(markdown.contains("(No summary returned.)"));
+        assert!(markdown.contains("Interaction ID: `(none)`"));
+    }
+
+    #[test]
+    fn remember_markdown_transformation_trims_outer_whitespace() {
+        let response = ApiRememberResponse {
+            summary: "\n  line one\nline two  \n".to_string(),
+            interaction_id: "  id-1  ".to_string(),
+        };
+
+        let markdown = remember_response_to_markdown(&response);
+        assert!(markdown.contains("line one\nline two"));
+        assert!(markdown.contains("Interaction ID: `id-1`"));
     }
 }

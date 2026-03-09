@@ -129,3 +129,9 @@ pub struct ApiMessagesResponse {
     pub messages: Vec<ApiMessage>,
     pub total_messages: i64,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ApiRememberResponse {
+    pub summary: String,
+    pub interaction_id: String,
+}

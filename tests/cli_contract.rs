@@ -1,8 +1,12 @@
 mod common;
 
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use common::{TestFixture, parse_stdout_json};
 
@@ -13,12 +17,112 @@ fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+fn stdout_text(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).expect("stdout UTF-8")
+}
+
 fn run_cli_with_home(home: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(args)
         .env("HOME", home)
         .output()
         .expect("run mmr")
+}
+
+fn run_cli_with_home_and_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
+    command.args(args).env("HOME", home);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().expect("run mmr")
+}
+
+fn start_mock_gemini_server(
+    response_body: &str,
+) -> (
+    String,
+    Arc<Mutex<Option<serde_json::Value>>>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let captured = Arc::new(Mutex::new(None));
+    let captured_for_thread = Arc::clone(&captured);
+    let response = response_body.to_string();
+
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept request");
+        let request_bytes = read_http_request(&mut stream);
+        let request = String::from_utf8(request_bytes).expect("request UTF-8");
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+        let body_json: serde_json::Value = serde_json::from_str(body).expect("request JSON body");
+        *captured_for_thread.lock().expect("lock captured body") = Some(body_json);
+
+        let http_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        stream
+            .write_all(http_response.as_bytes())
+            .expect("write response");
+    });
+
+    (format!("http://{addr}"), captured, handle)
+}
+
+fn read_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut header_end = None;
+    let mut content_length = 0usize;
+
+    loop {
+        let mut chunk = [0_u8; 4096];
+        let read = stream.read(&mut chunk).expect("read request");
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+
+        if header_end.is_none()
+            && let Some(idx) = find_subsequence(&bytes, b"\r\n\r\n")
+        {
+            header_end = Some(idx + 4);
+            let header = String::from_utf8_lossy(&bytes[..idx + 4]);
+            content_length = parse_content_length(&header);
+        }
+
+        if let Some(end) = header_end
+            && bytes.len() >= end + content_length
+        {
+            break;
+        }
+    }
+
+    bytes
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn parse_content_length(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if !name.eq_ignore_ascii_case("content-length") {
+                return None;
+            }
+            value.trim().parse::<usize>().ok()
+        })
+        .unwrap_or(0)
 }
 
 fn seed_message_count_sort_fixture(home: &Path) {
@@ -647,4 +751,278 @@ fn export_without_project_uses_cwd() {
         assert!(msg["role"].as_str().is_some());
         assert!(msg["content"].as_str().is_some());
     }
+}
+
+// --- remember ---
+
+#[test]
+fn remember_default_source_includes_claude_and_codex_messages() {
+    let fixture = TestFixture::seeded();
+    let codex_session = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-remember.jsonl");
+    write_file(
+        &codex_session,
+        r#"{"type":"session_meta","timestamp":"2025-01-04T00:00:00","payload":{"id":"sess-codex-remember","cwd":"/Users/test/proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-04T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-04T00:00:01","payload":{"type":"user_message","message":"remember codex question"}}
+{"type":"response_item","timestamp":"2025-01-04T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"remember codex answer"}]}}"#,
+    );
+
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-1","outputs":[{"text":"continuity summary"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &["remember", "--project", "/Users/test/proj", "--mode", "all"],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["summary"].as_str().unwrap(),
+        "continuity summary"
+    );
+    assert_eq!(
+        stdout_json["interaction_id"].as_str().unwrap(),
+        "interaction-1"
+    );
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = body["input"].as_str().unwrap();
+    assert!(
+        input.contains("hello from claude"),
+        "remember input should include claude transcript"
+    );
+    assert!(
+        input.contains("remember codex question"),
+        "remember input should include codex transcript"
+    );
+    assert!(
+        body["system_instruction"]
+            .as_str()
+            .unwrap()
+            .contains("Memory Agent")
+    );
+}
+
+#[test]
+fn remember_default_mode_uses_latest_session() {
+    let fixture = TestFixture::seeded();
+    let codex_session = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-remember-latest.jsonl");
+    write_file(
+        &codex_session,
+        r#"{"type":"session_meta","timestamp":"2025-01-06T00:00:00","payload":{"id":"sess-codex-remember-latest","cwd":"/Users/test/proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-06T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-06T00:00:01","payload":{"type":"user_message","message":"latest session question"}}
+{"type":"response_item","timestamp":"2025-01-06T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"latest session answer"}]}}"#,
+    );
+
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-latest","outputs":[{"text":"latest summary"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &["remember", "--project", "/Users/test/proj"],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = body["input"].as_str().unwrap();
+    assert!(input.contains("latest session question"));
+    assert!(
+        !input.contains("hello from claude"),
+        "default remember mode should only include the latest session"
+    );
+    assert_eq!(input.matches("=== Session:").count(), 1);
+}
+
+#[test]
+fn remember_with_source_filter_only_includes_requested_source() {
+    let fixture = TestFixture::seeded();
+    let codex_session = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-remember-source.jsonl");
+    write_file(
+        &codex_session,
+        r#"{"type":"session_meta","timestamp":"2025-01-05T00:00:00","payload":{"id":"sess-codex-remember-source","cwd":"/Users/test/proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-05T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-05T00:00:01","payload":{"type":"user_message","message":"codex-only question"}} "#,
+    );
+
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-2","outputs":[{"text":"codex-only summary"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "--source",
+            "codex",
+            "remember",
+            "--project",
+            "/Users/test/proj",
+            "--mode",
+            "all",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = body["input"].as_str().unwrap();
+    assert!(input.contains("codex-only question"));
+    assert!(
+        !input.contains("hello from claude"),
+        "claude messages should be filtered out when --source codex is used"
+    );
+}
+
+#[test]
+fn remember_follow_up_uses_previous_interaction_id() {
+    let fixture = TestFixture::seeded();
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-3","outputs":[{"text":"follow-up summary"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "remember",
+            "--continue-from",
+            "interaction-previous",
+            "--follow-up",
+            "what should I do next?",
+            "--prompt",
+            "Focus only on open items.",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    assert_eq!(
+        body["previous_interaction_id"].as_str().unwrap(),
+        "interaction-previous"
+    );
+    assert_eq!(body["input"].as_str().unwrap(), "what should I do next?");
+    let system_instruction = body["system_instruction"].as_str().unwrap();
+    assert!(system_instruction.contains("Memory Agent"));
+    assert!(system_instruction.contains("Focus only on open items."));
+}
+
+#[test]
+fn remember_output_format_md_transforms_json_response_to_markdown() {
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-md","outputs":[{"text":"Status\n- Item one"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "remember",
+            "--continue-from",
+            "interaction-previous",
+            "--follow-up",
+            "summarize it",
+            "-O",
+            "md",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = stdout_text(&output);
+    assert!(stdout.contains("# Continuity Brief"));
+    assert!(stdout.contains("Status\n- Item one"));
+    assert!(stdout.contains("Interaction ID: `interaction-md`"));
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
+        "markdown output should not be JSON"
+    );
+}
+
+#[test]
+fn remember_output_format_md_trims_summary_and_interaction_id() {
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_gemini_server(
+        r#"{"id":"  interaction-trim  ","outputs":[{"text":"  status line\nnext line  "}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "remember",
+            "--continue-from",
+            "interaction-previous",
+            "--follow-up",
+            "summarize it",
+            "--output-format",
+            "md",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+    handle.join().expect("mock server thread");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = stdout_text(&output);
+    assert!(stdout.contains("status line\nnext line"));
+    assert!(stdout.contains("Interaction ID: `interaction-trim`"));
 }
