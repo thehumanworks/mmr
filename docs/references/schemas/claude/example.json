@@ -1,0 +1,31 @@
+{
+  "messages": [
+    {
+      "session_id": "6487e8d4-4203-4382-9c28-8473bbf4d77d",
+      "source": "claude",
+      "project_name": "-Users-mish-projects-dogsittingmanchester",
+      "role": "user",
+      "content": "The file /Users/mish/projects/dogsittingmanchester/docs/exec-plans/completed/2026-03-11-drei-cloud-migration.md has been updated successfully.",
+      "model": "",
+      "timestamp": "2026-03-11T19:56:39.154Z",
+      "is_subagent": false,
+      "msg_type": "user",
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    {
+      "session_id": "6487e8d4-4203-4382-9c28-8473bbf4d77d",
+      "source": "claude",
+      "project_name": "-Users-mish-projects-dogsittingmanchester",
+      "role": "assistant",
+      "content": "Now update the project memory to reflect the correct state.",
+      "model": "claude-opus-4-6",
+      "timestamp": "2026-03-11T19:56:43.208Z",
+      "is_subagent": false,
+      "msg_type": "assistant",
+      "input_tokens": 1,
+      "output_tokens": 1
+    }
+  ],
+  "total_messages": 29467
+}
