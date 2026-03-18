@@ -2,15 +2,17 @@
 
 ## Project Structure & Module Organization
 
-`mmr` is a Rust CLI focused on local Claude/Codex history parsing.
+`mmr` is a Rust CLI focused on local Claude/Codex history parsing and continuity-brief generation.
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
-- `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/utils.rs`: session selection and transcript formatting helpers for `remember`.
+- `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, agent dispatch, and the `remember()` entry point.
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/codex.rs`: Codex thread orchestration for `remember`.
 - `adrs/`: architecture decision records.
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
@@ -56,9 +58,16 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export --project <path>` passes the project to a single `messages` call (both sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
-## Remember command and `--instructions` system prompt architecture
+## Remember command, agent selection, and `--instructions` architecture
 
-The `remember` command sends session transcripts to the Gemini Interactions API with a system prompt composed of two parts:
+The `remember` command supports two agents:
+
+- `--agent codex` (default): uses `src/agent/codex.rs` and returns a thread ID in `thread_or_interaction_id`.
+- `--agent gemini`: uses `src/agent/gemini_api.rs` and returns an interaction ID in `thread_or_interaction_id`.
+
+`--model` only applies to the Gemini path.
+
+Both agents receive a system prompt composed of two parts:
 
 1. **Base instruction** (`MEMORY_AGENT_BASE_INSTRUCTION` in `src/agent/ai.rs`): Always present. Contains only the agent's identity ("You are a Memory Agent") and the input format description. Must **never** contain output-directing language (e.g. "continuity brief", "sole purpose", output quality directives).
 
@@ -68,9 +77,12 @@ The `remember` command sends session transcripts to the Gemini Interactions API 
 
 This separation ensures `--instructions` has full control over how the agent processes transcripts and formats its response, while preserving the agent's awareness of its role and input structure.
 
-The user prompt sent to Gemini is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
+The user prompt sent to the selected agent is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
-Environment: requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`. Override the API base URL with `GEMINI_API_BASE_URL` (used by integration tests with a mock server).
+Environment:
+
+- Gemini requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
+- Override the Gemini API base URL with `GEMINI_API_BASE_URL` (used by integration tests with a mock server).
 
 ## Coding Style & Naming Conventions
 
