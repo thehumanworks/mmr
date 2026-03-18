@@ -74,6 +74,7 @@ pub struct MessageRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
 #[clap(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum Agent {
     #[clap(name = "gemini")]
     Gemini,

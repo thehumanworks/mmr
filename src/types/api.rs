@@ -64,19 +64,13 @@ pub struct ApiMessagesResponse {
 pub struct RememberResponse {
     pub agent: Agent,
     pub text: String,
-    pub thread_or_interaction_id: Option<String>,
 }
 
 impl RememberResponse {
-    pub fn new(
-        agent: Agent,
-        text: impl Into<String>,
-        thread_or_interaction_id: Option<impl Into<String>>,
-    ) -> Self {
+    pub fn new(agent: Agent, text: impl Into<String>) -> Self {
         Self {
             agent,
             text: text.into(),
-            thread_or_interaction_id: thread_or_interaction_id.map(|id| id.into()),
         }
     }
 }

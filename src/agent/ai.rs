@@ -1,5 +1,4 @@
-use anyhow::{Result, bail};
-use codex_app_server_sdk::ResumeThread;
+use anyhow::Result;
 
 use crate::agent::codex::CodexAgent;
 use crate::agent::gemini_api::Gemini;
@@ -75,33 +74,26 @@ fn build_system_instruction(instructions: Option<&str>) -> String {
     }
 }
 
-fn remember_with_gemini(
+async fn remember_with_gemini(
     service: &QueryService,
     request: RememberRequest<'_>,
 ) -> Result<RememberResponse> {
     let gemini = Gemini::new(request.model, None)?;
     let system_instruction = build_system_instruction(request.instructions);
 
-    let input = if request.continue_from.is_some() {
-        request.follow_up.unwrap_or_default().to_string()
-    } else {
-        let sessions =
-            load_session_transcripts(service, request.project, request.source, request.mode)?;
-        let formatted = format_messages_for_input(&sessions);
-        format!("Analyze the following AI coding session transcript(s).\n\n{formatted}")
-    };
+    let sessions =
+        load_session_transcripts(service, request.project, &request.selection, request.source)?;
+    let formatted = format_messages_for_input(&sessions);
+    let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
 
-    let result = gemini.generate(GeminiGenerateRequest {
-        input: vec![InteractionInput::new(InteractionInputType::Text, &input)],
-        system_instruction: Some(&system_instruction),
-        previous_interaction_id: request.continue_from,
-    })?;
+    let result = gemini
+        .generate(GeminiGenerateRequest {
+            input: vec![InteractionInput::new(InteractionInputType::Text, &input)],
+            system_instruction: Some(&system_instruction),
+        })
+        .await?;
 
-    Ok(RememberResponse::new(
-        Agent::Gemini,
-        result.text,
-        Some(result.interaction_id),
-    ))
+    Ok(RememberResponse::new(Agent::Gemini, result.text))
 }
 
 async fn remember_with_codex(
@@ -111,29 +103,21 @@ async fn remember_with_codex(
     let codex = CodexAgent::new().await;
     let system_instruction = build_system_instruction(request.instructions);
 
-    let input = if request.continue_from.is_some() {
-        request.follow_up.unwrap_or_default().to_string()
-    } else {
-        let sessions =
-            load_session_transcripts(service, request.project, request.source, request.mode)?;
-        let formatted = format_messages_for_input(&sessions);
-        format!("Analyze the following AI coding session transcript(s).\n\n{formatted}")
-    };
+    let sessions =
+        load_session_transcripts(service, request.project, &request.selection, request.source)?;
+    let formatted = format_messages_for_input(&sessions);
+    let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
 
     let result = codex
         .generate(CodexGenerateRequest {
             input: &input,
             developer_instructions: Some(&system_instruction),
-            resume_thread: request
-                .continue_from
-                .map(|id| ResumeThread::ById(id.to_string())),
         })
         .await?;
 
     Ok(RememberResponse::new(
         Agent::Codex,
         result.get_text().to_string(),
-        result.get_thread_id().map(|id| id.to_string()),
     ))
 }
 
@@ -141,12 +125,8 @@ pub async fn remember(
     service: &QueryService,
     request: RememberRequest<'_>,
 ) -> Result<RememberResponse> {
-    if request.follow_up.is_some() && request.continue_from.is_none() {
-        bail!("--follow-up requires --continue-from");
-    }
-
     match request.agent {
-        Agent::Gemini => remember_with_gemini(service, request),
+        Agent::Gemini => remember_with_gemini(service, request).await,
         Agent::Codex => remember_with_codex(service, request).await,
     }
 }

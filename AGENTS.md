@@ -12,6 +12,7 @@
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
 - `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
+- `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
 - `tests/common/mod.rs`: fixture + temp `HOME` helpers.
@@ -39,9 +40,9 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
-- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session (default mode).
-- `cargo run -- remember --project /path/to/proj --mode all` — generate a continuity brief from all sessions.
-- `cargo run -- remember --continue-from <interaction-id> --follow-up "question"` — follow-up on a previous interaction.
+- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session.
+- `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
+- `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
 - `cargo run -- remember -O md` — output as markdown instead of JSON.
 - `cargo fmt` — format Rust code.

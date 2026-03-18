@@ -1,33 +1,13 @@
 {
   "version": 1,
   "transcripts": {
-    "/Users/mish/.cursor/projects/Users-mish-projects-simplemmr/agent-transcripts/0e132de5-c45d-462f-b415-7c858acb6a09/0e132de5-c45d-462f-b415-7c858acb6a09.jsonl": {
-      "mtimeMs": 1772043546303,
-      "lastProcessedAt": "2026-02-25T20:07:26.002Z"
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/56aa2ebc-0491-4917-aba5-9309c404868d/56aa2ebc-0491-4917-aba5-9309c404868d.jsonl": {
+      "mtimeMs": 1773836623021,
+      "lastProcessedAt": "2026-03-18T12:23:43.021Z"
     },
-    "/Users/mish/.cursor/projects/Users-mish-projects-simplemmr/agent-transcripts/38aebc88-4cf7-41f4-b230-554460e37f86/38aebc88-4cf7-41f4-b230-554460e37f86.jsonl": {
-      "mtimeMs": 1772050039721,
-      "lastProcessedAt": "2026-02-25T20:07:26.002Z"
-    },
-    "/Users/mish/.cursor/projects/Users-mish-projects-simplemmr/agent-transcripts/3b2f211b-c529-41ca-9bbd-9baf8ac9e1ed/3b2f211b-c529-41ca-9bbd-9baf8ac9e1ed.jsonl": {
-      "mtimeMs": 1772030583288,
-      "lastProcessedAt": "2026-02-25T20:07:26.002Z"
-    },
-    "/Users/mish/.cursor/projects/Users-mish-projects-simplemmr/agent-transcripts/4d4cda3a-c947-41c0-9cf0-536ceb6ffb3d/4d4cda3a-c947-41c0-9cf0-536ceb6ffb3d.jsonl": {
-      "mtimeMs": 1772043361997,
-      "lastProcessedAt": "2026-02-25T20:07:26.002Z"
-    },
-    "/Users/mish/.cursor/projects/Users-mish-projects-simplemmr/agent-transcripts/4e019608-9b0e-4bf4-ac70-c79d1a1a2105/4e019608-9b0e-4bf4-ac70-c79d1a1a2105.jsonl": {
-      "mtimeMs": 1772032923448,
-      "lastProcessedAt": "2026-02-25T20:07:26.002Z"
-    },
-    "/Users/mish/.cursor/projects/Users-mish-projects-simplemmr/agent-transcripts/a0cfc110-cb60-4031-aa02-73257535f526/a0cfc110-cb60-4031-aa02-73257535f526.jsonl": {
-      "mtimeMs": 1772042508113,
-      "lastProcessedAt": "2026-02-25T20:07:26.002Z"
-    },
-    "/Users/mish/.cursor/projects/Users-mish-projects-simplemmr/agent-transcripts/f2a05e58-2e6e-4436-a295-1fce130cfb47/f2a05e58-2e6e-4436-a295-1fce130cfb47.jsonl": {
-      "mtimeMs": 1772038550602,
-      "lastProcessedAt": "2026-02-25T20:07:26.002Z"
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/fa9f6cc0-1b64-4ca5-bce2-3d752c634096/fa9f6cc0-1b64-4ca5-bce2-3d752c634096.jsonl": {
+      "mtimeMs": 1773834712794,
+      "lastProcessedAt": "2026-03-18T12:23:43.021Z"
     }
   }
 }
