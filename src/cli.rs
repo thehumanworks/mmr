@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::path::Path;
 
 use crate::agent::ai;
 use crate::messages::service::QueryService;
@@ -8,6 +9,10 @@ use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
 };
+
+const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
+const ENV_DEFAULT_REMEMBER_AGENT: &str = "MMR_DEFAULT_REMEMBER_AGENT";
+const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -20,7 +25,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub pretty: bool,
 
-    /// Filter by source: claude, codex (omit for both)
+    /// Filter by source: claude, codex (omit to use MMR_DEFAULT_SOURCE or both)
     #[arg(long, global = true, value_enum)]
     pub source: Option<SourceFilter>,
 
@@ -45,11 +50,14 @@ pub enum Commands {
         #[arg(short = 'o', long, default_value = "desc")]
         order: SortOrder,
     },
-    /// List sessions (optionally filtered by project and/or source)
+    /// List sessions (defaults to the current project when cwd auto-discovery succeeds)
     Sessions {
         /// Project name or path
         #[arg(long)]
         project: Option<String>,
+        /// Return sessions across all projects instead of the auto-discovered cwd project
+        #[arg(long)]
+        all: bool,
         /// Maximum number of sessions to return
         #[arg(long, default_value_t = 20)]
         limit: usize,
@@ -63,7 +71,7 @@ pub enum Commands {
         #[arg(short = 'o', long, default_value = "desc")]
         order: SortOrder,
     },
-    /// Get messages (optionally filtered by session, project, and/or source)
+    /// Get messages (defaults to the current project when cwd auto-discovery succeeds)
     Messages {
         /// Session ID
         #[arg(long)]
@@ -71,6 +79,9 @@ pub enum Commands {
         /// Project name or path
         #[arg(long)]
         project: Option<String>,
+        /// Return messages across all projects instead of the auto-discovered cwd project
+        #[arg(long)]
+        all: bool,
         /// Return only the latest N messages
         #[arg(long, default_value_t = 50)]
         limit: usize,
@@ -99,9 +110,9 @@ pub struct RememberArgs {
     /// Project name or path (omit to use current directory)
     #[arg(long, short = 'p', global = true)]
     project: Option<String>,
-    /// Agent to use
-    #[arg(long, value_enum, default_value = "codex", global = true)]
-    agent: Agent,
+    /// Agent to use (defaults to MMR_DEFAULT_REMEMBER_AGENT or codex)
+    #[arg(long, value_enum, global = true)]
+    agent: Option<Agent>,
     /// Override the output format and rules portion of the system instructions
     #[arg(long, global = true)]
     instructions: Option<String>,
@@ -155,6 +166,7 @@ pub enum RememberOutputFormatArg {
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
     let service = QueryService::load()?;
+    let source_filter = effective_source(cli.source);
 
     let response = match cli.command {
         Commands::Projects {
@@ -164,7 +176,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             order,
         } => serialize(
             &service.projects(
-                cli.source,
+                source_filter,
                 Some(limit),
                 offset,
                 SortOptions::new(sort_by, order),
@@ -173,14 +185,15 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         )?,
         Commands::Sessions {
             project,
+            all,
             limit,
             offset,
             sort_by,
             order,
         } => serialize(
             &service.sessions(
-                project.as_deref(),
-                cli.source,
+                effective_project_scope(project, all).as_deref(),
+                source_filter,
                 Some(limit),
                 offset,
                 SortOptions::new(sort_by, order),
@@ -190,6 +203,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Messages {
             session,
             project,
+            all,
             limit,
             offset,
             sort_by,
@@ -197,8 +211,8 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         } => serialize(
             &service.messages(
                 session.as_deref(),
-                project.as_deref(),
-                cli.source,
+                effective_project_scope(project, all).as_deref(),
+                source_filter,
                 Some(limit),
                 offset,
                 SortOptions::new(sort_by, order),
@@ -209,13 +223,13 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
             if let Some(proj) = project {
                 let response =
-                    service.messages(None, Some(proj.as_str()), cli.source, None, 0, sort);
+                    service.messages(None, Some(proj.as_str()), source_filter, None, 0, sort);
                 serialize(&response, cli.pretty)?
             } else {
                 let (codex_path, claude_name) =
                     resolve_project_from_cwd().context("could not get current directory")?;
                 let mut messages: Vec<ApiMessage> = Vec::new();
-                if cli.source.is_none() || cli.source == Some(SourceFilter::Codex) {
+                if source_filter.is_none() || source_filter == Some(SourceFilter::Codex) {
                     let codex = service.messages(
                         None,
                         Some(&codex_path),
@@ -226,7 +240,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     );
                     messages.extend(codex.messages);
                 }
-                if cli.source.is_none() || cli.source == Some(SourceFilter::Claude) {
+                if source_filter.is_none() || source_filter == Some(SourceFilter::Claude) {
                     let claude = service.messages(
                         None,
                         Some(&claude_name),
@@ -260,10 +274,10 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             let response = ai::remember(
                 &service,
                 RememberRequest {
-                    agent: remember.agent,
+                    agent: effective_remember_agent(remember.agent),
                     project: project.as_str(),
                     selection,
-                    source: cli.source,
+                    source: source_filter,
                     instructions: remember.instructions.as_deref(),
                     model: remember.model.as_deref(),
                 },
@@ -276,14 +290,102 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     Ok(response)
 }
 
+fn effective_source(cli_source: Option<SourceFilter>) -> Option<SourceFilter> {
+    cli_source.or_else(default_source_from_env)
+}
+
+fn default_source_from_env() -> Option<SourceFilter> {
+    std::env::var(ENV_DEFAULT_SOURCE)
+        .ok()
+        .and_then(|value| parse_source_filter_env(&value))
+}
+
+fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => None,
+        "claude" => Some(SourceFilter::Claude),
+        "codex" => Some(SourceFilter::Codex),
+        _ => None,
+    }
+}
+
+fn effective_remember_agent(cli_agent: Option<Agent>) -> Agent {
+    cli_agent
+        .or_else(default_remember_agent_from_env)
+        .unwrap_or(Agent::Codex)
+}
+
+fn default_remember_agent_from_env() -> Option<Agent> {
+    std::env::var(ENV_DEFAULT_REMEMBER_AGENT)
+        .ok()
+        .and_then(|value| parse_agent_env(&value))
+}
+
+fn parse_agent_env(value: &str) -> Option<Agent> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => None,
+        "codex" => Some(Agent::Codex),
+        "gemini" => Some(Agent::Gemini),
+        _ => None,
+    }
+}
+
+fn effective_project_scope(explicit_project: Option<String>, all: bool) -> Option<String> {
+    select_project_scope(
+        explicit_project,
+        all,
+        auto_discover_project_enabled(),
+        auto_discovered_project_scope(),
+    )
+}
+
+fn select_project_scope(
+    explicit_project: Option<String>,
+    all: bool,
+    auto_discover_enabled: bool,
+    discovered_project: Option<String>,
+) -> Option<String> {
+    explicit_project.or({
+        if all || !auto_discover_enabled {
+            None
+        } else {
+            discovered_project
+        }
+    })
+}
+
+fn auto_discovered_project_scope() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    discovered_project_scope_from_dir(&cwd)
+}
+
+fn discovered_project_scope_from_dir(path: &Path) -> Option<String> {
+    resolve_project_from_dir(path)
+        .ok()
+        .map(|(codex_path, _)| codex_path)
+}
+
+fn auto_discover_project_enabled() -> bool {
+    match std::env::var(ENV_AUTO_DISCOVER_PROJECT) {
+        Ok(value) => match value.trim() {
+            "0" => false,
+            "" | "1" => true,
+            _ => true,
+        },
+        Err(_) => true,
+    }
+}
+
 /// Resolve current working directory to (codex_project_path, claude_project_name).
 /// Codex uses the canonical path as-is; Claude uses path with '/' replaced by '-'
 /// (e.g. /Users/mish/proj -> -Users-mish-proj).
 fn resolve_project_from_cwd() -> Result<(String, String)> {
-    let path = std::env::current_dir()
-        .context("current_dir")?
-        .canonicalize()
-        .context("canonicalize")?;
+    let path = std::env::current_dir().context("current_dir")?;
+    resolve_project_from_dir(&path)
+}
+
+fn resolve_project_from_dir(path: &Path) -> Result<(String, String)> {
+    let path = path.canonicalize().context("canonicalize")?;
     let codex_path = path.to_string_lossy().into_owned();
     let claude_name = if codex_path == "/" {
         "-".to_string()
@@ -346,8 +448,8 @@ mod tests {
             panic!("expected remember command");
         };
         assert_eq!(remember.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(remember.agent, Agent::Gemini);
-        assert_eq!(remember.output_format, RememberOutputFormatArg::Json);
+        assert_eq!(remember.agent, Some(Agent::Gemini));
+        assert_eq!(remember.output_format, RememberOutputFormatArg::Md);
         assert!(matches!(
             remember.selection,
             Some(RememberSelectorCommand::All)
@@ -374,12 +476,85 @@ mod tests {
             panic!("expected remember command");
         };
         assert_eq!(remember.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(remember.agent, Agent::Gemini);
+        assert_eq!(remember.agent, Some(Agent::Gemini));
         assert_eq!(remember.output_format, RememberOutputFormatArg::Md);
         assert!(matches!(
             remember.selection,
             Some(RememberSelectorCommand::Session { session_id }) if session_id == "sess-123"
         ));
+    }
+
+    #[test]
+    fn remember_without_agent_flag_leaves_agent_unset_for_runtime_defaulting() {
+        let parsed =
+            Cli::try_parse_from(["mmr", "remember", "--project", "/Users/test/proj", "all"]);
+
+        let parsed = parsed.expect("remember without --agent should parse successfully");
+        let Commands::Remember(remember) = parsed.command else {
+            panic!("expected remember command");
+        };
+        assert_eq!(remember.agent, None);
+    }
+
+    #[test]
+    fn parse_source_filter_env_accepts_supported_values() {
+        assert_eq!(parse_source_filter_env("codex"), Some(SourceFilter::Codex));
+        assert_eq!(
+            parse_source_filter_env("CLAUDE"),
+            Some(SourceFilter::Claude)
+        );
+        assert_eq!(parse_source_filter_env(""), None);
+        assert_eq!(parse_source_filter_env("invalid"), None);
+    }
+
+    #[test]
+    fn parse_agent_env_accepts_supported_values() {
+        assert_eq!(parse_agent_env("codex"), Some(Agent::Codex));
+        assert_eq!(parse_agent_env("GEMINI"), Some(Agent::Gemini));
+        assert_eq!(parse_agent_env(""), None);
+        assert_eq!(parse_agent_env("invalid"), None);
+    }
+
+    #[test]
+    fn select_project_scope_handles_explicit_all_and_failed_discovery_cases() {
+        assert_eq!(
+            select_project_scope(
+                Some("/Users/test/explicit".to_string()),
+                false,
+                true,
+                Some("/Users/test/discovered".to_string()),
+            ),
+            Some("/Users/test/explicit".to_string())
+        );
+        assert_eq!(
+            select_project_scope(
+                None,
+                false,
+                true,
+                Some("/Users/test/discovered".to_string()),
+            ),
+            Some("/Users/test/discovered".to_string())
+        );
+        assert_eq!(select_project_scope(None, false, true, None), None);
+        assert_eq!(
+            select_project_scope(None, true, true, Some("/Users/test/discovered".to_string()),),
+            None
+        );
+        assert_eq!(
+            select_project_scope(
+                None,
+                false,
+                false,
+                Some("/Users/test/discovered".to_string()),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn discovered_project_scope_from_dir_returns_none_for_missing_path() {
+        let missing = std::env::temp_dir().join(format!("mmr-missing-{}", std::process::id()));
+        assert_eq!(discovered_project_scope_from_dir(&missing), None);
     }
 
     #[test]

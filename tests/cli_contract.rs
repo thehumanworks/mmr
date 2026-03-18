@@ -3,7 +3,7 @@ mod common;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -27,6 +27,14 @@ fn first_input_text(body: &serde_json::Value) -> &str {
         .and_then(|items| items.first())
         .and_then(|item| item["text"].as_str())
         .expect("first input text")
+}
+
+fn encode_claude_project_name(cwd: &str) -> String {
+    if cwd == "/" {
+        "-".to_string()
+    } else {
+        format!("-{}", cwd.trim_start_matches('/').replace('/', "-"))
+    }
 }
 
 fn run_cli_with_home(home: &Path, args: &[&str]) -> Output {
@@ -163,6 +171,72 @@ fn seed_message_count_sort_fixture(home: &Path) {
     );
 }
 
+fn seed_cwd_project_with_history(fixture: &TestFixture) -> PathBuf {
+    let cwd = fixture.home.join("cwd-project");
+    fs::create_dir_all(&cwd).expect("create cwd project dir");
+    let cwd_str = fs::canonicalize(&cwd)
+        .expect("canonicalize cwd project")
+        .to_string_lossy()
+        .into_owned();
+
+    let codex_session = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-cwd-codex.jsonl");
+    write_file(
+        &codex_session,
+        &format!(
+            r#"{{"type":"session_meta","timestamp":"2025-01-07T00:00:00","payload":{{"id":"sess-cwd-codex","cwd":"{}","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-07T00:00:00","git":{{"branch":"main"}}}}}}
+{{"type":"event_msg","timestamp":"2025-01-07T00:00:01","payload":{{"type":"user_message","message":"cwd codex question"}}}}
+{{"type":"response_item","timestamp":"2025-01-07T00:00:02","payload":{{"role":"assistant","content":[{{"type":"output_text","text":"cwd codex answer"}}]}}}}"#,
+            cwd_str
+        ),
+    );
+
+    let claude_project = encode_claude_project_name(&cwd_str);
+    let claude_session = fixture
+        .home
+        .join(".claude")
+        .join("projects")
+        .join(claude_project)
+        .join("sess-cwd-claude.jsonl");
+    write_file(
+        &claude_session,
+        &format!(
+            r#"{{"type":"user","sessionId":"sess-cwd-claude","message":{{"role":"user","content":"cwd claude question"}},"timestamp":"2025-01-07T00:01:00","uuid":"u-cwd-1","cwd":"{}"}}
+{{"type":"assistant","sessionId":"sess-cwd-claude","message":{{"role":"assistant","content":"cwd claude answer","model":"claude-3-opus","usage":{{"input_tokens":120,"output_tokens":60}}}},"timestamp":"2025-01-07T00:02:00","uuid":"a-cwd-1","parentUuid":"u-cwd-1","cwd":"{}"}}"#,
+            cwd_str, cwd_str
+        ),
+    );
+
+    cwd
+}
+
+fn seed_empty_discovered_project(fixture: &TestFixture) -> PathBuf {
+    let cwd = fixture.home.join("empty-project");
+    fs::create_dir_all(&cwd).expect("create empty project dir");
+    let cwd_str = fs::canonicalize(&cwd)
+        .expect("canonicalize empty project")
+        .to_string_lossy()
+        .into_owned();
+
+    let codex_session = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-empty-project.jsonl");
+    write_file(
+        &codex_session,
+        &format!(
+            r#"{{"type":"session_meta","timestamp":"2025-01-08T00:00:00","payload":{{"id":"sess-empty-project","cwd":"{}","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-08T00:00:00","git":{{"branch":"main"}}}}}}"#,
+            cwd_str
+        ),
+    );
+
+    cwd
+}
+
 // --- projects ---
 
 #[test]
@@ -285,9 +359,11 @@ fn source_all_is_rejected() {
 // --- sessions ---
 
 #[test]
-fn sessions_without_any_filters_returns_all() {
+fn sessions_defaults_to_cwd_project_when_discovery_succeeds() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["sessions"]);
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let output =
+        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
 
     assert!(
         output.status.success(),
@@ -296,26 +372,125 @@ fn sessions_without_any_filters_returns_all() {
     );
 
     let json = parse_stdout_json(&output);
-    assert_eq!(json["total_sessions"].as_i64().unwrap(), 4);
     let sessions = json["sessions"].as_array().unwrap();
-    assert_eq!(sessions.len(), 4);
-    // Sessions should have per-item source and project metadata
-    for session in sessions {
-        assert!(
-            !session["source"].as_str().unwrap().is_empty(),
-            "each session must have a source"
-        );
-        assert!(
-            !session["project_name"].as_str().unwrap().is_empty(),
-            "each session must have a project_name"
-        );
-    }
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 2);
+    assert_eq!(sessions.len(), 2);
+
+    let session_ids = sessions
+        .iter()
+        .map(|session| session["session_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(session_ids.contains(&"sess-cwd-codex"));
+    assert!(session_ids.contains(&"sess-cwd-claude"));
+}
+
+#[test]
+fn sessions_all_bypasses_cwd_discovery() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["sessions", "--all"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let sessions = json["sessions"].as_array().unwrap();
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 6);
+    assert_eq!(sessions.len(), 6);
+
+    let session_ids = sessions
+        .iter()
+        .map(|session| session["session_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(session_ids.contains(&"sess-claude-1"));
+    assert!(session_ids.contains(&"sess-codex-1"));
+    assert!(session_ids.contains(&"sess-cwd-codex"));
+    assert!(session_ids.contains(&"sess-cwd-claude"));
+}
+
+#[test]
+fn sessions_returns_empty_for_discovered_but_empty_project() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_empty_discovered_project(&fixture);
+
+    let output =
+        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let sessions = json["sessions"].as_array().unwrap();
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 0);
+    assert!(sessions.is_empty());
+}
+
+#[test]
+fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+
+    let disabled_sessions =
+        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "0")]);
+    assert!(
+        disabled_sessions.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&disabled_sessions.stderr)
+    );
+    let disabled_sessions_json = parse_stdout_json(&disabled_sessions);
+    assert_eq!(
+        disabled_sessions_json["total_sessions"].as_i64().unwrap(),
+        6
+    );
+
+    let enabled_sessions =
+        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    assert!(
+        enabled_sessions.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&enabled_sessions.stderr)
+    );
+    let enabled_sessions_json = parse_stdout_json(&enabled_sessions);
+    assert_eq!(enabled_sessions_json["total_sessions"].as_i64().unwrap(), 2);
+
+    let disabled_messages =
+        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "0")]);
+    assert!(
+        disabled_messages.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&disabled_messages.stderr)
+    );
+    let disabled_messages_json = parse_stdout_json(&disabled_messages);
+    assert_eq!(
+        disabled_messages_json["total_messages"].as_i64().unwrap(),
+        14
+    );
+
+    let enabled_messages =
+        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    assert!(
+        enabled_messages.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&enabled_messages.stderr)
+    );
+    let enabled_messages_json = parse_stdout_json(&enabled_messages);
+    assert_eq!(enabled_messages_json["total_messages"].as_i64().unwrap(), 4);
 }
 
 #[test]
 fn sessions_with_source_only() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "sessions"]);
+    let output = fixture.run_cli_with_env(&["--source", "codex", "sessions", "--all"], &[]);
 
     assert!(
         output.status.success(),
@@ -500,10 +675,87 @@ fn sessions_sort_by_message_count_asc_long_flag_matches_expected_order() {
 // --- messages ---
 
 #[test]
+fn messages_defaults_to_cwd_project_when_discovery_succeeds() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let output =
+        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 4);
+    assert_eq!(messages.len(), 4);
+    assert!(messages.iter().all(|message| {
+        message["session_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("sess-cwd-")
+    }));
+}
+
+#[test]
+fn messages_all_bypasses_cwd_discovery() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["messages", "--all"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 14);
+    assert_eq!(messages.len(), 14);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["session_id"].as_str().unwrap() == "sess-claude-1")
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["session_id"].as_str().unwrap() == "sess-cwd-codex")
+    );
+}
+
+#[test]
+fn messages_returns_empty_for_discovered_but_empty_project() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_empty_discovered_project(&fixture);
+
+    let output =
+        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 0);
+    assert!(messages.is_empty());
+}
+
+#[test]
 fn messages_with_session_are_chronological_and_paginated() {
     let fixture = TestFixture::seeded();
 
-    let all_output = fixture.run_cli(&["messages", "--session", "sess-claude-1"]);
+    let all_output = fixture.run_cli(&["messages", "--session", "sess-claude-1", "--all"]);
     assert!(
         all_output.status.success(),
         "stderr={}",
@@ -526,6 +778,7 @@ fn messages_with_session_are_chronological_and_paginated() {
         "messages",
         "--session",
         "sess-claude-1",
+        "--all",
         "--limit",
         "1",
         "--offset",
@@ -545,7 +798,14 @@ fn messages_with_session_are_chronological_and_paginated() {
 #[test]
 fn messages_order_desc_returns_newest_first() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["messages", "--session", "sess-claude-1", "-o", "desc"]);
+    let output = fixture.run_cli(&[
+        "messages",
+        "--session",
+        "sess-claude-1",
+        "--all",
+        "-o",
+        "desc",
+    ]);
 
     assert!(
         output.status.success(),
@@ -567,6 +827,7 @@ fn messages_sort_by_message_count_is_supported() {
         "--source",
         "codex",
         "messages",
+        "--all",
         "-s",
         "message-count",
         "-o",
@@ -588,26 +849,9 @@ fn messages_sort_by_message_count_is_supported() {
 }
 
 #[test]
-fn messages_without_session_returns_all() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["messages"]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 10);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 10);
-}
-
-#[test]
 fn messages_filtered_by_source() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "claude", "messages"]);
+    let output = fixture.run_cli_with_env(&["--source", "claude", "messages", "--all"], &[]);
 
     assert!(
         output.status.success(),
@@ -650,6 +894,92 @@ fn messages_filtered_by_project() {
             "/Users/test/codex-proj"
         );
     }
+}
+
+#[test]
+fn default_source_empty_string_keeps_both_sources() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+
+    let output = fixture.run_cli_in_dir_with_env(
+        &["sessions", "--all"],
+        &cwd,
+        &[
+            ("MMR_AUTO_DISCOVER_PROJECT", "1"),
+            ("MMR_DEFAULT_SOURCE", ""),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let sessions = json["sessions"].as_array().unwrap();
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 6);
+    assert_eq!(sessions.len(), 6);
+    let sources = sessions
+        .iter()
+        .map(|session| session["source"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(sources.contains(&"claude"));
+    assert!(sources.contains(&"codex"));
+}
+
+#[test]
+fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+
+    let codex_output = fixture.run_cli_in_dir_with_env(
+        &["sessions", "--all"],
+        &cwd,
+        &[
+            ("MMR_AUTO_DISCOVER_PROJECT", "1"),
+            ("MMR_DEFAULT_SOURCE", "codex"),
+        ],
+    );
+
+    assert!(
+        codex_output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&codex_output.stderr)
+    );
+
+    let codex_json = parse_stdout_json(&codex_output);
+    let codex_sessions = codex_json["sessions"].as_array().unwrap();
+    assert_eq!(codex_json["total_sessions"].as_i64().unwrap(), 4);
+    assert!(
+        codex_sessions
+            .iter()
+            .all(|session| session["source"].as_str().unwrap() == "codex")
+    );
+
+    let override_output = fixture.run_cli_in_dir_with_env(
+        &["--source", "claude", "messages", "--all"],
+        &cwd,
+        &[
+            ("MMR_AUTO_DISCOVER_PROJECT", "1"),
+            ("MMR_DEFAULT_SOURCE", "codex"),
+        ],
+    );
+
+    assert!(
+        override_output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&override_output.stderr)
+    );
+
+    let override_json = parse_stdout_json(&override_output);
+    let override_messages = override_json["messages"].as_array().unwrap();
+    assert_eq!(override_json["total_messages"].as_i64().unwrap(), 4);
+    assert!(
+        override_messages
+            .iter()
+            .all(|message| message["source"].as_str().unwrap() == "claude")
+    );
 }
 
 // --- export ---
@@ -790,6 +1120,8 @@ fn remember_all_includes_claude_and_codex_messages() {
             "/Users/test/proj",
             "--agent",
             "gemini",
+            "-O",
+            "json",
         ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
@@ -878,6 +1210,70 @@ fn remember_without_selector_uses_latest_session() {
         "default remember selection should only include the latest session"
     );
     assert_eq!(input.matches("=== Session:").count(), 1);
+}
+
+#[test]
+fn remember_defaults_to_gemini_when_env_sets_it() {
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-env-default","outputs":[{"text":"gemini env default"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &["remember", "--project", "/Users/test/proj", "-O", "json"],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("MMR_DEFAULT_REMEMBER_AGENT", "gemini"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(stdout_json["agent"].as_str().unwrap(), "gemini");
+    assert_eq!(stdout_json["text"].as_str().unwrap(), "gemini env default");
+}
+
+#[test]
+fn remember_explicit_agent_overrides_default_env() {
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-env-override","outputs":[{"text":"explicit override"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "remember",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
+            "-O",
+            "json",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("MMR_DEFAULT_REMEMBER_AGENT", "codex"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(stdout_json["agent"].as_str().unwrap(), "gemini");
+    assert_eq!(stdout_json["text"].as_str().unwrap(), "explicit override");
 }
 
 #[test]

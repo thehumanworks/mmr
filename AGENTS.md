@@ -32,10 +32,12 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 - `cargo run -- projects` — list all projects across both sources.
 - `cargo run -- --source codex projects` — list projects from codex only.
-- `cargo run -- sessions` — list all sessions across all projects and sources.
+- `cargo run -- sessions` — list sessions for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
+- `cargo run -- sessions --all` — list sessions across all projects and sources.
 - `cargo run -- sessions --project /Users/test/codex-proj` — sessions for a project (searches both sources).
 - `cargo run -- --source codex sessions --project /Users/test/codex-proj` — sessions for a specific source and project.
-- `cargo run -- messages` — list all messages across everything.
+- `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
+- `cargo run -- messages --all` — list messages across all projects and sessions.
 - `cargo run -- messages --session sess-123` — messages for a specific session.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
@@ -55,7 +57,14 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude matches on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (both sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
+- `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
+
+## CLI default env vars
+
+- `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
+- `MMR_DEFAULT_SOURCE=codex|claude` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of both sources.
+- `MMR_DEFAULT_REMEMBER_AGENT=codex|gemini` sets the default `remember --agent` value when `--agent` is omitted.
 
 ## Remember command and `--instructions` system prompt architecture
 
