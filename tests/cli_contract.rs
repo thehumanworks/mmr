@@ -764,7 +764,7 @@ fn export_without_project_uses_cwd() {
 // --- remember ---
 
 #[test]
-fn remember_default_source_includes_claude_and_codex_messages() {
+fn remember_all_includes_claude_and_codex_messages() {
     let fixture = TestFixture::seeded();
     let codex_session = fixture
         .home
@@ -783,28 +783,33 @@ fn remember_default_source_includes_claude_and_codex_messages() {
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
-        &["remember", "--project", "/Users/test/proj", "--mode", "all"],
+        &[
+            "remember",
+            "all",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
+        ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let stdout_json = parse_stdout_json(&output);
-    assert_eq!(
-        stdout_json["summary"].as_str().unwrap(),
-        "continuity summary"
-    );
-    assert_eq!(
-        stdout_json["interaction_id"].as_str().unwrap(),
-        "interaction-1"
+    assert_eq!(stdout_json["agent"].as_str().unwrap(), "gemini");
+    assert_eq!(stdout_json["text"].as_str().unwrap(), "continuity summary");
+    assert!(
+        stdout_json.get("thread_or_interaction_id").is_none(),
+        "remember JSON output should not expose resumability IDs"
     );
 
     let body = captured.lock().expect("captured body").clone().unwrap();
@@ -826,7 +831,7 @@ fn remember_default_source_includes_claude_and_codex_messages() {
 }
 
 #[test]
-fn remember_default_mode_uses_latest_session() {
+fn remember_without_selector_uses_latest_session() {
     let fixture = TestFixture::seeded();
     let codex_session = fixture
         .home
@@ -845,26 +850,32 @@ fn remember_default_mode_uses_latest_session() {
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
-        &["remember", "--project", "/Users/test/proj"],
+        &[
+            "remember",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
+        ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let body = captured.lock().expect("captured body").clone().unwrap();
     let input = first_input_text(&body);
     assert!(input.contains("latest session question"));
     assert!(
         !input.contains("hello from claude"),
-        "default remember mode should only include the latest session"
+        "default remember selection should only include the latest session"
     );
     assert_eq!(input.matches("=== Session:").count(), 1);
 }
@@ -892,23 +903,24 @@ fn remember_with_source_filter_only_includes_requested_source() {
             "--source",
             "codex",
             "remember",
+            "all",
             "--project",
             "/Users/test/proj",
-            "--mode",
-            "all",
+            "--agent",
+            "gemini",
         ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let body = captured.lock().expect("captured body").clone().unwrap();
     let input = first_input_text(&body);
@@ -920,42 +932,45 @@ fn remember_with_source_filter_only_includes_requested_source() {
 }
 
 #[test]
-fn remember_prompt_uses_previous_interaction_id_for_continuations() {
+fn remember_session_selector_uses_requested_session() {
     let fixture = TestFixture::seeded();
     let (base_url, captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-3","outputs":[{"text":"follow-up summary"}]}"#,
+        r#"{"id":"interaction-3","outputs":[{"text":"session summary"}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
             "remember",
-            "--continue-from",
-            "interaction-previous",
-            "--follow-up",
-            "what should I do next?",
+            "session",
+            "sess-claude-1",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
         ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let body = captured.lock().expect("captured body").clone().unwrap();
-    assert_eq!(
-        body["previous_interaction_id"].as_str().unwrap(),
-        "interaction-previous"
+    let input = first_input_text(&body);
+    assert!(input.contains("hello from claude"));
+    assert!(!input.contains("remember codex question"));
+    assert!(
+        body["previous_interaction_id"].is_null(),
+        "one-shot remember requests should not resume previous interactions"
     );
-    assert_eq!(first_input_text(&body), "what should I do next?");
     let system_instruction = body["system_instruction"].as_str().unwrap();
     assert!(system_instruction.contains("Memory Agent"));
-    assert!(!system_instruction.contains("what should I do next?"));
 }
 
 #[test]
@@ -968,10 +983,10 @@ fn remember_output_format_md_transforms_json_response_to_markdown() {
         &fixture.home,
         &[
             "remember",
-            "--continue-from",
-            "interaction-previous",
-            "--follow-up",
-            "summarize it",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
             "-O",
             "md",
         ],
@@ -980,18 +995,18 @@ fn remember_output_format_md_transforms_json_response_to_markdown() {
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let stdout = stdout_text(&output);
-    assert!(stdout.contains("# Continuity Brief"));
     assert!(stdout.contains("Status\n- Item one"));
-    assert!(stdout.contains("Interaction ID: `interaction-md`"));
+    assert!(!stdout.contains("Interaction ID:"));
+    assert!(!stdout.contains("Thread ID:"));
     assert!(
         serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
         "markdown output should not be JSON"
@@ -1008,10 +1023,10 @@ fn remember_output_format_md_trims_summary_and_interaction_id() {
         &fixture.home,
         &[
             "remember",
-            "--continue-from",
-            "interaction-previous",
-            "--follow-up",
-            "summarize it",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
             "--output-format",
             "md",
         ],
@@ -1020,17 +1035,17 @@ fn remember_output_format_md_trims_summary_and_interaction_id() {
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let stdout = stdout_text(&output);
     assert!(stdout.contains("status line\nnext line"));
-    assert!(stdout.contains("Interaction ID: `interaction-trim`"));
+    assert!(!stdout.contains("interaction-trim"));
 }
 
 #[test]
@@ -1043,10 +1058,10 @@ fn remember_custom_instructions_replace_default_output_section_in_system_prompt(
         &fixture.home,
         &[
             "remember",
-            "--continue-from",
-            "interaction-previous",
-            "--follow-up",
-            "test",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
             "--instructions",
             "Return only a single keyword.",
         ],
@@ -1055,13 +1070,13 @@ fn remember_custom_instructions_replace_default_output_section_in_system_prompt(
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let body = captured.lock().expect("captured body").clone().unwrap();
     let system = body["system_instruction"].as_str().unwrap();
@@ -1101,23 +1116,23 @@ fn remember_without_instructions_includes_default_purpose_and_output_sections() 
         &fixture.home,
         &[
             "remember",
-            "--continue-from",
-            "interaction-previous",
-            "--follow-up",
-            "test",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
         ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
             ("GEMINI_API_BASE_URL", base_url.as_str()),
         ],
     );
-    handle.join().expect("mock server thread");
 
     assert!(
         output.status.success(),
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    handle.join().expect("mock server thread");
 
     let body = captured.lock().expect("captured body").clone().unwrap();
     let system = body["system_instruction"].as_str().unwrap();
@@ -1144,5 +1159,47 @@ fn remember_without_instructions_includes_default_purpose_and_output_sections() 
     assert!(
         system.contains("Resume Instructions"),
         "default output sections must be present"
+    );
+}
+
+#[test]
+fn remember_rejects_legacy_flags() {
+    let fixture = TestFixture::seeded();
+    let legacy_invocations = [
+        vec!["remember", "--mode", "all"],
+        vec!["remember", "--session-id", "sess-claude-1"],
+        vec!["remember", "--continue-from", "interaction-previous"],
+        vec!["remember", "--follow-up", "what next?"],
+    ];
+
+    for args in legacy_invocations {
+        let output = fixture.run_cli(&args);
+        assert!(
+            !output.status.success(),
+            "legacy remember flags should be rejected: {args:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument"),
+            "stderr should report an unexpected argument for {args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn remember_rejects_session_selector_without_id() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["remember", "session"]);
+
+    assert!(
+        !output.status.success(),
+        "session selector without an ID should be rejected"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("required arguments were not provided")
+            || stderr.contains("a value is required"),
+        "stderr should explain that the session selector requires an ID: {stderr}"
     );
 }

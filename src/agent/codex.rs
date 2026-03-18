@@ -1,6 +1,4 @@
-use codex_app_server_sdk::{
-    CodexClient, ResumeThread, Thread, ThreadOptions, TurnOptions, WsConfig,
-};
+use codex_app_server_sdk::{CodexClient, ThreadOptions, TurnOptions, WsConfig};
 
 use crate::types::agent::{CodexGenerateRequest, CodexGenerateResponse};
 
@@ -25,32 +23,20 @@ impl CodexAgent {
             .build()
     }
 
-    async fn start_or_resume_thread(
+    async fn start_thread(
         &self,
-        resume_thread: Option<ResumeThread>,
         developer_instructions: Option<&str>,
-    ) -> Thread {
+    ) -> codex_app_server_sdk::Thread {
         let thread_options = self.build_thread_options(developer_instructions);
-        if let Some(kind) = resume_thread {
-            match kind {
-                ResumeThread::Latest => self.codex.resume_latest_thread(thread_options),
-                ResumeThread::ById(thread_id) => {
-                    self.codex.resume_thread(thread_id, thread_options)
-                }
-            }
-        } else {
-            self.codex.start_thread(thread_options)
-        }
+        self.codex.start_thread(thread_options)
     }
 
     pub async fn generate<'a>(
         &'a self,
         request: CodexGenerateRequest<'a>,
     ) -> anyhow::Result<CodexGenerateResponse> {
-        let mut thread = self
-            .start_or_resume_thread(request.resume_thread, request.developer_instructions)
-            .await;
+        let mut thread = self.start_thread(request.developer_instructions).await;
         let turn = thread.run(request.input, TurnOptions::default()).await?;
-        Ok(CodexGenerateResponse::new(turn.final_response, thread.id()))
+        Ok(CodexGenerateResponse::new(turn.final_response))
     }
 }

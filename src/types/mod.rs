@@ -6,7 +6,7 @@ pub mod source;
 
 pub use agent::{
     CodexGenerateRequest, CodexGenerateResponse, GeminiGenerateRequest, GeminiGenerateResponse,
-    InteractionInput, InteractionInputType, RememberMode, RememberRequest,
+    InteractionInput, InteractionInputType, RememberRequest, RememberSelection,
 };
 pub use api::{
     ApiMessage, ApiMessagesResponse, ApiProject, ApiProjectsResponse, ApiSession,

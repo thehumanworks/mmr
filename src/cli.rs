@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 use crate::agent::ai;
 use crate::messages::service::QueryService;
 use crate::types::{
-    Agent, ApiMessage, ApiMessagesResponse, RememberMode, RememberRequest, RememberResponse,
+    Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
 };
 
@@ -90,45 +90,59 @@ pub enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
-    /// Generate a continuity brief from prior sessions and continue follow-ups
-    Remember {
-        /// Project name or path (omit to use current directory)
-        #[arg(long)]
-        project: Option<String>,
-        /// Agent to use
-        #[arg(long, value_enum, default_value = "codex")]
-        agent: Agent,
-        /// Session selection mode
-        #[arg(long, value_enum, default_value = "latest")]
-        mode: RememberModeArg,
-        /// Continue from a previous Gemini interaction ID
-        #[arg(long = "continue-from")]
-        continue_from: Option<String>,
-        /// Follow-up user message for a continuation (requires --continue-from)
-        #[arg(long = "follow-up")]
-        follow_up: Option<String>,
-        /// Override the output format and rules portion of the system instructions (applies to first message and continuations)
-        #[arg(long)]
-        instructions: Option<String>,
-        /// Output format for remember results
-        #[arg(
-            short = 'O',
-            long = "output-format",
-            value_enum,
-            default_value = "json"
-        )]
-        output_format: RememberOutputFormatArg,
-        /// Gemini model to use
-        #[arg(long)]
-        model: Option<String>,
-    },
+    /// Generate a stateless continuity brief from prior sessions
+    Remember(RememberArgs),
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-#[clap(rename_all = "kebab-case")]
-pub enum RememberModeArg {
-    Latest,
+#[derive(Args, Debug)]
+pub struct RememberArgs {
+    /// Project name or path (omit to use current directory)
+    #[arg(long, short = 'p', global = true)]
+    project: Option<String>,
+    /// Agent to use
+    #[arg(long, value_enum, default_value = "codex", global = true)]
+    agent: Agent,
+    /// Override the output format and rules portion of the system instructions
+    #[arg(long, global = true)]
+    instructions: Option<String>,
+    /// Output format for remember results
+    #[arg(
+        short = 'O',
+        long = "output-format",
+        value_enum,
+        default_value = "json",
+        global = true
+    )]
+    output_format: RememberOutputFormatArg,
+    /// Gemini model to use
+    #[arg(long, global = true)]
+    model: Option<String>,
+    /// Session selector (omit for latest)
+    #[command(subcommand)]
+    selection: Option<RememberSelectorCommand>,
+}
+
+impl RememberArgs {
+    fn selection(&self) -> RememberSelection {
+        match &self.selection {
+            None => RememberSelection::Latest,
+            Some(RememberSelectorCommand::All) => RememberSelection::All,
+            Some(RememberSelectorCommand::Session { session_id }) => RememberSelection::Session {
+                session_id: session_id.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum RememberSelectorCommand {
+    /// Use all matching sessions
     All,
+    /// Use one specific session
+    Session {
+        /// Session ID to use for the remember operation
+        session_id: String,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,15 +150,6 @@ pub enum RememberModeArg {
 pub enum RememberOutputFormatArg {
     Json,
     Md,
-}
-
-impl From<RememberModeArg> for RememberMode {
-    fn from(value: RememberModeArg) -> Self {
-        match value {
-            RememberModeArg::Latest => RememberMode::Latest,
-            RememberModeArg::All => RememberMode::All,
-        }
-    }
 }
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
@@ -244,35 +249,26 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                 serialize(&response, cli.pretty)?
             }
         }
-        Commands::Remember {
-            project,
-            agent,
-            mode,
-            continue_from,
-            follow_up,
-            instructions,
-            output_format,
-            model,
-        } => {
-            let project = match project {
+        Commands::Remember(remember) => {
+            let selection = remember.selection();
+            let project = match remember.project {
                 Some(project) => project,
                 None => current_dir_project().context("could not resolve current directory")?,
             };
+
             let response = ai::remember(
                 &service,
                 RememberRequest {
-                    agent,
+                    agent: remember.agent,
                     project: project.as_str(),
+                    selection,
                     source: cli.source,
-                    mode: mode.into(),
-                    continue_from: continue_from.as_deref(),
-                    follow_up: follow_up.as_deref(),
-                    instructions: instructions.as_deref(),
-                    model: model.as_deref(),
+                    instructions: remember.instructions.as_deref(),
+                    model: remember.model.as_deref(),
                 },
             )
             .await?;
-            format_remember_response(&response, output_format, cli.pretty)?
+            format_remember_response(&response, remember.output_format, cli.pretty)?
         }
     };
 
@@ -320,27 +316,12 @@ fn format_remember_response(
 }
 
 fn remember_response_to_markdown(response: &RememberResponse) -> String {
-    let brief = if response.text.trim().is_empty() {
+    if response.text.trim().is_empty() {
         "(No continuity brief returned.)"
     } else {
         response.text.trim()
-    };
-    let thread_or_interaction_id = if response.thread_or_interaction_id.is_none() {
-        "(none)"
-    } else {
-        response.thread_or_interaction_id.as_ref().unwrap().trim()
-    };
-
-    match response.agent {
-        Agent::Gemini => format!(
-            "{}\n\n---\nInteraction ID: `{}`",
-            brief, thread_or_interaction_id
-        ),
-        Agent::Codex => format!(
-            "{}\n\n---\nThread ID: `{}`",
-            brief, thread_or_interaction_id
-        ),
     }
+    .to_string()
 }
 
 #[cfg(test)]
@@ -348,17 +329,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remember_markdown_transformation_includes_summary_and_interaction_id() {
+    fn remember_all_selector_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "remember",
+            "all",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
+        ]);
+
+        let parsed = parsed.expect("remember all should parse successfully");
+        let Commands::Remember(remember) = parsed.command else {
+            panic!("expected remember command");
+        };
+        assert_eq!(remember.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(remember.agent, Agent::Gemini);
+        assert_eq!(remember.output_format, RememberOutputFormatArg::Json);
+        assert!(matches!(
+            remember.selection,
+            Some(RememberSelectorCommand::All)
+        ));
+    }
+
+    #[test]
+    fn remember_session_selector_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "remember",
+            "session",
+            "sess-123",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
+            "-O",
+            "md",
+        ]);
+
+        let parsed = parsed.expect("remember session <id> should parse successfully");
+        let Commands::Remember(remember) = parsed.command else {
+            panic!("expected remember command");
+        };
+        assert_eq!(remember.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(remember.agent, Agent::Gemini);
+        assert_eq!(remember.output_format, RememberOutputFormatArg::Md);
+        assert!(matches!(
+            remember.selection,
+            Some(RememberSelectorCommand::Session { session_id }) if session_id == "sess-123"
+        ));
+    }
+
+    #[test]
+    fn remember_legacy_flags_do_not_parse() {
+        assert!(Cli::try_parse_from(["mmr", "remember", "--mode", "all"]).is_err());
+        assert!(Cli::try_parse_from(["mmr", "remember", "--session-id", "sess-123"]).is_err());
+        assert!(Cli::try_parse_from(["mmr", "remember", "--continue-from", "abc"]).is_err());
+        assert!(Cli::try_parse_from(["mmr", "remember", "--follow-up", "next"]).is_err());
+    }
+
+    #[test]
+    fn remember_markdown_transformation_includes_summary_only() {
         let response = RememberResponse {
             agent: Agent::Gemini,
             text: "# Continuity Brief\n\nSummary body".to_string(),
-            thread_or_interaction_id: Some("abc-123".to_string()),
         };
 
         let markdown = remember_response_to_markdown(&response);
         assert!(markdown.contains("# Continuity Brief"));
         assert!(markdown.contains("Summary body"));
-        assert!(markdown.contains("Interaction ID: `abc-123`"));
+        assert!(!markdown.contains("Interaction ID:"));
+        assert!(!markdown.contains("Thread ID:"));
     }
 
     #[test]
@@ -366,12 +408,12 @@ mod tests {
         let response = RememberResponse {
             agent: Agent::Gemini,
             text: "  ".to_string(),
-            thread_or_interaction_id: None,
         };
 
         let markdown = remember_response_to_markdown(&response);
         assert!(markdown.contains("(No continuity brief returned.)"));
-        assert!(markdown.contains("Interaction ID: `(none)`"));
+        assert!(!markdown.contains("Interaction ID:"));
+        assert!(!markdown.contains("Thread ID:"));
     }
 
     #[test]
@@ -379,11 +421,10 @@ mod tests {
         let response = RememberResponse {
             agent: Agent::Gemini,
             text: "\n  line one\nline two  \n".to_string(),
-            thread_or_interaction_id: Some("  id-1  ".to_string()),
         };
 
         let markdown = remember_response_to_markdown(&response);
         assert!(markdown.contains("line one\nline two"));
-        assert!(markdown.contains("Interaction ID: `id-1`"));
+        assert!(!markdown.contains("id-1"));
     }
 }

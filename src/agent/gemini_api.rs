@@ -9,7 +9,7 @@ const DEFAULT_MODEL: &str = "gemini-3.1-flash-lite-preview";
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 pub struct Gemini {
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
     api_key: String,
     pub model: String,
     base_url: String,
@@ -17,7 +17,7 @@ pub struct Gemini {
 
 impl Gemini {
     pub fn new(model: Option<&str>, api_key: Option<&str>) -> Result<Self> {
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let model = model.unwrap_or(DEFAULT_MODEL).to_string();
         let api_key = match api_key {
             Some(key) if !key.trim().is_empty() => key.to_string(),
@@ -36,13 +36,15 @@ impl Gemini {
         })
     }
 
-    pub fn generate(&self, request: GeminiGenerateRequest<'_>) -> Result<GeminiGenerateResponse> {
+    pub async fn generate(
+        &self,
+        request: GeminiGenerateRequest<'_>,
+    ) -> Result<GeminiGenerateResponse> {
         let url = format!("{}/interactions", self.base_url.trim_end_matches('/'));
         let payload = InteractionCreateRequest {
             model: &self.model,
             input: request.input,
             system_instruction: request.system_instruction,
-            previous_interaction_id: request.previous_interaction_id,
         };
 
         let response = self
@@ -51,10 +53,12 @@ impl Gemini {
             .header("x-goog-api-key", &self.api_key)
             .json(&payload)
             .send()
+            .await
             .context("failed to call Gemini Interactions API")?;
         let status = response.status();
         let body = response
             .text()
+            .await
             .context("failed reading Gemini Interactions API response body")?;
 
         if !status.is_success() {
@@ -74,10 +78,7 @@ impl Gemini {
                 anyhow!("Gemini Interactions API response did not include text output")
             })?;
 
-        Ok(GeminiGenerateResponse {
-            interaction_id: parsed.id,
-            text,
-        })
+        Ok(GeminiGenerateResponse { text })
     }
 }
 
