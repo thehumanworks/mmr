@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::agent::ai::{self, Agent, RememberMode};
-use crate::model::{
-    ApiMessage, ApiMessagesResponse, RememberResponse, SortBy, SortOptions, SortOrder, SourceFilter,
+use crate::agent::ai;
+use crate::messages::service::QueryService;
+use crate::types::{
+    Agent, ApiMessage, ApiMessagesResponse, RememberMode, RememberRequest, RememberResponse,
+    SortBy, SortOptions, SortOrder, SourceFilter,
 };
-use crate::query::QueryService;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -259,7 +260,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             };
             let response = ai::remember(
                 &service,
-                ai::RememberRequest {
+                RememberRequest {
                     agent,
                     project: project.as_str(),
                     source: cli.source,
@@ -350,7 +351,7 @@ mod tests {
     fn remember_markdown_transformation_includes_summary_and_interaction_id() {
         let response = RememberResponse {
             agent: Agent::Gemini,
-            text: "Summary body".to_string(),
+            text: "# Continuity Brief\n\nSummary body".to_string(),
             thread_or_interaction_id: Some("abc-123".to_string()),
         };
 

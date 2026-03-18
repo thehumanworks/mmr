@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::model::MessageRecord;
+use crate::types::MessageRecord;
 
 mod claude;
 mod codex;

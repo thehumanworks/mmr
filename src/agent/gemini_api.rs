@@ -1,5 +1,9 @@
 use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+
+use crate::types::agent::{
+    GeminiGenerateRequest, GeminiGenerateResponse, InteractionCreateRequest,
+    InteractionCreateResponse,
+};
 
 const DEFAULT_MODEL: &str = "gemini-3.1-flash-lite-preview";
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
@@ -9,74 +13,6 @@ pub struct Gemini {
     api_key: String,
     pub model: String,
     base_url: String,
-}
-
-pub struct GeminiGenerateRequest<'a> {
-    pub input: Vec<InteractionInput>,
-    pub system_instruction: Option<&'a str>,
-    pub previous_interaction_id: Option<&'a str>,
-}
-
-pub struct GeminiGenerateResponse {
-    pub interaction_id: String,
-    pub text: String,
-}
-
-#[derive(Default, Debug, Clone, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InteractionInputType {
-    #[default]
-    Text,
-    Image,
-}
-
-impl std::fmt::Display for InteractionInputType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Text => write!(f, "text"),
-            Self::Image => write!(f, "image"),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Default)]
-pub struct InteractionInput {
-    #[serde(rename = "type")]
-    type_: InteractionInputType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    text: Option<String>,
-}
-
-impl InteractionInput {
-    pub fn new(interaction_type: InteractionInputType, text: &str) -> Self {
-        Self {
-            type_: interaction_type,
-            text: Some(text.into()),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct InteractionCreateRequest<'a> {
-    model: &'a str,
-    input: Vec<InteractionInput>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system_instruction: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_interaction_id: Option<&'a str>,
-}
-
-#[derive(Debug, Deserialize)]
-struct InteractionCreateResponse {
-    id: String,
-    #[serde(default)]
-    outputs: Vec<InteractionOutput>,
-}
-
-#[derive(Debug, Deserialize)]
-struct InteractionOutput {
-    #[serde(default)]
-    text: Option<String>,
 }
 
 impl Gemini {

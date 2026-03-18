@@ -1,19 +1,14 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use serde_json::Value;
 
-use crate::model::{MessageRecord, SourceKind};
+use crate::types::source::ClaudeFileTask;
+use crate::types::{MessageRecord, SourceKind};
 
 use super::decode_project_name;
-
-struct ClaudeFileTask {
-    path: PathBuf,
-    project_name: String,
-    is_subagent: bool,
-}
 
 pub fn load_claude_messages(home: &Path) -> Result<Vec<MessageRecord>> {
     let projects_dir = home.join(".claude").join("projects");
