@@ -1,10 +1,16 @@
 use std::cmp::Reverse;
 
 use anyhow::{Result, bail};
+use clap::ValueEnum;
+use codex_app_server_sdk::ResumeThread;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use crate::agent::gemini::{Gemini, GeminiGenerateRequest, InteractionInput, InteractionInputType};
-use crate::model::{ApiMessage, ApiRememberResponse, SortBy, SortOptions, SortOrder, SourceFilter};
+use crate::agent::codex::{CodexAgent, CodexGenerateRequest};
+use crate::agent::gemini_api::{
+    Gemini, GeminiGenerateRequest, InteractionInput, InteractionInputType,
+};
+use crate::model::{ApiMessage, RememberResponse, SortBy, SortOptions, SortOrder, SourceFilter};
 use crate::query::QueryService;
 
 /// Preserved in every call. Establishes agent identity and describes the input format.
@@ -78,7 +84,17 @@ pub enum RememberMode {
     All,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
+#[clap(rename_all = "kebab-case")]
+pub enum Agent {
+    #[clap(name = "gemini")]
+    Gemini,
+    #[clap(name = "codex")]
+    Codex,
+}
+
 pub struct RememberRequest<'a> {
+    pub agent: Agent,
     pub project: &'a str,
     pub source: Option<SourceFilter>,
     pub mode: RememberMode,
@@ -101,14 +117,10 @@ struct SessionSelection {
     source: SourceFilter,
 }
 
-pub fn remember(
+fn remember_with_gemini(
     service: &QueryService,
     request: RememberRequest<'_>,
-) -> Result<ApiRememberResponse> {
-    if request.follow_up.is_some() && request.continue_from.is_none() {
-        bail!("--follow-up requires --continue-from");
-    }
-
+) -> Result<RememberResponse> {
     let gemini = Gemini::new(request.model, None)?;
     let system_instruction = build_system_instruction(request.instructions);
 
@@ -127,10 +139,58 @@ pub fn remember(
         previous_interaction_id: request.continue_from,
     })?;
 
-    Ok(ApiRememberResponse {
-        summary: result.text,
-        interaction_id: result.interaction_id,
-    })
+    Ok(RememberResponse::new(
+        Agent::Gemini,
+        result.text,
+        Some(result.interaction_id),
+    ))
+}
+
+async fn remember_with_codex(
+    service: &QueryService,
+    request: RememberRequest<'_>,
+) -> Result<RememberResponse> {
+    let codex = CodexAgent::new().await;
+    let system_instruction = build_system_instruction(request.instructions);
+
+    let input = if request.continue_from.is_some() {
+        request.follow_up.unwrap_or_default().to_string()
+    } else {
+        let sessions =
+            load_session_transcripts(service, request.project, request.source, request.mode);
+        let formatted = format_messages_for_input(&sessions);
+        format!("Analyze the following AI coding session transcript(s).\n\n{formatted}")
+    };
+
+    let result = codex
+        .generate(CodexGenerateRequest {
+            input: &input,
+            developer_instructions: Some(&system_instruction),
+            resume_thread: request
+                .continue_from
+                .map(|id| ResumeThread::ById(id.to_string())),
+        })
+        .await?;
+
+    Ok(RememberResponse::new(
+        Agent::Codex,
+        result.get_text().to_string(),
+        result.get_thread_id().map(|id| id.to_string()),
+    ))
+}
+
+pub async fn remember(
+    service: &QueryService,
+    request: RememberRequest<'_>,
+) -> Result<RememberResponse> {
+    if request.follow_up.is_some() && request.continue_from.is_none() {
+        bail!("--follow-up requires --continue-from");
+    }
+
+    match request.agent {
+        Agent::Gemini => remember_with_gemini(service, request),
+        Agent::Codex => remember_with_codex(service, request).await,
+    }
 }
 
 fn load_session_transcripts(

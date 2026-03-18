@@ -1,6 +1,8 @@
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
+use crate::agent::ai::Agent;
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[clap(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]
@@ -131,7 +133,22 @@ pub struct ApiMessagesResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ApiRememberResponse {
-    pub summary: String,
-    pub interaction_id: String,
+pub struct RememberResponse {
+    pub agent: Agent,
+    pub text: String,
+    pub thread_or_interaction_id: Option<String>,
+}
+
+impl RememberResponse {
+    pub fn new(
+        agent: Agent,
+        text: impl Into<String>,
+        thread_or_interaction_id: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            agent,
+            text: text.into(),
+            thread_or_interaction_id: thread_or_interaction_id.map(|id| id.into()),
+        }
+    }
 }

@@ -1,2 +1,3 @@
 pub mod ai;
-pub mod gemini;
+pub mod codex;
+pub mod gemini_api;

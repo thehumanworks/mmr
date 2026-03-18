@@ -2,10 +2,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::agent::ai::{self, RememberMode};
+use crate::agent::ai::{self, Agent, RememberMode};
 use crate::model::{
-    ApiMessage, ApiMessagesResponse, ApiRememberResponse, SortBy, SortOptions, SortOrder,
-    SourceFilter,
+    ApiMessage, ApiMessagesResponse, RememberResponse, SortBy, SortOptions, SortOrder, SourceFilter,
 };
 use crate::query::QueryService;
 
@@ -95,6 +94,9 @@ pub enum Commands {
         /// Project name or path (omit to use current directory)
         #[arg(long)]
         project: Option<String>,
+        /// Agent to use
+        #[arg(long, value_enum, default_value = "codex")]
+        agent: Agent,
         /// Session selection mode
         #[arg(long, value_enum, default_value = "latest")]
         mode: RememberModeArg,
@@ -144,7 +146,7 @@ impl From<RememberModeArg> for RememberMode {
     }
 }
 
-pub fn run_cli(cli: Cli) -> Result<String> {
+pub async fn run_cli(cli: Cli) -> Result<String> {
     let service = QueryService::load()?;
 
     let response = match cli.command {
@@ -243,6 +245,7 @@ pub fn run_cli(cli: Cli) -> Result<String> {
         }
         Commands::Remember {
             project,
+            agent,
             mode,
             continue_from,
             follow_up,
@@ -257,6 +260,7 @@ pub fn run_cli(cli: Cli) -> Result<String> {
             let response = ai::remember(
                 &service,
                 ai::RememberRequest {
+                    agent,
                     project: project.as_str(),
                     source: cli.source,
                     mode: mode.into(),
@@ -265,7 +269,8 @@ pub fn run_cli(cli: Cli) -> Result<String> {
                     instructions: instructions.as_deref(),
                     model: model.as_deref(),
                 },
-            )?;
+            )
+            .await?;
             format_remember_response(&response, output_format, cli.pretty)?
         }
     };
@@ -303,7 +308,7 @@ fn serialize<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
 }
 
 fn format_remember_response(
-    response: &ApiRememberResponse,
+    response: &RememberResponse,
     output_format: RememberOutputFormatArg,
     pretty: bool,
 ) -> Result<String> {
@@ -313,22 +318,28 @@ fn format_remember_response(
     }
 }
 
-fn remember_response_to_markdown(response: &ApiRememberResponse) -> String {
-    let summary = if response.summary.trim().is_empty() {
-        "(No summary returned.)"
+fn remember_response_to_markdown(response: &RememberResponse) -> String {
+    let brief = if response.text.trim().is_empty() {
+        "(No continuity brief returned.)"
     } else {
-        response.summary.trim()
+        response.text.trim()
     };
-    let interaction_id = if response.interaction_id.trim().is_empty() {
+    let thread_or_interaction_id = if response.thread_or_interaction_id.is_none() {
         "(none)"
     } else {
-        response.interaction_id.trim()
+        response.thread_or_interaction_id.as_ref().unwrap().trim()
     };
 
-    format!(
-        "# Continuity Brief\n\n{}\n\n---\nInteraction ID: `{}`",
-        summary, interaction_id
-    )
+    match response.agent {
+        Agent::Gemini => format!(
+            "{}\n\n---\nInteraction ID: `{}`",
+            brief, thread_or_interaction_id
+        ),
+        Agent::Codex => format!(
+            "{}\n\n---\nThread ID: `{}`",
+            brief, thread_or_interaction_id
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -337,9 +348,10 @@ mod tests {
 
     #[test]
     fn remember_markdown_transformation_includes_summary_and_interaction_id() {
-        let response = ApiRememberResponse {
-            summary: "Summary body".to_string(),
-            interaction_id: "abc-123".to_string(),
+        let response = RememberResponse {
+            agent: Agent::Gemini,
+            text: "Summary body".to_string(),
+            thread_or_interaction_id: Some("abc-123".to_string()),
         };
 
         let markdown = remember_response_to_markdown(&response);
@@ -350,21 +362,23 @@ mod tests {
 
     #[test]
     fn remember_markdown_transformation_handles_empty_values() {
-        let response = ApiRememberResponse {
-            summary: "  ".to_string(),
-            interaction_id: "".to_string(),
+        let response = RememberResponse {
+            agent: Agent::Gemini,
+            text: "  ".to_string(),
+            thread_or_interaction_id: None,
         };
 
         let markdown = remember_response_to_markdown(&response);
-        assert!(markdown.contains("(No summary returned.)"));
+        assert!(markdown.contains("(No continuity brief returned.)"));
         assert!(markdown.contains("Interaction ID: `(none)`"));
     }
 
     #[test]
     fn remember_markdown_transformation_trims_outer_whitespace() {
-        let response = ApiRememberResponse {
-            summary: "\n  line one\nline two  \n".to_string(),
-            interaction_id: "  id-1  ".to_string(),
+        let response = RememberResponse {
+            agent: Agent::Gemini,
+            text: "\n  line one\nline two  \n".to_string(),
+            thread_or_interaction_id: Some("  id-1  ".to_string()),
         };
 
         let markdown = remember_response_to_markdown(&response);
