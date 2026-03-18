@@ -6,7 +6,7 @@
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
-- `src/model.rs`: public API response types and sort/source enums.
+- `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`), parallel ingest wiring in `mod.rs`.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.

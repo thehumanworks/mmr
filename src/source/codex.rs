@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use crate::model::{MessageRecord, SourceKind};
+use crate::types::{MessageRecord, SourceKind};
 
 pub fn load_codex_messages(home: &Path) -> Result<Vec<MessageRecord>> {
     let codex_root = home.join(".codex");

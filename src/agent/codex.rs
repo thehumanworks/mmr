@@ -2,37 +2,10 @@ use codex_app_server_sdk::{
     CodexClient, ResumeThread, Thread, ThreadOptions, TurnOptions, WsConfig,
 };
 
+use crate::types::agent::{CodexGenerateRequest, CodexGenerateResponse};
+
 pub struct CodexAgent {
     codex: CodexClient,
-}
-
-pub struct CodexGenerateRequest<'a> {
-    pub input: &'a str,
-    pub resume_thread: Option<ResumeThread>,
-    pub developer_instructions: Option<&'a str>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CodexGenerateResponse {
-    text: String,
-    thread_id: Option<String>,
-}
-
-impl CodexGenerateResponse {
-    pub fn new(text: impl Into<String>, thread_id: Option<impl Into<String>>) -> Self {
-        Self {
-            text: text.into(),
-            thread_id: thread_id.map(|id| id.into()),
-        }
-    }
-
-    pub fn get_text(&self) -> &str {
-        &self.text
-    }
-
-    pub fn get_thread_id(&self) -> Option<&str> {
-        self.thread_id.as_deref()
-    }
 }
 
 impl CodexAgent {

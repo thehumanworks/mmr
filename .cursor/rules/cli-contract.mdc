@@ -6,7 +6,7 @@ alwaysApply: false
 
 # CLI Contract Rules
 
-- Keep response shapes in `src/model.rs` stable for `projects`, `sessions`, and `messages`.
+- Keep response shapes in `src/types/` stable for `projects`, `sessions`, and `messages`.
 - Preserve source behavior:
   - `--source` accepts only `claude` or `codex`. Omitting `--source` means both sources.
   - `--source all` is not a valid value.
