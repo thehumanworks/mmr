@@ -110,7 +110,7 @@ pub struct RememberArgs {
         short = 'O',
         long = "output-format",
         value_enum,
-        default_value = "json",
+        default_value = "md",
         global = true
     )]
     output_format: RememberOutputFormatArg,
@@ -145,10 +145,11 @@ pub enum RememberSelectorCommand {
     },
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[clap(rename_all = "kebab-case")]
 pub enum RememberOutputFormatArg {
     Json,
+    #[default]
     Md,
 }
 
