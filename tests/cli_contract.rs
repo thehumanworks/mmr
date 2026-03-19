@@ -1599,3 +1599,330 @@ fn remember_rejects_session_selector_without_id() {
         "stderr should explain that the session selector requires an ID: {stderr}"
     );
 }
+
+#[test]
+fn merge_session_to_session_cross_source_shifts_timestamps_and_collapses_to_codex_provider() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-session",
+        "sess-claude-1",
+        "--to-session",
+        "sess-codex-1",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["mode"].as_str(), Some("session-to-session"));
+    assert_eq!(json["from_agent"].as_str(), Some("claude"));
+    assert_eq!(json["to_agent"].as_str(), Some("codex"));
+    assert_eq!(json["total_sessions_merged"].as_i64(), Some(1));
+    assert_eq!(json["total_messages_merged"].as_i64(), Some(2));
+
+    let merge = &json["session_merges"].as_array().unwrap()[0];
+    assert_eq!(merge["from_session_id"].as_str(), Some("sess-claude-1"));
+    assert_eq!(merge["to_session_id"].as_str(), Some("sess-codex-1"));
+    assert_eq!(
+        merge["timestamp_strategy"].as_str(),
+        Some("shifted-to-append-after-target")
+    );
+    assert_eq!(
+        merge["model_strategy"].as_str(),
+        Some("collapsed-source-models-to-existing-codex-provider:openai")
+    );
+
+    let considerations = json["schema_considerations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        considerations
+            .iter()
+            .any(|item| item.contains("Codex stores model metadata at session scope")),
+        "expected codex model-collapse note: {considerations:?}"
+    );
+    assert!(
+        considerations
+            .iter()
+            .any(|item| item.contains("Session-to-session merges retime copied messages")),
+        "expected timestamp retiming note: {considerations:?}"
+    );
+
+    let codex_messages = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--session",
+        "sess-codex-1",
+        "--project",
+        "/Users/test/codex-proj",
+        "--limit",
+        "10",
+    ]);
+    assert!(
+        codex_messages.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&codex_messages.stderr)
+    );
+    let messages_json = parse_stdout_json(&codex_messages);
+    assert_eq!(messages_json["total_messages"].as_i64(), Some(4));
+    let contents = messages_json["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["content"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contents,
+        vec![
+            "hello from codex",
+            "short codex answer",
+            "hello from claude",
+            "hi from assistant"
+        ]
+    );
+    assert_eq!(
+        messages_json["messages"].as_array().unwrap()[3]["model"].as_str(),
+        Some("openai")
+    );
+
+    let raw = fs::read_to_string(
+        fixture
+            .home
+            .join(".codex")
+            .join("sessions")
+            .join("sess-codex-1.jsonl"),
+    )
+    .expect("read merged codex session");
+    let lines = raw.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 5);
+    let appended_user: serde_json::Value =
+        serde_json::from_str(lines[3]).expect("parse appended user line");
+    let appended_assistant: serde_json::Value =
+        serde_json::from_str(lines[4]).expect("parse appended assistant line");
+    assert_eq!(
+        appended_user["timestamp"].as_str(),
+        Some("2025-01-02T00:05:01")
+    );
+    assert_eq!(
+        appended_assistant["timestamp"].as_str(),
+        Some("2025-01-02T00:06:01")
+    );
+    assert_eq!(appended_user["type"].as_str(), Some("event_msg"));
+    assert_eq!(appended_assistant["type"].as_str(), Some("response_item"));
+}
+
+#[test]
+fn merge_agent_to_agent_project_creates_claude_sessions_with_transformed_models() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-agent",
+        "codex",
+        "--to-agent",
+        "claude",
+        "--project",
+        "/Users/test/codex-proj",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["mode"].as_str(), Some("agent-to-agent"));
+    assert_eq!(json["from_agent"].as_str(), Some("codex"));
+    assert_eq!(json["to_agent"].as_str(), Some("claude"));
+    assert_eq!(json["total_sessions_merged"].as_i64(), Some(2));
+    assert_eq!(json["total_messages_merged"].as_i64(), Some(6));
+
+    let merges = json["session_merges"].as_array().unwrap();
+    assert_eq!(merges.len(), 2);
+    for merge in merges {
+        assert_eq!(merge["created_target_session"].as_bool(), Some(true));
+        assert_eq!(
+            merge["to_project_name"].as_str(),
+            Some("-Users-test-codex-proj")
+        );
+        assert_eq!(
+            merge["timestamp_strategy"].as_str(),
+            Some("preserved-source-timestamps")
+        );
+        assert_eq!(merge["to_source"].as_str(), Some("claude"));
+        let model_strategy = merge["model_strategy"].as_str().unwrap();
+        assert!(
+            model_strategy.starts_with("expanded-codex-provider-into-claude-assistant-models:"),
+            "unexpected model strategy: {model_strategy}"
+        );
+        let target_file = merge["target_file"].as_str().unwrap();
+        assert!(
+            Path::new(target_file).exists(),
+            "expected target file to exist: {target_file}"
+        );
+    }
+
+    let considerations = json["schema_considerations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        considerations
+            .iter()
+            .any(|item| item.contains("Claude stores model metadata on assistant messages")),
+        "expected claude model-expansion note: {considerations:?}"
+    );
+
+    let sessions_output = fixture.run_cli(&[
+        "--source",
+        "claude",
+        "sessions",
+        "--project=-Users-test-codex-proj",
+        "--limit",
+        "10",
+    ]);
+    assert!(
+        sessions_output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&sessions_output.stderr)
+    );
+    let sessions_json = parse_stdout_json(&sessions_output);
+    assert_eq!(sessions_json["total_sessions"].as_i64(), Some(2));
+
+    let merge_for_session_one = merges
+        .iter()
+        .find(|merge| merge["from_session_id"].as_str() == Some("sess-codex-1"))
+        .expect("merge mapping for sess-codex-1");
+    let created_session_id = merge_for_session_one["to_session_id"]
+        .as_str()
+        .expect("created session id");
+    let messages_output = fixture.run_cli(&[
+        "--source",
+        "claude",
+        "messages",
+        "--project=-Users-test-codex-proj",
+        "--session",
+        created_session_id,
+        "--limit",
+        "10",
+    ]);
+    assert!(
+        messages_output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&messages_output.stderr)
+    );
+    let messages_json = parse_stdout_json(&messages_output);
+    let contents = messages_json["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["content"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(contents, vec!["hello from codex", "short codex answer"]);
+    assert_eq!(
+        messages_json["messages"].as_array().unwrap()[1]["model"].as_str(),
+        Some("openai")
+    );
+
+    let target_file = merge_for_session_one["target_file"]
+        .as_str()
+        .expect("target file");
+    let raw = fs::read_to_string(target_file).expect("read merged claude session");
+    assert!(raw.contains(&format!("\"sessionId\":\"{created_session_id}\"")));
+    assert!(raw.contains("\"model\":\"openai\""));
+}
+
+#[test]
+fn merge_agent_to_agent_session_filter_limits_the_copy_scope() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-agent",
+        "codex",
+        "--to-agent",
+        "claude",
+        "--project",
+        "/Users/test/codex-proj",
+        "--session",
+        "sess-codex-2",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_sessions_merged"].as_i64(), Some(1));
+    assert_eq!(json["total_messages_merged"].as_i64(), Some(4));
+    let merge = &json["session_merges"].as_array().unwrap()[0];
+    assert_eq!(merge["from_session_id"].as_str(), Some("sess-codex-2"));
+
+    let sessions_output = fixture.run_cli(&[
+        "--source",
+        "claude",
+        "sessions",
+        "--project=-Users-test-codex-proj",
+        "--limit",
+        "10",
+    ]);
+    assert!(
+        sessions_output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&sessions_output.stderr)
+    );
+    let sessions_json = parse_stdout_json(&sessions_output);
+    assert_eq!(sessions_json["total_sessions"].as_i64(), Some(1));
+}
+
+#[test]
+fn merge_rejects_ambiguous_session_ids_without_agent_hints() {
+    let fixture = TestFixture::seeded();
+    write_file(
+        &fixture
+            .home
+            .join(".codex")
+            .join("sessions")
+            .join("sess-shared.jsonl"),
+        r#"{"type":"session_meta","timestamp":"2025-01-05T00:00:00","payload":{"id":"sess-shared","cwd":"/Users/test/shared-codex","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-05T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-05T00:00:01","payload":{"type":"user_message","message":"codex dup"}} 
+{"type":"response_item","timestamp":"2025-01-05T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"codex dup answer"}]}}"#,
+    );
+    write_file(
+        &fixture
+            .home
+            .join(".claude")
+            .join("projects")
+            .join("-Users-test-shared-claude")
+            .join("sess-shared.jsonl"),
+        r#"{"type":"user","sessionId":"sess-shared","message":{"role":"user","content":"claude dup"},"timestamp":"2025-01-05T00:00:00","uuid":"dup-u1","cwd":"/Users/test/shared-claude"}
+{"type":"assistant","sessionId":"sess-shared","message":{"role":"assistant","content":"claude dup answer","model":"claude-3-opus","usage":{"input_tokens":11,"output_tokens":7}},"timestamp":"2025-01-05T00:00:01","uuid":"dup-a1","parentUuid":"dup-u1","cwd":"/Users/test/shared-claude"}"#,
+    );
+
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-session",
+        "sess-shared",
+        "--to-session",
+        "sess-codex-1",
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "merge should fail when a session id maps to multiple sources"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("ambiguous"), "stderr={stderr}");
+    assert!(stderr.contains("--from-agent"), "stderr={stderr}");
+}

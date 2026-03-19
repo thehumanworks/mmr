@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::agent::ai;
+use crate::merge::{self, MergeRequest};
 use crate::messages::service::QueryService;
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
@@ -103,6 +104,9 @@ pub enum Commands {
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
+    /// Merge history between sessions or sources
+    #[command(after_help = MERGE_AFTER_HELP)]
+    Merge(MergeArgs),
 }
 
 #[derive(Args, Debug)]
@@ -141,6 +145,79 @@ impl RememberArgs {
             Some(RememberSelectorCommand::Session { session_id }) => RememberSelection::Session {
                 session_id: session_id.clone(),
             },
+        }
+    }
+}
+
+const MERGE_AFTER_HELP: &str = "\
+Examples:
+  mmr merge --from-session sess-claude-1 --to-session sess-codex-1
+  mmr merge --from-session sess-claude-1 --from-agent claude --to-session sess-codex-1 --to-agent codex
+  mmr merge --from-agent codex --to-agent claude --project /Users/test/codex-proj
+  mmr merge --from-agent claude --to-agent codex --session sess-claude-1 --project /Users/test/proj";
+
+#[derive(Args, Debug)]
+pub struct MergeArgs {
+    /// Source session ID for a session-to-session merge
+    #[arg(long, conflicts_with = "session")]
+    from_session: Option<String>,
+    /// Destination session ID for a session-to-session merge
+    #[arg(long, conflicts_with = "session")]
+    to_session: Option<String>,
+    /// Source agent for an agent-to-agent merge or for session disambiguation
+    #[arg(long, value_enum)]
+    from_agent: Option<SourceFilter>,
+    /// Destination agent for an agent-to-agent merge or for session disambiguation
+    #[arg(long, value_enum)]
+    to_agent: Option<SourceFilter>,
+    /// Narrow an agent-to-agent merge to one source session
+    #[arg(long, conflicts_with_all = ["from_session", "to_session"])]
+    session: Option<String>,
+    /// Narrow an agent-to-agent merge to one project
+    #[arg(long, conflicts_with_all = ["from_session", "to_session"])]
+    project: Option<String>,
+}
+
+impl MergeArgs {
+    fn into_request(self, global_source: Option<SourceFilter>) -> Result<MergeRequest> {
+        if global_source.is_some() {
+            anyhow::bail!(
+                "merge does not use the global --source flag; use --from-agent/--to-agent or let sessions infer their source"
+            );
+        }
+
+        match (
+            self.from_session,
+            self.to_session,
+            self.from_agent,
+            self.to_agent,
+            self.session,
+            self.project,
+        ) {
+            (Some(from_session), Some(to_session), from_agent, to_agent, None, None) => {
+                Ok(MergeRequest::SessionToSession {
+                    from_session,
+                    to_session,
+                    from_agent,
+                    to_agent,
+                })
+            }
+            (None, None, Some(from_agent), Some(to_agent), session, project) => {
+                Ok(MergeRequest::AgentToAgent {
+                    from_agent,
+                    to_agent,
+                    session,
+                    project,
+                })
+            }
+            (Some(_), None, _, _, _, _) | (None, Some(_), _, _, _, _) => {
+                anyhow::bail!(
+                    "session-to-session merges require both --from-session and --to-session"
+                )
+            }
+            _ => anyhow::bail!(
+                "choose one merge mode: --from-session/--to-session or --from-agent/--to-agent"
+            ),
         }
     }
 }
@@ -284,6 +361,11 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             )
             .await?;
             format_remember_response(&response, remember.output_format, cli.pretty)?
+        }
+        Commands::Merge(merge_args) => {
+            let request = merge_args.into_request(cli.source)?;
+            let response = merge::merge(&service, request)?;
+            serialize(&response, cli.pretty)?
         }
     };
 
@@ -602,5 +684,72 @@ mod tests {
         let markdown = remember_response_to_markdown(&response);
         assert!(markdown.contains("line one\nline two"));
         assert!(!markdown.contains("id-1"));
+    }
+
+    #[test]
+    fn merge_session_mode_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "merge",
+            "--from-session",
+            "sess-a",
+            "--from-agent",
+            "claude",
+            "--to-session",
+            "sess-b",
+            "--to-agent",
+            "codex",
+        ])
+        .expect("merge session mode should parse");
+
+        let Commands::Merge(merge) = parsed.command else {
+            panic!("expected merge command");
+        };
+        assert_eq!(merge.from_session.as_deref(), Some("sess-a"));
+        assert_eq!(merge.to_session.as_deref(), Some("sess-b"));
+        assert_eq!(merge.from_agent, Some(SourceFilter::Claude));
+        assert_eq!(merge.to_agent, Some(SourceFilter::Codex));
+    }
+
+    #[test]
+    fn merge_agent_mode_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "merge",
+            "--from-agent",
+            "codex",
+            "--to-agent",
+            "claude",
+            "--project",
+            "/Users/test/proj",
+            "--session",
+            "sess-a",
+        ])
+        .expect("merge agent mode should parse");
+
+        let Commands::Merge(merge) = parsed.command else {
+            panic!("expected merge command");
+        };
+        assert_eq!(merge.from_agent, Some(SourceFilter::Codex));
+        assert_eq!(merge.to_agent, Some(SourceFilter::Claude));
+        assert_eq!(merge.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(merge.session.as_deref(), Some("sess-a"));
+    }
+
+    #[test]
+    fn merge_requires_one_mode() {
+        let args = MergeArgs {
+            from_session: None,
+            to_session: None,
+            from_agent: Some(SourceFilter::Codex),
+            to_agent: None,
+            session: None,
+            project: None,
+        };
+
+        let error = args
+            .into_request(None)
+            .expect_err("merge should reject incomplete mode");
+        assert!(error.to_string().contains("choose one merge mode"));
     }
 }
