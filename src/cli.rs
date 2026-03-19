@@ -110,6 +110,42 @@ pub enum Commands {
     /// Merge history between sessions or sources
     #[command(after_help = MERGE_AFTER_HELP)]
     Merge(MergeArgs),
+    /// Sync conversation history with cloud storage
+    Sync(SyncArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SyncArgs {
+    #[command(subcommand)]
+    pub action: SyncAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SyncAction {
+    /// Initialize sync configuration (interactive setup)
+    Init,
+    /// Push local conversation history to cloud storage
+    Push {
+        /// Only show what would be pushed without actually uploading
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Pull remote conversation history to local (non-destructive)
+    Pull {
+        /// Only show what would be pulled without actually downloading
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show sync status: what's changed locally and remotely
+    Status,
+    /// Install the background sync daemon/agent
+    Install {
+        /// Interval in minutes between syncs
+        #[arg(long, default_value_t = 15)]
+        interval: u32,
+    },
+    /// Remove the background sync daemon/agent
+    Uninstall,
 }
 
 #[derive(Args, Debug)]
@@ -433,6 +469,26 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             let request = merge_args.into_request(cli.source)?;
             let response = merge::merge(&service, request)?;
             serialize(&response, cli.pretty)?
+        }
+        Commands::Sync(sync_args) => {
+            use crate::sync;
+            match sync_args.action {
+                SyncAction::Init => sync::run_init()?,
+                SyncAction::Push { dry_run } => {
+                    let response = sync::run_push(dry_run).await?;
+                    serialize(&response, cli.pretty)?
+                }
+                SyncAction::Pull { dry_run } => {
+                    let response = sync::run_pull(dry_run).await?;
+                    serialize(&response, cli.pretty)?
+                }
+                SyncAction::Status => {
+                    let response = sync::run_status().await?;
+                    serialize(&response, cli.pretty)?
+                }
+                SyncAction::Install { interval } => sync::run_install(interval)?,
+                SyncAction::Uninstall => sync::run_uninstall()?,
+            }
         }
     };
 
