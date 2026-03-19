@@ -4,11 +4,12 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::agent::ai;
+use crate::agent::prompt;
 use crate::merge::{self, MergeRequest};
 use crate::messages::service::QueryService;
 use crate::types::{
-    Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
-    SortBy, SortOptions, SortOrder, SourceFilter,
+    Agent, ApiMessage, ApiMessagesResponse, PromptRequest, RememberRequest, RememberResponse,
+    RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter, TargetAgent,
 };
 
 const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
@@ -104,6 +105,8 @@ pub enum Commands {
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
+    /// Generate an optimized prompt for a target AI coding agent
+    Prompt(PromptArgs),
     /// Merge history between sessions or sources
     #[command(after_help = MERGE_AFTER_HELP)]
     Merge(MergeArgs),
@@ -147,6 +150,24 @@ impl RememberArgs {
             },
         }
     }
+}
+
+#[derive(Args, Debug)]
+pub struct PromptArgs {
+    /// What you want to accomplish (the task description)
+    query: String,
+    /// Target agent the prompt is optimized for
+    #[arg(long, value_enum)]
+    target: TargetAgent,
+    /// Backend agent to use for optimization (defaults to MMR_DEFAULT_REMEMBER_AGENT or codex)
+    #[arg(long, value_enum)]
+    agent: Option<Agent>,
+    /// Project name or path (omit to use current directory)
+    #[arg(long, short = 'p')]
+    project: Option<String>,
+    /// Override backend model
+    #[arg(long)]
+    model: Option<String>,
 }
 
 const MERGE_AFTER_HELP: &str = "\
@@ -361,6 +382,28 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             )
             .await?;
             format_remember_response(&response, remember.output_format, cli.pretty)?
+        }
+        Commands::Prompt(prompt_args) => {
+            let project = match prompt_args.project {
+                Some(project) => project,
+                None => current_dir_project().context("could not resolve current directory")?,
+            };
+
+            let response = prompt::optimize_prompt(
+                &service,
+                PromptRequest {
+                    agent: effective_remember_agent(prompt_args.agent),
+                    target: prompt_args.target,
+                    query: &prompt_args.query,
+                    project: &project,
+                    source: source_filter,
+                    model: prompt_args.model.as_deref(),
+                },
+            )
+            .await?;
+
+            prompt::try_copy_to_clipboard(&response.prompt);
+            response.prompt
         }
         Commands::Merge(merge_args) => {
             let request = merge_args.into_request(cli.source)?;
@@ -734,6 +777,63 @@ mod tests {
         assert_eq!(merge.to_agent, Some(SourceFilter::Claude));
         assert_eq!(merge.project.as_deref(), Some("/Users/test/proj"));
         assert_eq!(merge.session.as_deref(), Some("sess-a"));
+    }
+
+    #[test]
+    fn prompt_command_parses_with_all_flags() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "prompt",
+            "add user authentication",
+            "--target",
+            "claude",
+            "--agent",
+            "gemini",
+            "--project",
+            "/Users/test/proj",
+            "--model",
+            "gemini-2.5-pro",
+        ]);
+
+        let parsed = parsed.expect("prompt with all flags should parse");
+        let Commands::Prompt(prompt) = parsed.command else {
+            panic!("expected prompt command");
+        };
+        assert_eq!(prompt.query, "add user authentication");
+        assert_eq!(prompt.target, TargetAgent::Claude);
+        assert_eq!(prompt.agent, Some(Agent::Gemini));
+        assert_eq!(prompt.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(prompt.model.as_deref(), Some("gemini-2.5-pro"));
+    }
+
+    #[test]
+    fn prompt_command_parses_minimal() {
+        let parsed = Cli::try_parse_from(["mmr", "prompt", "fix bug", "--target", "codex"]);
+
+        let parsed = parsed.expect("prompt with minimal args should parse");
+        let Commands::Prompt(prompt) = parsed.command else {
+            panic!("expected prompt command");
+        };
+        assert_eq!(prompt.query, "fix bug");
+        assert_eq!(prompt.target, TargetAgent::Codex);
+        assert_eq!(prompt.agent, None);
+        assert_eq!(prompt.project, None);
+        assert_eq!(prompt.model, None);
+    }
+
+    #[test]
+    fn prompt_command_requires_target() {
+        assert!(Cli::try_parse_from(["mmr", "prompt", "some query"]).is_err());
+    }
+
+    #[test]
+    fn prompt_command_requires_query() {
+        assert!(Cli::try_parse_from(["mmr", "prompt", "--target", "claude"]).is_err());
+    }
+
+    #[test]
+    fn prompt_command_rejects_invalid_target() {
+        assert!(Cli::try_parse_from(["mmr", "prompt", "some query", "--target", "gpt"]).is_err());
     }
 
     #[test]

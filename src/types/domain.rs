@@ -81,3 +81,11 @@ pub enum Agent {
     #[clap(name = "codex")]
     Codex,
 }
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[clap(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum TargetAgent {
+    Claude,
+    Codex,
+}

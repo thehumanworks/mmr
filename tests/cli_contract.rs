@@ -1886,6 +1886,320 @@ fn merge_agent_to_agent_session_filter_limits_the_copy_scope() {
     assert_eq!(sessions_json["total_sessions"].as_i64(), Some(1));
 }
 
+// --- prompt ---
+
+#[test]
+fn prompt_with_session_history_sends_transcripts_to_backend() {
+    let fixture = TestFixture::seeded();
+    let codex_session = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-prompt.jsonl");
+    write_file(
+        &codex_session,
+        r#"{"type":"session_meta","timestamp":"2025-01-04T00:00:00","payload":{"id":"sess-codex-prompt","cwd":"/Users/test/proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-04T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-04T00:00:01","payload":{"type":"user_message","message":"prompt codex question"}}
+{"type":"response_item","timestamp":"2025-01-04T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"prompt codex answer"}]}}"#,
+    );
+
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-prompt-1","outputs":[{"text":"optimized prompt text here"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "prompt",
+            "implement user authentication",
+            "--target",
+            "claude",
+            "--agent",
+            "gemini",
+            "--project",
+            "/Users/test/proj",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    // Output is raw text, not JSON
+    let stdout = stdout_text(&output);
+    assert_eq!(stdout.trim(), "optimized prompt text here");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
+        "prompt output should be raw text, not JSON"
+    );
+
+    // Verify the request body
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = first_input_text(&body);
+    assert!(
+        input.contains("implement user authentication"),
+        "input should contain the query"
+    );
+    assert!(input.contains("<query>"), "input should use XML structure");
+    assert!(
+        input.contains("hello from claude") || input.contains("prompt codex question"),
+        "input should include session transcript data"
+    );
+
+    let system = body["system_instruction"].as_str().unwrap();
+    assert!(
+        system.contains("Prompt Optimizer"),
+        "system instruction should identify as Prompt Optimizer"
+    );
+    assert!(
+        system.contains("Claude Code"),
+        "system instruction should target Claude Code for --target claude"
+    );
+}
+
+#[test]
+fn prompt_for_codex_target_uses_codex_specific_instructions() {
+    let fixture = TestFixture::seeded();
+
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-prompt-codex","outputs":[{"text":"codex optimized prompt"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "prompt",
+            "fix authentication bug",
+            "--target",
+            "codex",
+            "--agent",
+            "gemini",
+            "--project",
+            "/Users/test/proj",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let system = body["system_instruction"].as_str().unwrap();
+    assert!(
+        system.contains("Codex CLI"),
+        "system instruction should target Codex CLI for --target codex"
+    );
+    assert!(
+        system.contains("AGENTS.md"),
+        "codex target should reference AGENTS.md"
+    );
+}
+
+#[test]
+fn prompt_without_sessions_falls_back_to_query_only() {
+    let fixture = TestFixture::seeded();
+
+    let (base_url, captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-prompt-nosessions","outputs":[{"text":"query-only prompt"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "prompt",
+            "build a REST API",
+            "--target",
+            "claude",
+            "--agent",
+            "gemini",
+            "--project",
+            "/nonexistent/project/path",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout = stdout_text(&output);
+    assert_eq!(stdout.trim(), "query-only prompt");
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = first_input_text(&body);
+    assert!(
+        input.contains("build a REST API"),
+        "input should contain the query even without session history"
+    );
+    assert!(input.contains("<query>"), "input should use XML structure");
+    // No session_history tag since no sessions exist for this project
+    assert!(
+        !input.contains("<session_history>"),
+        "input should not include session_history when no sessions exist"
+    );
+}
+
+#[test]
+fn prompt_outputs_raw_text_not_json() {
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-prompt-raw","outputs":[{"text":"<context>\nHere is a prompt\n</context>"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "prompt",
+            "add tests",
+            "--target",
+            "codex",
+            "--agent",
+            "gemini",
+            "--project",
+            "/Users/test/proj",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout = stdout_text(&output);
+    assert!(stdout.contains("<context>"));
+    assert!(stdout.contains("Here is a prompt"));
+}
+
+#[test]
+fn prompt_hard_failure_shows_meaningful_error() {
+    let fixture = TestFixture::seeded();
+    // No GOOGLE_API_KEY set → Gemini init should fail with meaningful error
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "prompt",
+            "add auth",
+            "--target",
+            "claude",
+            "--agent",
+            "gemini",
+            "--project",
+            "/Users/test/proj",
+        ],
+        &[],
+    );
+
+    assert!(
+        !output.status.success(),
+        "prompt should fail without API key"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.is_empty(), "stderr should contain an error message");
+}
+
+#[test]
+fn prompt_clipboard_failure_does_not_throw() {
+    // On CI without a display server, clipboard will fail, but the command should still succeed
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_gemini_server(
+        r#"{"id":"interaction-prompt-clip","outputs":[{"text":"clipboard test prompt"}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "prompt",
+            "fix bug",
+            "--target",
+            "claude",
+            "--agent",
+            "gemini",
+            "--project",
+            "/Users/test/proj",
+        ],
+        &[
+            ("GOOGLE_API_KEY", "test-key"),
+            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            // Force no display to ensure clipboard fails
+            ("DISPLAY", ""),
+            ("WAYLAND_DISPLAY", ""),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "prompt should succeed even when clipboard is unavailable, stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout = stdout_text(&output);
+    assert_eq!(stdout.trim(), "clipboard test prompt");
+}
+
+#[test]
+fn prompt_requires_target_flag() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["prompt", "some query"]);
+    assert!(
+        !output.status.success(),
+        "prompt without --target should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--target"),
+        "error should mention --target: {stderr}"
+    );
+}
+
+#[test]
+fn prompt_requires_query() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["prompt", "--target", "claude"]);
+    assert!(!output.status.success(), "prompt without query should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("query") || stderr.contains("required"),
+        "error should mention missing query: {stderr}"
+    );
+}
+
+#[test]
+fn prompt_rejects_invalid_target() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["prompt", "some query", "--target", "gpt"]);
+    assert!(
+        !output.status.success(),
+        "prompt with invalid target should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid value"),
+        "error should mention invalid value: {stderr}"
+    );
+}
+
 #[test]
 fn merge_rejects_ambiguous_session_ids_without_agent_hints() {
     let fixture = TestFixture::seeded();
