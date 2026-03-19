@@ -9,7 +9,7 @@ pub use agent::{
     InteractionInput, InteractionInputType, RememberRequest, RememberSelection,
 };
 pub use api::{
-    ApiMessage, ApiMessagesResponse, ApiProject, ApiProjectsResponse, ApiSession,
-    ApiSessionsResponse, RememberResponse,
+    ApiMergeResponse, ApiMergeSession, ApiMessage, ApiMessagesResponse, ApiProject,
+    ApiProjectsResponse, ApiSession, ApiSessionsResponse, RememberResponse,
 };
 pub use domain::{Agent, MessageRecord, SortBy, SortOptions, SortOrder, SourceFilter, SourceKind};

@@ -61,6 +61,32 @@ pub struct ApiMessagesResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ApiMergeSession {
+    pub from_session_id: String,
+    pub to_session_id: String,
+    pub from_source: String,
+    pub to_source: String,
+    pub from_project_name: String,
+    pub to_project_name: String,
+    pub created_target_session: bool,
+    pub merged_messages: i32,
+    pub timestamp_strategy: String,
+    pub model_strategy: String,
+    pub target_file: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiMergeResponse {
+    pub mode: String,
+    pub from_agent: String,
+    pub to_agent: String,
+    pub session_merges: Vec<ApiMergeSession>,
+    pub total_sessions_merged: i64,
+    pub total_messages_merged: i64,
+    pub schema_considerations: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RememberResponse {
     pub agent: Agent,
     pub text: String,
