@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
 use crate::agent::prompt;
@@ -172,6 +172,8 @@ pub struct PromptArgs {
 
 const MERGE_AFTER_HELP: &str = "\
 Examples:
+  mmr merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run
+  mmr merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run --zip-output /tmp/mmr-merge-inputs.zip
   mmr merge --from-session sess-claude-1 --to-session sess-codex-1
   mmr merge --from-session sess-claude-1 --from-agent claude --to-session sess-codex-1 --to-agent codex
   mmr merge --from-agent codex --to-agent claude --project /Users/test/codex-proj
@@ -197,6 +199,12 @@ pub struct MergeArgs {
     /// Narrow an agent-to-agent merge to one project
     #[arg(long, conflicts_with_all = ["from_session", "to_session"])]
     project: Option<String>,
+    /// Validate and print the merge plan without mutating history files
+    #[arg(long)]
+    dry_run: bool,
+    /// Write a ZIP archive of the resolved dry-run history inputs
+    #[arg(long, value_name = "PATH")]
+    zip_output: Option<String>,
 }
 
 impl MergeArgs {
@@ -207,6 +215,18 @@ impl MergeArgs {
             );
         }
 
+        if self.zip_output.is_some() && !self.dry_run {
+            anyhow::bail!("--zip-output requires --dry-run");
+        }
+
+        let execution = if self.dry_run {
+            merge::MergeExecution::DryRun {
+                zip_output: self.zip_output.map(PathBuf::from),
+            }
+        } else {
+            merge::MergeExecution::Apply
+        };
+
         match (
             self.from_session,
             self.to_session,
@@ -216,21 +236,25 @@ impl MergeArgs {
             self.project,
         ) {
             (Some(from_session), Some(to_session), from_agent, to_agent, None, None) => {
-                Ok(MergeRequest::SessionToSession {
-                    from_session,
-                    to_session,
-                    from_agent,
-                    to_agent,
+                Ok(MergeRequest {
+                    execution,
+                    operation: merge::MergeOperation::SessionToSession {
+                        from_session,
+                        to_session,
+                        from_agent,
+                        to_agent,
+                    },
                 })
             }
-            (None, None, Some(from_agent), Some(to_agent), session, project) => {
-                Ok(MergeRequest::AgentToAgent {
+            (None, None, Some(from_agent), Some(to_agent), session, project) => Ok(MergeRequest {
+                execution,
+                operation: merge::MergeOperation::AgentToAgent {
                     from_agent,
                     to_agent,
                     session,
                     project,
-                })
-            }
+                },
+            }),
             (Some(_), None, _, _, _, _) | (None, Some(_), _, _, _, _) => {
                 anyhow::bail!(
                     "session-to-session merges require both --from-session and --to-session"
@@ -780,6 +804,30 @@ mod tests {
     }
 
     #[test]
+    fn merge_dry_run_mode_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "merge",
+            "--from-session",
+            "sess-a",
+            "--to-session",
+            "sess-b",
+            "--dry-run",
+            "--zip-output",
+            "/tmp/merge-inputs.zip",
+        ])
+        .expect("merge dry-run mode should parse");
+
+        let Commands::Merge(merge) = parsed.command else {
+            panic!("expected merge command");
+        };
+        assert_eq!(merge.from_session.as_deref(), Some("sess-a"));
+        assert_eq!(merge.to_session.as_deref(), Some("sess-b"));
+        assert!(merge.dry_run);
+        assert_eq!(merge.zip_output.as_deref(), Some("/tmp/merge-inputs.zip"));
+    }
+
+    #[test]
     fn prompt_command_parses_with_all_flags() {
         let parsed = Cli::try_parse_from([
             "mmr",
@@ -845,11 +893,36 @@ mod tests {
             to_agent: None,
             session: None,
             project: None,
+            dry_run: false,
+            zip_output: None,
         };
 
         let error = args
             .into_request(None)
             .expect_err("merge should reject incomplete mode");
         assert!(error.to_string().contains("choose one merge mode"));
+    }
+
+    #[test]
+    fn merge_rejects_zip_output_without_dry_run() {
+        let args = MergeArgs {
+            from_session: Some("sess-a".to_string()),
+            to_session: Some("sess-b".to_string()),
+            from_agent: None,
+            to_agent: None,
+            session: None,
+            project: None,
+            dry_run: false,
+            zip_output: Some("/tmp/merge-inputs.zip".to_string()),
+        };
+
+        let error = args
+            .into_request(None)
+            .expect_err("merge should reject zip output without dry-run");
+        assert!(
+            error
+                .to_string()
+                .contains("--zip-output requires --dry-run")
+        );
     }
 }

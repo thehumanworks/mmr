@@ -17,6 +17,7 @@ time = { version = "0.3.44", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1.50.0", features = ["full"] }
 arboard = "3"
 walkdir = "2.5.0"
+zip = { version = "8.3.0", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3.26.0"

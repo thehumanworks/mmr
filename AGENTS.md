@@ -47,6 +47,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
 - `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run` — validate and print a non-mutating merge plan, including resolved history inputs.
+- `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run --zip-output /tmp/mmr-merge-inputs.zip` — create a ZIP archive of the exact resolved dry-run history inputs before experimenting with a real merge.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.

@@ -16,7 +16,19 @@ use crate::types::{
 };
 
 #[derive(Debug, Clone)]
-pub enum MergeRequest {
+pub struct MergeRequest {
+    pub execution: MergeExecution,
+    pub operation: MergeOperation,
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeExecution {
+    Apply,
+    DryRun { zip_output: Option<PathBuf> },
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeOperation {
     SessionToSession {
         from_session: String,
         to_session: String,
@@ -37,14 +49,29 @@ struct SessionHandle {
     project_name: String,
     project_path: String,
     session_id: String,
-    source_file: PathBuf,
+    source_files: Vec<PathBuf>,
     messages: Vec<MessageRecord>,
 }
 
 #[derive(Debug)]
-struct PersistedMerge {
+struct PlannedMerge {
     api: ApiMergeSession,
     considerations: Vec<String>,
+    resolved_history_files: Vec<PathBuf>,
+    target_file: PathBuf,
+    rendered_lines: Vec<Value>,
+}
+
+#[derive(Debug)]
+struct MergePlan {
+    mode: String,
+    from_agent: String,
+    to_agent: String,
+    dry_run: bool,
+    zip_output: Option<PathBuf>,
+    resolved_history_files: Vec<PathBuf>,
+    session_merges: Vec<PlannedMerge>,
+    schema_considerations: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -106,10 +133,30 @@ impl IdFactory {
 
 pub fn merge(service: &QueryService, request: MergeRequest) -> Result<ApiMergeResponse> {
     let home = resolve_home_dir()?;
+    let plan = plan_merge(service, &home, request)?;
+
+    if let Some(zip_output) = &plan.zip_output {
+        create_backup_zip(&home, &plan.resolved_history_files, zip_output)?;
+    }
+
+    if !plan.dry_run {
+        apply_merge_plan(&plan)?;
+    }
+
+    Ok(plan.into_response())
+}
+
+fn plan_merge(service: &QueryService, home: &Path, request: MergeRequest) -> Result<MergePlan> {
+    let dry_run = matches!(request.execution, MergeExecution::DryRun { .. });
+    let zip_output = match request.execution {
+        MergeExecution::Apply => None,
+        MergeExecution::DryRun { zip_output } => zip_output,
+    };
+
     let mut considerations = BTreeSet::new();
 
-    let (mode, from_agent, to_agent, session_merges) = match request {
-        MergeRequest::SessionToSession {
+    let (mode, from_agent, to_agent, session_merges) = match request.operation {
+        MergeOperation::SessionToSession {
             from_session,
             to_session,
             from_agent,
@@ -126,8 +173,8 @@ pub fn merge(service: &QueryService, request: MergeRequest) -> Result<ApiMergeRe
                 bail!("cannot merge a session into itself");
             }
 
-            let persisted = append_into_existing_session(&from, &to)?;
-            for item in &persisted.considerations {
+            let planned = plan_append_into_existing_session(&from, &to)?;
+            for item in &planned.considerations {
                 considerations.insert(item.clone());
             }
 
@@ -135,10 +182,10 @@ pub fn merge(service: &QueryService, request: MergeRequest) -> Result<ApiMergeRe
                 "session-to-session".to_string(),
                 from.source.as_str().to_string(),
                 to.source.as_str().to_string(),
-                vec![persisted.api],
+                vec![planned],
             )
         }
-        MergeRequest::AgentToAgent {
+        MergeOperation::AgentToAgent {
             from_agent,
             to_agent,
             session,
@@ -156,52 +203,90 @@ pub fn merge(service: &QueryService, request: MergeRequest) -> Result<ApiMergeRe
                 session.as_deref(),
             )?;
 
-            let mut persisted = Vec::with_capacity(source_sessions.len());
+            let mut planned_merges = Vec::with_capacity(source_sessions.len());
             for source_session in source_sessions {
                 let merge =
-                    create_target_session(&home, &source_session, to_agent, &mut id_factory)?;
+                    plan_create_target_session(home, &source_session, to_agent, &mut id_factory)?;
                 for item in &merge.considerations {
                     considerations.insert(item.clone());
                 }
-                persisted.push(merge.api);
+                planned_merges.push(merge);
             }
 
             (
                 "agent-to-agent".to_string(),
                 source_filter_as_str(from_agent).to_string(),
                 source_filter_as_str(to_agent).to_string(),
-                persisted,
+                planned_merges,
             )
         }
     };
 
-    let total_sessions_merged = session_merges.len() as i64;
-    let total_messages_merged = session_merges
+    let resolved_history_files = session_merges
         .iter()
-        .map(|item| i64::from(item.merged_messages))
-        .sum();
+        .flat_map(|merge| merge.resolved_history_files.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
 
-    Ok(ApiMergeResponse {
+    Ok(MergePlan {
         mode,
         from_agent,
         to_agent,
+        dry_run,
+        zip_output,
+        resolved_history_files,
         session_merges,
-        total_sessions_merged,
-        total_messages_merged,
         schema_considerations: considerations.into_iter().collect(),
     })
 }
 
-fn append_into_existing_session(
+impl MergePlan {
+    fn into_response(self) -> ApiMergeResponse {
+        let total_sessions_merged = self.session_merges.len() as i64;
+        let total_messages_merged = self
+            .session_merges
+            .iter()
+            .map(|item| i64::from(item.api.merged_messages))
+            .sum();
+
+        ApiMergeResponse {
+            mode: self.mode,
+            from_agent: self.from_agent,
+            to_agent: self.to_agent,
+            dry_run: self.dry_run,
+            zip_output: self.zip_output.map(|path| path.display().to_string()),
+            resolved_history_files: path_strings(&self.resolved_history_files),
+            session_merges: self
+                .session_merges
+                .into_iter()
+                .map(|merge| merge.api)
+                .collect(),
+            total_sessions_merged,
+            total_messages_merged,
+            schema_considerations: self.schema_considerations,
+        }
+    }
+}
+
+fn apply_merge_plan(plan: &MergePlan) -> Result<()> {
+    for merge in &plan.session_merges {
+        write_jsonl_lines(&merge.target_file, &merge.rendered_lines)?;
+    }
+
+    Ok(())
+}
+
+fn plan_append_into_existing_session(
     from: &SessionHandle,
     to: &SessionHandle,
-) -> Result<PersistedMerge> {
+) -> Result<PlannedMerge> {
     let prepared_messages = prepare_messages_for_existing_session(&from.messages, &to.messages)?;
-    let target_file = PathBuf::from(&to.source_file);
+    let target_file = existing_session_file(to)?;
     let mut considerations = Vec::new();
     let timestamp_strategy = append_timestamp_strategy(&from.messages, &prepared_messages);
 
-    let (lines, model_strategy) = match to.source {
+    let (rendered_lines, model_strategy) = match to.source {
         SourceKind::Codex => {
             let provider = existing_codex_provider(to);
             let lines = render_codex_events(&prepared_messages);
@@ -243,9 +328,9 @@ fn append_into_existing_session(
         );
     }
 
-    write_jsonl_lines(&target_file, &lines)?;
+    let resolved_history_files = combine_input_files(&from.source_files, &to.source_files);
 
-    Ok(PersistedMerge {
+    Ok(PlannedMerge {
         api: ApiMergeSession {
             from_session_id: from.session_id.clone(),
             to_session_id: to.session_id.clone(),
@@ -257,18 +342,23 @@ fn append_into_existing_session(
             merged_messages: prepared_messages.len() as i32,
             timestamp_strategy,
             model_strategy,
+            action: "append-into-existing-session".to_string(),
+            source_files: path_strings(&resolved_history_files),
             target_file: target_file.display().to_string(),
         },
         considerations,
+        resolved_history_files,
+        target_file,
+        rendered_lines,
     })
 }
 
-fn create_target_session(
+fn plan_create_target_session(
     home: &Path,
     source_session: &SessionHandle,
     to_agent: SourceFilter,
     id_factory: &mut IdFactory,
-) -> Result<PersistedMerge> {
+) -> Result<PlannedMerge> {
     let to_source = source_filter_to_kind(to_agent);
     let target_session_id =
         id_factory.next_session_id(source_session.source, to_source, &source_session.session_id);
@@ -334,9 +424,7 @@ fn create_target_session(
         }
     };
 
-    write_jsonl_lines(&target_file, &lines)?;
-
-    Ok(PersistedMerge {
+    Ok(PlannedMerge {
         api: ApiMergeSession {
             from_session_id: source_session.session_id.clone(),
             to_session_id: target_session_id,
@@ -348,9 +436,14 @@ fn create_target_session(
             merged_messages: prepared_messages.len() as i32,
             timestamp_strategy: "preserved-source-timestamps".to_string(),
             model_strategy,
+            action: "create-target-session".to_string(),
+            source_files: path_strings(&source_session.source_files),
             target_file: target_file.display().to_string(),
         },
         considerations,
+        resolved_history_files: source_session.source_files.clone(),
+        target_file,
+        rendered_lines: lines,
     })
 }
 
@@ -478,15 +571,62 @@ fn session_handle_from_api(
         .collect::<Vec<_>>();
     messages.sort_by(message_record_cmp);
 
-    let source_file = PathBuf::from(messages.first()?.source_file.clone());
+    let source_files = messages
+        .iter()
+        .map(|message| PathBuf::from(&message.source_file))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if source_files.is_empty() {
+        return None;
+    }
+
     Some(SessionHandle {
         source,
         project_name: session.project_name.clone(),
         project_path: session.project_path.clone(),
         session_id: session.session_id.clone(),
-        source_file,
+        source_files,
         messages,
     })
+}
+
+fn existing_session_file(session: &SessionHandle) -> Result<PathBuf> {
+    match session.source_files.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => bail!(
+            "session '{}' has no resolved history file",
+            session.session_id
+        ),
+        files => {
+            let rendered = files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "session '{}' resolved to multiple history files: {}",
+                session.session_id,
+                rendered
+            )
+        }
+    }
+}
+
+fn combine_input_files(left: &[PathBuf], right: &[PathBuf]) -> Vec<PathBuf> {
+    left.iter()
+        .chain(right.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn path_strings(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
 }
 
 fn prepare_messages_for_new_session(source_messages: &[MessageRecord]) -> Vec<PreparedMessage> {
@@ -701,6 +841,55 @@ fn write_jsonl_lines(path: &Path, values: &[Value]) -> Result<()> {
     Ok(())
 }
 
+fn create_backup_zip(home: &Path, input_files: &[PathBuf], output_path: &Path) -> Result<()> {
+    if output_path.exists() {
+        bail!(
+            "zip output already exists: {}. Choose a new path.",
+            output_path.display()
+        );
+    }
+
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create parent directory {}", parent.display()))?;
+    }
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_path)
+        .with_context(|| format!("failed to create {}", output_path.display()))?;
+    let mut archive = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    for path in input_files {
+        let relative = path.strip_prefix(home).with_context(|| {
+            format!(
+                "resolved history input {} is not under {}",
+                path.display(),
+                home.display()
+            )
+        })?;
+        let name = relative.to_string_lossy().replace('\\', "/");
+        archive
+            .start_file(&name, options)
+            .with_context(|| format!("failed to add {} to {}", name, output_path.display()))?;
+        let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+        archive
+            .write_all(&bytes)
+            .with_context(|| format!("failed to write {} to {}", name, output_path.display()))?;
+    }
+
+    archive
+        .finish()
+        .with_context(|| format!("failed to finish {}", output_path.display()))?;
+
+    Ok(())
+}
+
 fn file_ends_with_newline(path: &Path) -> Result<bool> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(bytes.last().map(|byte| *byte == b'\n').unwrap_or(false))
@@ -904,6 +1093,7 @@ fn session_handle_cmp(left: &SessionHandle, right: &SessionHandle) -> std::cmp::
         .cmp(&right.source)
         .then_with(|| left.project_name.cmp(&right.project_name))
         .then_with(|| left.session_id.cmp(&right.session_id))
+        .then_with(|| left.source_files.cmp(&right.source_files))
 }
 
 fn message_record_cmp(left: &MessageRecord, right: &MessageRecord) -> std::cmp::Ordering {
@@ -987,7 +1177,7 @@ mod tests {
             project_name: "-tmp-proj".to_string(),
             project_path: "/tmp/proj".to_string(),
             session_id: "sess-1".to_string(),
-            source_file: PathBuf::from("fixture.jsonl"),
+            source_files: vec![PathBuf::from("fixture.jsonl")],
             messages: vec![record(
                 SourceKind::Claude,
                 "2025-01-01T00:00:00",
