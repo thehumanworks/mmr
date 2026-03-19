@@ -72,6 +72,8 @@ pub struct ApiMergeSession {
     pub merged_messages: i32,
     pub timestamp_strategy: String,
     pub model_strategy: String,
+    pub action: String,
+    pub source_files: Vec<String>,
     pub target_file: String,
 }
 
@@ -80,6 +82,9 @@ pub struct ApiMergeResponse {
     pub mode: String,
     pub from_agent: String,
     pub to_agent: String,
+    pub dry_run: bool,
+    pub zip_output: Option<String>,
+    pub resolved_history_files: Vec<String>,
     pub session_merges: Vec<ApiMergeSession>,
     pub total_sessions_merged: i64,
     pub total_messages_merged: i64,

@@ -17,6 +17,7 @@ time = { version = "0.3.44", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "1.50.0", features = ["full"] }
 arboard = "3"
 walkdir = "2.5.0"
+zip = { version = "8.3.0", default-features = false, features = ["deflate"] }
 rust-s3 = "0.35"
 sha2 = "0.10"
 hex = "0.4"

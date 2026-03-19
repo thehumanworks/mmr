@@ -1,5 +1,6 @@
 mod common;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -139,6 +140,17 @@ fn parse_content_length(headers: &str) -> usize {
             value.trim().parse::<usize>().ok()
         })
         .unwrap_or(0)
+}
+
+fn zip_entry_names(path: &Path) -> BTreeSet<String> {
+    let file = fs::File::open(path).expect("open zip file");
+    let mut archive = zip::ZipArchive::new(file).expect("open zip archive");
+    let mut names = BTreeSet::new();
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).expect("read zip entry");
+        names.insert(entry.name().to_string());
+    }
+    names
 }
 
 fn seed_message_count_sort_fixture(home: &Path) {
@@ -1720,6 +1732,80 @@ fn merge_session_to_session_cross_source_shifts_timestamps_and_collapses_to_code
 }
 
 #[test]
+fn merge_dry_run_reports_append_plan_and_does_not_mutate_inputs() {
+    let fixture = TestFixture::seeded();
+    let claude_file = fixture
+        .home
+        .join(".claude")
+        .join("projects")
+        .join("-Users-test-proj")
+        .join("sess-claude-1.jsonl");
+    let codex_file = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-1.jsonl");
+    let before_claude = fs::read(&claude_file).expect("read source file before dry-run");
+    let before_codex = fs::read(&codex_file).expect("read target file before dry-run");
+
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-session",
+        "sess-claude-1",
+        "--to-session",
+        "sess-codex-1",
+        "--dry-run",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["dry_run"].as_bool(), Some(true));
+    assert!(json["zip_output"].is_null());
+    assert_eq!(json["total_sessions_merged"].as_i64(), Some(1));
+
+    let merge = &json["session_merges"].as_array().unwrap()[0];
+    assert_eq!(
+        merge["action"].as_str(),
+        Some("append-into-existing-session")
+    );
+    assert_eq!(
+        merge["target_file"].as_str(),
+        Some(codex_file.to_string_lossy().as_ref())
+    );
+
+    let source_files = merge["source_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(source_files.contains(claude_file.to_string_lossy().as_ref()));
+    assert!(source_files.contains(codex_file.to_string_lossy().as_ref()));
+
+    let resolved = json["resolved_history_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(resolved, source_files);
+
+    assert_eq!(
+        fs::read(&claude_file).expect("read source file after dry-run"),
+        before_claude
+    );
+    assert_eq!(
+        fs::read(&codex_file).expect("read target file after dry-run"),
+        before_codex
+    );
+}
+
+#[test]
 fn merge_agent_to_agent_project_creates_claude_sessions_with_transformed_models() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[
@@ -1884,6 +1970,127 @@ fn merge_agent_to_agent_session_filter_limits_the_copy_scope() {
     );
     let sessions_json = parse_stdout_json(&sessions_output);
     assert_eq!(sessions_json["total_sessions"].as_i64(), Some(1));
+}
+
+#[test]
+fn merge_dry_run_agent_to_agent_reports_create_plan_without_writing_target() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-agent",
+        "codex",
+        "--to-agent",
+        "claude",
+        "--project",
+        "/Users/test/codex-proj",
+        "--dry-run",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["dry_run"].as_bool(), Some(true));
+    assert!(json["zip_output"].is_null());
+    assert_eq!(json["total_sessions_merged"].as_i64(), Some(2));
+
+    let resolved = json["resolved_history_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(resolved.len(), 2);
+    for path in &resolved {
+        assert!(
+            path.contains("/.codex/sessions/"),
+            "unexpected path: {path}"
+        );
+    }
+
+    let merges = json["session_merges"].as_array().unwrap();
+    for merge in merges {
+        assert_eq!(merge["action"].as_str(), Some("create-target-session"));
+        let source_files = merge["source_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(source_files.len(), 1);
+        assert!(source_files[0].contains("/.codex/sessions/"));
+
+        let target_file = merge["target_file"].as_str().expect("target file path");
+        assert!(
+            !Path::new(target_file).exists(),
+            "dry-run should not create target file: {target_file}"
+        );
+    }
+}
+
+#[test]
+fn merge_dry_run_zip_output_creates_archive_of_resolved_history_inputs() {
+    let fixture = TestFixture::seeded();
+    let tmp = tempfile::tempdir().expect("temp dir for zip path");
+    let zip_path = tmp.path().join("merge-inputs.zip");
+
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-session",
+        "sess-claude-1",
+        "--to-session",
+        "sess-codex-1",
+        "--dry-run",
+        "--zip-output",
+        zip_path.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(zip_path.exists(), "expected zip archive to be created");
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(
+        json["zip_output"].as_str(),
+        Some(zip_path.to_string_lossy().as_ref())
+    );
+
+    let names = zip_entry_names(&zip_path);
+    assert!(names.contains(".claude/projects/-Users-test-proj/sess-claude-1.jsonl"));
+    assert!(names.contains(".codex/sessions/sess-codex-1.jsonl"));
+}
+
+#[test]
+fn merge_rejects_zip_output_without_dry_run() {
+    let fixture = TestFixture::seeded();
+    let tmp = tempfile::tempdir().expect("temp dir for zip path");
+    let zip_path = tmp.path().join("merge-inputs.zip");
+
+    let output = fixture.run_cli(&[
+        "merge",
+        "--from-session",
+        "sess-claude-1",
+        "--to-session",
+        "sess-codex-1",
+        "--zip-output",
+        zip_path.to_string_lossy().as_ref(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "merge should reject zip output without dry-run"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--zip-output requires --dry-run"),
+        "stderr={stderr}"
+    );
 }
 
 // --- prompt ---

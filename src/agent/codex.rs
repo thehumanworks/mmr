@@ -17,7 +17,7 @@ impl CodexAgent {
     fn build_thread_options(&self, developer_instructions: Option<&str>) -> ThreadOptions {
         ThreadOptions::builder()
             .skip_git_repo_check(true)
-            .model("gpt-5.4-mini")
+            .model("gpt-5.3-codex-spark")
             .model_reasoning_effort(codex_app_server_sdk::ModelReasoningEffort::High)
             .developer_instructions(developer_instructions.unwrap_or(""))
             .build()
