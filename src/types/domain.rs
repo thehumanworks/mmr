@@ -80,6 +80,8 @@ pub enum Agent {
     Gemini,
     #[clap(name = "codex")]
     Codex,
+    #[clap(name = "cursor")]
+    Cursor,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

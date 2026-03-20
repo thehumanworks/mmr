@@ -153,7 +153,7 @@ pub struct RememberArgs {
     /// Project name or path (omit to use current directory)
     #[arg(long, short = 'p', global = true)]
     project: Option<String>,
-    /// Agent to use (defaults to MMR_DEFAULT_REMEMBER_AGENT or codex)
+    /// Agent to use (defaults to MMR_DEFAULT_REMEMBER_AGENT or cursor / composer-2-fast)
     #[arg(long, value_enum, global = true)]
     agent: Option<Agent>,
     /// Override the output format and rules portion of the system instructions
@@ -195,7 +195,7 @@ pub struct PromptArgs {
     /// Target agent the prompt is optimized for
     #[arg(long, value_enum)]
     target: TargetAgent,
-    /// Backend agent to use for optimization (defaults to MMR_DEFAULT_REMEMBER_AGENT or codex)
+    /// Backend agent to use for optimization (defaults to MMR_DEFAULT_REMEMBER_AGENT or cursor / composer-2-fast)
     #[arg(long, value_enum)]
     agent: Option<Agent>,
     /// Project name or path (omit to use current directory)
@@ -517,7 +517,7 @@ fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
 fn effective_remember_agent(cli_agent: Option<Agent>) -> Agent {
     cli_agent
         .or_else(default_remember_agent_from_env)
-        .unwrap_or(Agent::Codex)
+        .unwrap_or(Agent::Cursor)
 }
 
 fn default_remember_agent_from_env() -> Option<Agent> {
@@ -530,6 +530,7 @@ fn parse_agent_env(value: &str) -> Option<Agent> {
     match value.trim().to_ascii_lowercase().as_str() {
         "" => None,
         "codex" => Some(Agent::Codex),
+        "cursor" => Some(Agent::Cursor),
         "gemini" => Some(Agent::Gemini),
         _ => None,
     }
@@ -715,6 +716,8 @@ mod tests {
     #[test]
     fn parse_agent_env_accepts_supported_values() {
         assert_eq!(parse_agent_env("codex"), Some(Agent::Codex));
+        assert_eq!(parse_agent_env("cursor"), Some(Agent::Cursor));
+        assert_eq!(parse_agent_env("CURSOR"), Some(Agent::Cursor));
         assert_eq!(parse_agent_env("GEMINI"), Some(Agent::Gemini));
         assert_eq!(parse_agent_env(""), None);
         assert_eq!(parse_agent_env("invalid"), None);
