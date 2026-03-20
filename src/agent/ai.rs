@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::agent::codex::CodexAgent;
+use crate::agent::cursor::CursorAgent;
 use crate::agent::gemini_api::Gemini;
 use crate::messages::service::QueryService;
 use crate::messages::utils::{format_messages_for_input, load_session_transcripts};
@@ -121,6 +122,26 @@ async fn remember_with_codex(
     ))
 }
 
+fn remember_with_cursor(
+    service: &QueryService,
+    request: RememberRequest<'_>,
+) -> Result<RememberResponse> {
+    let cursor = CursorAgent::new(request.model, None::<String>);
+    let system_instruction = build_system_instruction(request.instructions);
+
+    let sessions =
+        load_session_transcripts(service, request.project, &request.selection, request.source)?;
+    let formatted = format_messages_for_input(&sessions);
+    let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
+
+    let result = cursor.generate(&format!(
+        "<system>\n{}\n</system>\n\n<user>{}</user>\n",
+        system_instruction, input
+    ))?;
+
+    Ok(RememberResponse::new(Agent::Cursor, result))
+}
+
 pub async fn remember(
     service: &QueryService,
     request: RememberRequest<'_>,
@@ -128,6 +149,7 @@ pub async fn remember(
     match request.agent {
         Agent::Gemini => remember_with_gemini(service, request).await,
         Agent::Codex => remember_with_codex(service, request).await,
+        Agent::Cursor => remember_with_cursor(service, request),
     }
 }
 

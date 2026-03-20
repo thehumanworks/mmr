@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::process::Command;
 
 use crate::agent::codex::CodexAgent;
+use crate::agent::cursor::CursorAgent;
 use crate::agent::gemini_api::Gemini;
 use crate::messages::service::QueryService;
 use crate::messages::utils::{format_messages_for_input, load_session_transcripts};
@@ -227,6 +228,32 @@ async fn optimize_with_codex(
     })
 }
 
+fn optimize_with_cursor(
+    service: &QueryService,
+    request: PromptRequest<'_>,
+) -> Result<PromptResponse> {
+    let cursor = CursorAgent::new(None, None::<String>);
+    let system_instruction = build_optimizer_instruction(request.target);
+
+    let (session_context, codebase_context) = gather_context(service, &request);
+
+    let input = build_optimizer_input(
+        request.query,
+        session_context.as_deref(),
+        codebase_context.as_deref(),
+    );
+
+    let result = cursor.generate(&format!(
+        "<system>\n{}\n</system>\n\n<user>{}</user>\n",
+        system_instruction, input
+    ))?;
+
+    Ok(PromptResponse {
+        target: request.target,
+        prompt: result,
+    })
+}
+
 fn gather_context(
     service: &QueryService,
     request: &PromptRequest<'_>,
@@ -256,6 +283,7 @@ pub async fn optimize_prompt(
     match request.agent {
         Agent::Gemini => optimize_with_gemini(service, request).await,
         Agent::Codex => optimize_with_codex(service, request).await,
+        Agent::Cursor => optimize_with_cursor(service, request),
     }
 }
 

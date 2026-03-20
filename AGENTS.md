@@ -66,11 +66,11 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of both sources.
-- `MMR_DEFAULT_REMEMBER_AGENT=codex|gemini` sets the default `remember --agent` value when `--agent` is omitted.
+- `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` and `prompt --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
 
 ## Remember command and `--instructions` system prompt architecture
 
-The `remember` command sends session transcripts to the Gemini Interactions API with a system prompt composed of two parts:
+The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted). For each backend, the memory flow uses a system prompt composed of two parts:
 
 1. **Base instruction** (`MEMORY_AGENT_BASE_INSTRUCTION` in `src/agent/ai.rs`): Always present. Contains only the agent's identity ("You are a Memory Agent") and the input format description. Must **never** contain output-directing language (e.g. "continuity brief", "sole purpose", output quality directives).
 
@@ -80,9 +80,9 @@ The `remember` command sends session transcripts to the Gemini Interactions API 
 
 This separation ensures `--instructions` has full control over how the agent processes transcripts and formats its response, while preserving the agent's awareness of its role and input structure.
 
-The user prompt sent to Gemini is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
+The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
-Environment: requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`. Override the API base URL with `GEMINI_API_BASE_URL` (used by integration tests with a mock server).
+Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
 
 ## Coding Style & Naming Conventions
 
