@@ -10,7 +10,12 @@
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`), parallel ingest wiring in `mod.rs`.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/prompt.rs`: prompt-optimizer orchestration, transcript/codebase context gathering, and clipboard handoff for `prompt`.
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/cursor.rs`: Cursor backend integration for `remember` and `prompt`.
+- `src/merge/`: merge planning and application for Claude/Codex session history.
+- `src/sync/`: cloud sync configuration, manifests, daemon install helpers, and push/pull/status flows.
+- `README.md`: user-facing CLI overview, setup notes, sync runbook, and common pitfalls.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -46,9 +51,15 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json --project /path/to/proj` — return the remember response as JSON instead of the default Markdown.
+- `cargo run -- prompt "Add sync docs" --target codex --project /path/to/proj` — generate a target-specific prompt; output is plain text and clipboard copy is best-effort.
 - `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run` — validate and print a non-mutating merge plan, including resolved history inputs.
 - `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run --zip-output /tmp/mmr-merge-inputs.zip` — create a ZIP archive of the exact resolved dry-run history inputs before experimenting with a real merge.
+- `cargo run -- sync init` — interactively create `~/.config/mmr/sync.toml` for cloud sync.
+- `cargo run -- sync status` — report local-vs-remote sync state as JSON.
+- `cargo run -- sync push --dry-run` — preview uploads without transferring files.
+- `cargo run -- sync pull --dry-run` — preview downloads without transferring files.
+- `cargo run -- sync install --interval 30` — install the user-level background sync runner.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -68,6 +79,12 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_DEFAULT_SOURCE=codex|claude` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of both sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` and `prompt --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
 
+## Sync env overrides
+
+- `MMR_SYNC_ENDPOINT`, `MMR_SYNC_BUCKET`, `MMR_SYNC_ACCESS_KEY_ID`, and `MMR_SYNC_SECRET_ACCESS_KEY` override the corresponding values loaded from `~/.config/mmr/sync.toml` at runtime.
+- `sync push` uploads only `.jsonl` history files under the enabled source directories; `sync pull` is non-destructive and reports diverged files as conflicts instead of overwriting them.
+- `sync install` writes a user-level launchd or systemd wrapper that honors the configured quiet hours before running `mmr sync push`; manual sync commands are not delayed by quiet hours.
+
 ## Remember command and `--instructions` system prompt architecture
 
 The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted). For each backend, the memory flow uses a system prompt composed of two parts:
@@ -83,6 +100,13 @@ This separation ensures `--instructions` has full control over how the agent pro
 The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
 Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
+
+## Prompt command behavior
+
+- `prompt` defaults its project from the current working directory when `--project` is omitted.
+- It uses the same backend-agent resolution as `remember` (`MMR_DEFAULT_REMEMBER_AGENT`, then Cursor by default).
+- If prior session transcripts are available for the project, `prompt` uses them as context; otherwise it falls back to lightweight codebase context built from `rg --files` and a small query-keyword search.
+- The command writes plain prompt text to stdout and attempts a best-effort clipboard copy.
 
 ## Coding Style & Naming Conventions
 
