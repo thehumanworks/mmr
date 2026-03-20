@@ -2212,6 +2212,10 @@ fn prompt_for_codex_target_uses_codex_specific_instructions() {
         system.contains("AGENTS.md"),
         "codex target should reference AGENTS.md"
     );
+    assert!(
+        system.contains("<output_contract>"),
+        "codex target should include GPT-5.4 output contract guidance"
+    );
 }
 
 #[test]

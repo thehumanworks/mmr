@@ -1,11 +1,11 @@
 use anyhow::Result;
 
 use crate::source::resolve_home_dir;
+use crate::sync::SyncResponse;
 use crate::sync::config::SyncConfig;
 use crate::sync::manifest::{FileDiff, SyncManifest};
 use crate::sync::push::{collect_local_files, compute_sha256};
 use crate::sync::storage::StorageBackend;
-use crate::sync::SyncResponse;
 
 pub async fn execute(
     backend: &dyn StorageBackend,
