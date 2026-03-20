@@ -28,10 +28,7 @@ impl SyncLock {
                 .unwrap_or(Duration::ZERO);
 
             if age > STALE_TIMEOUT {
-                eprintln!(
-                    "Removing stale lock file (age: {}s)",
-                    age.as_secs()
-                );
+                eprintln!("Removing stale lock file (age: {}s)", age.as_secs());
                 fs::remove_file(&path).ok();
             } else {
                 anyhow::bail!(

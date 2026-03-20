@@ -3,9 +3,9 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use s3::Bucket;
 use s3::creds::Credentials;
 use s3::region::Region;
-use s3::Bucket;
 
 use crate::sync::config::SyncConfig;
 
@@ -52,8 +52,7 @@ impl R2Storage {
             None,
         )?;
 
-        let bucket = Bucket::new(&config.storage.bucket, region, credentials)?
-            .with_path_style();
+        let bucket = Bucket::new(&config.storage.bucket, region, credentials)?.with_path_style();
 
         Ok(Self { bucket })
     }
@@ -63,11 +62,7 @@ impl R2Storage {
 impl StorageBackend for R2Storage {
     async fn put_object(&self, key: &str, body: &[u8]) -> Result<String> {
         let response = self.bucket.put_object(key, body).await?;
-        let etag = response
-            .headers()
-            .get("etag")
-            .cloned()
-            .unwrap_or_default();
+        let etag = response.headers().get("etag").cloned().unwrap_or_default();
         Ok(etag)
     }
 
@@ -116,6 +111,12 @@ impl MemoryStorage {
         Self {
             objects: Mutex::new(BTreeMap::new()),
         }
+    }
+}
+
+impl Default for MemoryStorage {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

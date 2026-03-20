@@ -66,8 +66,7 @@ impl SyncManifest {
         let dir = path.parent().unwrap();
         fs::create_dir_all(dir)?;
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(&path, content)
-            .with_context(|| format!("failed to write {}", path.display()))
+        fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))
     }
 
     pub fn diff_file(&self, relative_path: &str, sha256: &str) -> FileDiff {
@@ -95,6 +94,12 @@ impl SyncManifest {
                 remote_etag,
             },
         );
+    }
+}
+
+impl Default for SyncManifest {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -157,10 +162,7 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         let parsed: SyncManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.files.len(), 1);
-        assert_eq!(
-            parsed.files["claude/proj/sess.jsonl"].sha256,
-            "abc"
-        );
+        assert_eq!(parsed.files["claude/proj/sess.jsonl"].sha256, "abc");
         assert_eq!(
             parsed.files["claude/proj/sess.jsonl"].remote_etag,
             Some("\"etag123\"".to_string())

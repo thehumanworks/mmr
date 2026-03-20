@@ -6,10 +6,10 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::source::resolve_home_dir;
+use crate::sync::SyncResponse;
 use crate::sync::config::SyncConfig;
 use crate::sync::manifest::{FileDiff, SyncManifest};
 use crate::sync::storage::StorageBackend;
-use crate::sync::SyncResponse;
 
 pub async fn execute(
     backend: &dyn StorageBackend,
@@ -51,16 +51,14 @@ pub async fn execute(
                 } else {
                     let etag = backend.put_object(&remote_key, &content).await?;
                     let now = now_iso8601();
-                    manifest.update_entry(
-                        relative_path.clone(),
-                        sha256,
-                        size,
-                        now,
-                        Some(etag),
-                    );
+                    manifest.update_entry(relative_path.clone(), sha256, size, now, Some(etag));
                     bytes_transferred += size;
                     files_processed += 1;
-                    let action = if diff == FileDiff::New { "new" } else { "modified" };
+                    let action = if diff == FileDiff::New {
+                        "new"
+                    } else {
+                        "modified"
+                    };
                     details.push(format!("uploaded ({}): {}", action, relative_path));
                 }
             }
@@ -91,10 +89,7 @@ pub async fn execute(
     })
 }
 
-pub fn collect_local_files(
-    home: &Path,
-    config: &SyncConfig,
-) -> Result<Vec<(String, PathBuf)>> {
+pub fn collect_local_files(home: &Path, config: &SyncConfig) -> Result<Vec<(String, PathBuf)>> {
     let mut files = Vec::new();
 
     if config.sources.claude {
@@ -116,11 +111,7 @@ pub fn collect_local_files(
     Ok(files)
 }
 
-fn collect_jsonl_files(
-    dir: &Path,
-    home: &Path,
-    files: &mut Vec<(String, PathBuf)>,
-) -> Result<()> {
+fn collect_jsonl_files(dir: &Path, home: &Path, files: &mut Vec<(String, PathBuf)>) -> Result<()> {
     for entry in WalkDir::new(dir).follow_links(false).into_iter().flatten() {
         let path = entry.path();
         if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("jsonl") {

@@ -3,11 +3,11 @@ use std::fs;
 use anyhow::{Context, Result};
 
 use crate::source::resolve_home_dir;
+use crate::sync::SyncResponse;
 use crate::sync::config::SyncConfig;
 use crate::sync::manifest::SyncManifest;
 use crate::sync::push::compute_sha256;
 use crate::sync::storage::StorageBackend;
-use crate::sync::SyncResponse;
 
 pub async fn execute(
     backend: &dyn StorageBackend,
@@ -65,9 +65,8 @@ pub async fn execute(
                     })?;
                 }
 
-                fs::write(&local_path, &content).with_context(|| {
-                    format!("failed to write {}", local_path.display())
-                })?;
+                fs::write(&local_path, &content)
+                    .with_context(|| format!("failed to write {}", local_path.display()))?;
 
                 // Update local manifest
                 let sha256 = compute_sha256(&content);
@@ -108,8 +107,8 @@ pub async fn execute(
 async fn fetch_remote_manifest(backend: &dyn StorageBackend) -> Result<SyncManifest> {
     match backend.get_object("mmr/manifest.json").await {
         Ok(data) => {
-            let manifest: SyncManifest = serde_json::from_slice(&data)
-                .context("failed to parse remote manifest")?;
+            let manifest: SyncManifest =
+                serde_json::from_slice(&data).context("failed to parse remote manifest")?;
             Ok(manifest)
         }
         Err(_) => {

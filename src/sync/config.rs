@@ -119,8 +119,8 @@ impl SyncConfig {
         }
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        let mut config: SyncConfig =
-            toml::from_str(&content).with_context(|| format!("invalid config in {}", path.display()))?;
+        let mut config: SyncConfig = toml::from_str(&content)
+            .with_context(|| format!("invalid config in {}", path.display()))?;
 
         // Environment variable overrides
         if let Ok(v) = std::env::var(ENV_SYNC_ENDPOINT) {
@@ -144,8 +144,7 @@ impl SyncConfig {
         let dir = path.parent().unwrap();
         fs::create_dir_all(dir)?;
 
-        let content = toml::to_string_pretty(self)
-            .context("failed to serialize config")?;
+        let content = toml::to_string_pretty(self).context("failed to serialize config")?;
         fs::write(&path, &content)
             .with_context(|| format!("failed to write {}", path.display()))?;
 
@@ -173,7 +172,8 @@ pub fn interactive_init() -> Result<String> {
         }
     }
 
-    let endpoint = prompt_input("Cloudflare R2 endpoint (https://<account_id>.r2.cloudflarestorage.com)")?;
+    let endpoint =
+        prompt_input("Cloudflare R2 endpoint (https://<account_id>.r2.cloudflarestorage.com)")?;
     let bucket = prompt_input("Bucket name")?;
     let access_key_id = prompt_input("Access Key ID")?;
     let secret_access_key = prompt_input("Secret Access Key")?;

@@ -1,10 +1,10 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
 use crate::sync::config::SyncConfig;
-use crate::sync::{detect_platform, Platform};
+use crate::sync::{Platform, detect_platform};
 
 const PLIST_LABEL: &str = "com.mmr.sync";
 const SYSTEMD_SERVICE: &str = "mmr-sync.service";
@@ -109,7 +109,7 @@ fn uninstall_launchd() -> Result<String> {
     Ok("Uninstalled macOS LaunchAgent.".to_string())
 }
 
-fn generate_plist(script_path: &PathBuf, interval: u32, log_dir: &PathBuf) -> String {
+fn generate_plist(script_path: &Path, interval: u32, log_dir: &Path) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -215,7 +215,7 @@ fn uninstall_systemd() -> Result<String> {
     Ok("Uninstalled systemd user timer.".to_string())
 }
 
-fn generate_systemd_service(script_path: &PathBuf) -> String {
+fn generate_systemd_service(script_path: &Path) -> String {
     format!(
         "[Unit]\n\
          Description=mmr conversation history sync\n\
@@ -307,6 +307,7 @@ fn find_mmr_binary() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_hour_extracts_correctly() {
@@ -363,7 +364,8 @@ mod tests {
 
     #[test]
     fn systemd_service_references_script() {
-        let service = generate_systemd_service(&PathBuf::from("/home/user/.config/mmr/sync-daemon.sh"));
+        let service =
+            generate_systemd_service(&PathBuf::from("/home/user/.config/mmr/sync-daemon.sh"));
         assert!(service.contains("ExecStart=/bin/bash /home/user/.config/mmr/sync-daemon.sh"));
         assert!(service.contains("Type=oneshot"));
     }

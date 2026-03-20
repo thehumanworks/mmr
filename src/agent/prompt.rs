@@ -55,27 +55,25 @@ pub const CLAUDE_TARGET_INSTRUCTION: &str = r#"## Target: Claude Code (Claude Op
 
 pub const CODEX_TARGET_INSTRUCTION: &str = r#"## Target: Codex CLI (GPT-5.4)
 
-### Optimize for Codex's strengths
-- Be concise and imperative — Codex works best with terse, action-oriented instructions.
-- Specify file paths and function names upfront — Codex excels at targeted edits when given exact locations.
-- Include test commands alongside implementation requests — GPT-5.4 generates better code when tests are specified upfront.
-- Use numbered steps for sequential tasks — Codex follows ordered instructions reliably.
-- Leverage AGENTS.md conventions if the project has one.
-- Define explicit output contracts and completion criteria.
+### Prompt shape for GPT-5.4
+- Use explicit XML-tagged contracts. Prefer `<output_contract>`, `<completeness_contract>`, `<missing_context_gating>`, and `<verification_loop>` instead of vague prose.
+- In `<output_contract>`, specify the exact sections, their order, the required format, any length limits, and "Do not include extra commentary."
+- In `<completeness_contract>`, state that the task is incomplete until every requested item is covered or marked `[blocked]`.
+- In `<missing_context_gating>`, tell Codex not to guess, to retrieve missing context when possible, and to ask one minimal clarifying question only if the missing information is not retrievable.
+- In `<verification_loop>`, require a final check for correctness, grounding in the available context, output format, and validation results.
 
-### Compensate for Codex's weaknesses
-- Include "Search the codebase first before adding new logic — reuse existing helpers and patterns." — Codex may miss existing utilities.
-- Add "Read the relevant files before making changes to understand existing patterns." — Codex can jump to edits without sufficient context.
-- Specify "Conform to existing codebase conventions: naming, formatting, patterns, and error handling style." — Codex may produce less idiomatic code.
-- Include explicit edge cases to handle — GPT-5.4 may miss edge cases if not enumerated.
-- Add "Do not use broad try/catch blocks or silent defaults — propagate errors explicitly."
-- Add "Batch logical edits together rather than making repeated micro-edits."
+### Execution and tool-use guidance
+- Add `<tool_persistence_rules>` so Codex keeps using tools until the task is complete and verification passes.
+- Add `<dependency_checks>` so prerequisite discovery happens before edits, not after.
+- Be concise and imperative, but make the task concrete: name file paths, functions, commands, edge cases, and success criteria.
+- Use numbered steps when sequence matters, and include explicit verification commands alongside implementation requests.
+- Reference AGENTS.md conventions if the project has one.
 
 ### Codex CLI harness conventions
-- Prefer `rg` over `grep` for file search (faster in Codex sandbox).
-- Include verification commands: "Run `[test command]` and confirm all tests pass."
-- Reference AGENTS.md file conventions if present.
-- Use the apply_patch tool for single-file edits."#;
+- Prefer `rg` over `grep` for search.
+- Tell Codex to read the relevant files before editing and reuse existing helpers and patterns.
+- Ask for focused edits that match the existing codebase conventions.
+- Use the apply_patch tool for single-file edits and batch logical edits together."#;
 
 fn build_optimizer_instruction(target: TargetAgent) -> String {
     let target_instruction = match target {
@@ -295,15 +293,27 @@ mod tests {
     }
 
     #[test]
-    fn codex_target_instruction_includes_terse_style_and_agents_md() {
+    fn codex_target_instruction_uses_gpt54_contract_patterns() {
         let instruction = build_optimizer_instruction(TargetAgent::Codex);
         assert!(
             instruction.contains("Prompt Optimizer"),
             "must include base identity"
         );
         assert!(
-            instruction.contains("concise and imperative"),
-            "Codex target must recommend terse style"
+            instruction.contains("<output_contract>"),
+            "Codex target must include output contracts"
+        );
+        assert!(
+            instruction.contains("<completeness_contract>"),
+            "Codex target must include completeness contracts"
+        );
+        assert!(
+            instruction.contains("<verification_loop>"),
+            "Codex target must include verification loop guidance"
+        );
+        assert!(
+            instruction.contains("<tool_persistence_rules>"),
+            "Codex target must include tool persistence guidance"
         );
         assert!(
             instruction.contains("AGENTS.md"),
