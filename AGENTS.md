@@ -10,8 +10,13 @@
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`), parallel ingest wiring in `mod.rs`.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/prompt.rs`: Prompt Optimizer orchestration for `mmr prompt`, including session/codebase context gathering and clipboard handoff.
+- `src/agent/cursor.rs`: Cursor backend wrapper for `remember` and `prompt`, including the default Cursor model selection.
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/merge/`: history merge planning and execution, including dry-run and ZIP backup behavior.
+- `src/sync/`: cloud sync config, manifest tracking, push/pull/status flows, and daemon install/uninstall helpers.
 - `adrs/`: architecture decision records.
+- `docs/cli-workflows.md`: user-facing CLI workflows, backend setup, merge dry-run notes, sync runbook, and troubleshooting.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
