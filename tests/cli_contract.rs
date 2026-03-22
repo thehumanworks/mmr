@@ -2513,3 +2513,103 @@ fn merge_rejects_ambiguous_session_ids_without_agent_hints() {
     assert!(stderr.contains("ambiguous"), "stderr={stderr}");
     assert!(stderr.contains("--from-agent"), "stderr={stderr}");
 }
+
+// --- pagination metadata ---
+
+#[test]
+fn messages_pagination_includes_next_page_and_next_command() {
+    let fixture = TestFixture::seeded();
+    // codex-proj has 6 messages (sess-codex-1: 2 + sess-codex-2: 4)
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--limit",
+        "2",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
+    assert_eq!(json["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(json["next_page"].as_bool().unwrap(), true);
+    assert_eq!(json["next_offset"].as_i64().unwrap(), 2);
+    let next_cmd = json["next_command"].as_str().unwrap();
+    assert!(next_cmd.contains("messages"), "next_command={next_cmd}");
+    assert!(next_cmd.contains("--limit 2"), "next_command={next_cmd}");
+    assert!(next_cmd.contains("--offset 2"), "next_command={next_cmd}");
+    assert!(
+        next_cmd.contains("--source codex"),
+        "next_command={next_cmd}"
+    );
+    assert!(
+        next_cmd.contains("--project /Users/test/codex-proj"),
+        "next_command={next_cmd}"
+    );
+}
+
+#[test]
+fn messages_pagination_no_next_command_when_all_results_fit() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--all",
+        "--limit",
+        "100",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["next_page"].as_bool().unwrap(), false);
+    assert!(json["next_command"].is_null());
+}
+
+#[test]
+fn messages_pagination_next_command_preserves_sort_and_order() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--all",
+        "--limit",
+        "2",
+        "-s",
+        "message-count",
+        "-o",
+        "desc",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["next_page"].as_bool().unwrap(), true);
+    let next_cmd = json["next_command"].as_str().unwrap();
+    assert!(
+        next_cmd.contains("--sort-by message-count"),
+        "next_command={next_cmd}"
+    );
+    assert!(
+        next_cmd.contains("--order desc"),
+        "next_command={next_cmd}"
+    );
+    assert!(next_cmd.contains("--all"), "next_command={next_cmd}");
+}

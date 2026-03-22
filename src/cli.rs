@@ -366,17 +366,30 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             offset,
             sort_by,
             order,
-        } => serialize(
-            &service.messages(
+        } => {
+            let mut response = service.messages(
                 session.as_deref(),
-                effective_project_scope(project, all).as_deref(),
+                effective_project_scope(project.clone(), all).as_deref(),
                 source_filter,
                 Some(limit),
                 offset,
                 SortOptions::new(sort_by, order),
-            ),
-            cli.pretty,
-        )?,
+            );
+            if response.next_page {
+                response.next_command = Some(build_next_messages_command(
+                    cli.source,
+                    cli.pretty,
+                    session.as_deref(),
+                    project.as_deref(),
+                    all,
+                    limit,
+                    response.next_offset as usize,
+                    sort_by,
+                    order,
+                ));
+            }
+            serialize(&response, cli.pretty)?
+        }
         Commands::Export { project } => {
             let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
             if let Some(proj) = project {
@@ -430,6 +443,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                 let response = ApiMessagesResponse {
                     messages,
                     total_messages: total,
+                    next_page: false,
+                    next_offset: total,
+                    next_command: None,
                 };
                 serialize(&response, cli.pretty)?
             }
@@ -616,6 +632,60 @@ fn resolve_project_from_dir(path: &Path) -> Result<(String, String)> {
 
 fn current_dir_project() -> Result<String> {
     Ok(std::env::current_dir()?.to_string_lossy().into_owned())
+}
+
+fn build_next_messages_command(
+    source: Option<SourceFilter>,
+    pretty: bool,
+    session: Option<&str>,
+    project: Option<&str>,
+    all: bool,
+    limit: usize,
+    next_offset: usize,
+    sort_by: SortBy,
+    order: SortOrder,
+) -> String {
+    let mut parts = vec!["mmr".to_string()];
+
+    if pretty {
+        parts.push("--pretty".to_string());
+    }
+    if let Some(s) = source {
+        let name = match s {
+            SourceFilter::Claude => "claude",
+            SourceFilter::Codex => "codex",
+            SourceFilter::Cursor => "cursor",
+        };
+        parts.push(format!("--source {name}"));
+    }
+
+    parts.push("messages".to_string());
+
+    if let Some(sess) = session {
+        parts.push(format!("--session {sess}"));
+    }
+    if let Some(proj) = project {
+        parts.push(format!("--project {proj}"));
+    }
+    if all {
+        parts.push("--all".to_string());
+    }
+
+    parts.push(format!("--limit {limit}"));
+    parts.push(format!("--offset {next_offset}"));
+
+    if sort_by != SortBy::Timestamp {
+        let name = match sort_by {
+            SortBy::Timestamp => "timestamp",
+            SortBy::MessageCount => "message-count",
+        };
+        parts.push(format!("--sort-by {name}"));
+    }
+    if order != SortOrder::Asc {
+        parts.push(format!("--order desc"));
+    }
+
+    parts.join(" ")
 }
 
 fn serialize<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
