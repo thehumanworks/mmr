@@ -10,8 +10,11 @@
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`), parallel ingest wiring in `mod.rs`.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/prompt.rs`: Prompt Optimizer orchestration — target-specific system instructions, transcript/codebase context gathering, backend dispatch, and clipboard copy.
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/sync/`: cloud sync config, manifest tracking, storage backend integration, push/pull/status flows, and daemon install/uninstall support.
 - `adrs/`: architecture decision records.
+- `docs/cli-workflows.md`: operator-facing workflows and runbooks for `mmr prompt` and `mmr sync`.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
@@ -47,8 +50,15 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
 - `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- prompt "fix auth bug" --target codex --project /path/to/proj` — generate an optimized raw-text prompt for a target coding agent using project history when available.
+- `cargo run -- --source codex prompt "add benchmark coverage" --target claude --project /path/to/proj` — limit prompt context gathering to one source while still targeting a different agent style.
 - `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run` — validate and print a non-mutating merge plan, including resolved history inputs.
 - `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run --zip-output /tmp/mmr-merge-inputs.zip` — create a ZIP archive of the exact resolved dry-run history inputs before experimenting with a real merge.
+- `cargo run -- sync init` — interactively create cloud sync configuration under `~/.config/mmr/sync.toml`.
+- `cargo run -- sync push --dry-run` — show which local history files would upload without mutating sync state.
+- `cargo run -- sync pull --dry-run` — show which remote history files would download; existing local files are never overwritten.
+- `cargo run -- sync status` — summarize local new/modified history, remote-only files, and hash divergences.
+- `cargo run -- sync install --interval 30` — install the background sync wrapper/timer with a custom cadence (quiet hours still come from config).
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -67,6 +77,10 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of both sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` and `prompt --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+
+## Workflow docs
+
+- `docs/cli-workflows.md` documents the durable operator-facing contracts for `mmr prompt` and `mmr sync`, including setup, JSON vs raw-text output behavior, dry-run semantics, daemon installation, lock-file recovery, and common pitfalls.
 
 ## Remember command and `--instructions` system prompt architecture
 
