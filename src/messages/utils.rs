@@ -89,6 +89,7 @@ fn parse_source_filter(source: &str) -> Option<SourceFilter> {
     match source {
         "claude" => Some(SourceFilter::Claude),
         "codex" => Some(SourceFilter::Codex),
+        "cursor" => Some(SourceFilter::Cursor),
         _ => None,
     }
 }

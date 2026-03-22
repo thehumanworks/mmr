@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum SourceFilter {
     Claude,
     Codex,
+    Cursor,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -43,6 +44,7 @@ impl SortOptions {
 pub enum SourceKind {
     Claude,
     Codex,
+    Cursor,
 }
 
 impl SourceKind {
@@ -50,6 +52,7 @@ impl SourceKind {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Cursor => "cursor",
         }
     }
 }
@@ -90,4 +93,5 @@ pub enum Agent {
 pub enum TargetAgent {
     Claude,
     Codex,
+    Cursor,
 }

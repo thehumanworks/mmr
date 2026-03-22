@@ -19,7 +19,7 @@ const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 #[derive(Parser, Debug)]
 #[command(
     name = "mmr",
-    about = "Browse AI conversation history from Claude and Codex"
+    about = "Browse AI conversation history from Claude, Codex, and Cursor"
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -27,7 +27,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub pretty: bool,
 
-    /// Filter by source: claude, codex (omit to use MMR_DEFAULT_SOURCE or both)
+    /// Filter by source: claude, codex, cursor (omit to use MMR_DEFAULT_SOURCE or all)
     #[arg(long, global = true, value_enum)]
     pub source: Option<SourceFilter>,
 
@@ -97,7 +97,7 @@ pub enum Commands {
         #[arg(short = 'o', long, default_value = "asc")]
         order: SortOrder,
     },
-    /// All messages for the current project (cwd) or --project, both sources, chronological
+    /// All messages for the current project (cwd) or --project, all sources, chronological
     Export {
         /// Project name or path (omit to use current directory)
         #[arg(long)]
@@ -386,6 +386,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             } else {
                 let (codex_path, claude_name) =
                     resolve_project_from_cwd().context("could not get current directory")?;
+                let cursor_name = claude_name.clone();
                 let mut messages: Vec<ApiMessage> = Vec::new();
                 if source_filter.is_none() || source_filter == Some(SourceFilter::Codex) {
                     let codex = service.messages(
@@ -408,6 +409,17 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         sort,
                     );
                     messages.extend(claude.messages);
+                }
+                if source_filter.is_none() || source_filter == Some(SourceFilter::Cursor) {
+                    let cursor = service.messages(
+                        None,
+                        Some(&cursor_name),
+                        Some(SourceFilter::Cursor),
+                        None,
+                        0,
+                        sort,
+                    );
+                    messages.extend(cursor.messages);
                 }
                 messages.sort_by(|a, b| {
                     a.timestamp
@@ -510,6 +522,7 @@ fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
         "" => None,
         "claude" => Some(SourceFilter::Claude),
         "codex" => Some(SourceFilter::Codex),
+        "cursor" => Some(SourceFilter::Cursor),
         _ => None,
     }
 }
@@ -708,6 +721,14 @@ mod tests {
         assert_eq!(
             parse_source_filter_env("CLAUDE"),
             Some(SourceFilter::Claude)
+        );
+        assert_eq!(
+            parse_source_filter_env("cursor"),
+            Some(SourceFilter::Cursor)
+        );
+        assert_eq!(
+            parse_source_filter_env("CURSOR"),
+            Some(SourceFilter::Cursor)
         );
         assert_eq!(parse_source_filter_env(""), None);
         assert_eq!(parse_source_filter_env("invalid"), None);

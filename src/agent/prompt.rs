@@ -76,10 +76,29 @@ pub const CODEX_TARGET_INSTRUCTION: &str = r#"## Target: Codex CLI (GPT-5.4)
 - Ask for focused edits that match the existing codebase conventions.
 - Use the apply_patch tool for single-file edits and batch logical edits together."#;
 
+pub const CURSOR_TARGET_INSTRUCTION: &str = r#"## Target: Cursor Agent (Composer)
+
+### Optimize for Cursor's strengths
+- Be direct and specific — Cursor's agent excels at focused, single-task instructions with clear file paths.
+- Reference specific files by path — Cursor automatically reads referenced files via tool calling.
+- Include concrete examples of desired output when the format matters.
+- Leverage Cursor's automatic file context: mention filenames and the agent will read them.
+- Frame multi-step tasks as sequential numbered steps with explicit verification.
+
+### Cursor Agent harness conventions
+- Cursor operates in print mode with --force for direct file modifications.
+- Specify output format when needed (text, json, stream-json).
+- Reference .cursorrules if the project has one.
+- Include test commands explicitly (e.g., "Run `cargo test` to verify").
+- Include file paths to read first before making changes.
+- Frame verification as: "After completing changes, run [command] and confirm [expected result]."
+- Keep prompts focused — Cursor works best with one clear objective per prompt."#;
+
 fn build_optimizer_instruction(target: TargetAgent) -> String {
     let target_instruction = match target {
         TargetAgent::Claude => CLAUDE_TARGET_INSTRUCTION,
         TargetAgent::Codex => CODEX_TARGET_INSTRUCTION,
+        TargetAgent::Cursor => CURSOR_TARGET_INSTRUCTION,
     };
     format!("{PROMPT_OPTIMIZER_BASE_INSTRUCTION}\n\n{target_instruction}")
 }
@@ -358,11 +377,13 @@ mod tests {
     }
 
     #[test]
-    fn both_targets_share_base_instruction() {
+    fn all_targets_share_base_instruction() {
         let claude = build_optimizer_instruction(TargetAgent::Claude);
         let codex = build_optimizer_instruction(TargetAgent::Codex);
+        let cursor = build_optimizer_instruction(TargetAgent::Cursor);
         assert!(claude.contains(PROMPT_OPTIMIZER_BASE_INSTRUCTION));
         assert!(codex.contains(PROMPT_OPTIMIZER_BASE_INSTRUCTION));
+        assert!(cursor.contains(PROMPT_OPTIMIZER_BASE_INSTRUCTION));
     }
 
     #[test]

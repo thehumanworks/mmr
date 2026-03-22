@@ -263,9 +263,9 @@ fn projects_without_source_returns_all_sources() {
     );
 
     let json = parse_stdout_json(&output);
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 10);
-    assert_eq!(json["total_sessions"].as_i64().unwrap(), 4);
-    // 3 codex projects + 1 claude project = we should see both sources
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 12);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 5);
+    // 3 codex projects + 1 claude project + 1 cursor project = we should see all sources
     let projects = json["projects"].as_array().unwrap();
     let sources: Vec<&str> = projects
         .iter()
@@ -275,6 +275,10 @@ fn projects_without_source_returns_all_sources() {
     assert!(
         sources.contains(&"claude"),
         "should include claude projects"
+    );
+    assert!(
+        sources.contains(&"cursor"),
+        "should include cursor projects"
     );
 }
 
@@ -368,6 +372,63 @@ fn source_all_is_rejected() {
     );
 }
 
+#[test]
+fn projects_with_source_cursor_filters() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["--source", "cursor", "projects"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let projects = json["projects"].as_array().unwrap();
+    assert!(!projects.is_empty(), "cursor projects should exist");
+    for project in projects {
+        assert_eq!(project["source"].as_str().unwrap(), "cursor");
+    }
+}
+
+#[test]
+fn messages_filtered_by_source_cursor() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli_with_env(&["--source", "cursor", "messages", "--all"], &[]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
+    let messages = json["messages"].as_array().unwrap();
+    for msg in messages {
+        assert_eq!(msg["source"].as_str().unwrap(), "cursor");
+    }
+}
+
+#[test]
+fn sessions_with_source_cursor() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli_with_env(&["--source", "cursor", "sessions", "--all"], &[]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 1);
+    let sessions = json["sessions"].as_array().unwrap();
+    for session in sessions {
+        assert_eq!(session["source"].as_str().unwrap(), "cursor");
+    }
+}
+
 // --- sessions ---
 
 #[test]
@@ -414,8 +475,8 @@ fn sessions_all_bypasses_cwd_discovery() {
 
     let json = parse_stdout_json(&output);
     let sessions = json["sessions"].as_array().unwrap();
-    assert_eq!(json["total_sessions"].as_i64().unwrap(), 6);
-    assert_eq!(sessions.len(), 6);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 7);
+    assert_eq!(sessions.len(), 7);
 
     let session_ids = sessions
         .iter()
@@ -462,7 +523,7 @@ fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() 
     let disabled_sessions_json = parse_stdout_json(&disabled_sessions);
     assert_eq!(
         disabled_sessions_json["total_sessions"].as_i64().unwrap(),
-        6
+        7
     );
 
     let enabled_sessions =
@@ -485,7 +546,7 @@ fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() 
     let disabled_messages_json = parse_stdout_json(&disabled_messages);
     assert_eq!(
         disabled_messages_json["total_messages"].as_i64().unwrap(),
-        14
+        16
     );
 
     let enabled_messages =
@@ -729,8 +790,8 @@ fn messages_all_bypasses_cwd_discovery() {
 
     let json = parse_stdout_json(&output);
     let messages = json["messages"].as_array().unwrap();
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 14);
-    assert_eq!(messages.len(), 14);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 16);
+    assert_eq!(messages.len(), 16);
     assert!(
         messages
             .iter()
@@ -930,14 +991,15 @@ fn default_source_empty_string_keeps_both_sources() {
 
     let json = parse_stdout_json(&output);
     let sessions = json["sessions"].as_array().unwrap();
-    assert_eq!(json["total_sessions"].as_i64().unwrap(), 6);
-    assert_eq!(sessions.len(), 6);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 7);
+    assert_eq!(sessions.len(), 7);
     let sources = sessions
         .iter()
         .map(|session| session["source"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert!(sources.contains(&"claude"));
     assert!(sources.contains(&"codex"));
+    assert!(sources.contains(&"cursor"));
 }
 
 #[test]
