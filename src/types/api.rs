@@ -58,6 +58,10 @@ pub struct ApiMessage {
 pub struct ApiMessagesResponse {
     pub messages: Vec<ApiMessage>,
     pub total_messages: i64,
+    pub next_page: bool,
+    pub next_offset: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_command: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
