@@ -16,6 +16,7 @@ impl TestFixture {
 
         seed_claude_fixture(&home);
         seed_codex_fixture(&home);
+        seed_cursor_fixture(&home);
 
         Self { _tmp: tmp, home }
     }
@@ -83,6 +84,22 @@ fn seed_claude_fixture(home: &Path) {
         &claude_session,
         r#"{"type":"user","sessionId":"sess-claude-1","message":{"role":"user","content":"hello from claude"},"timestamp":"2025-01-01T00:00:00","uuid":"u1","cwd":"/Users/test/proj"}
 {"type":"assistant","sessionId":"sess-claude-1","message":{"role":"assistant","content":"hi from assistant","model":"claude-3-opus","usage":{"input_tokens":100,"output_tokens":50}},"timestamp":"2025-01-01T00:01:00","uuid":"a1","parentUuid":"u1","cwd":"/Users/test/proj"}"#,
+    );
+}
+
+fn seed_cursor_fixture(home: &Path) {
+    let cursor_session = home
+        .join(".cursor")
+        .join("projects")
+        .join("-Users-test-cursor-proj")
+        .join("agent-transcripts")
+        .join("sess-cursor-1")
+        .join("sess-cursor-1.jsonl");
+
+    write_file(
+        &cursor_session,
+        r#"{"role":"user","message":{"content":[{"type":"text","text":"hello from cursor"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"hi from cursor assistant"}]}}"#,
     );
 }
 

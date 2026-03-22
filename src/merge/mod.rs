@@ -320,6 +320,9 @@ fn plan_append_into_existing_session(
             };
             (lines, model_strategy)
         }
+        SourceKind::Cursor => {
+            bail!("merging into Cursor sessions is not yet supported");
+        }
     };
 
     if timestamp_strategy == "shifted-to-append-after-target" {
@@ -421,6 +424,9 @@ fn plan_create_target_session(
                 format!("expanded-codex-provider-into-claude-assistant-models:{assistant_model}")
             };
             (target_file, lines, model_strategy)
+        }
+        SourceKind::Cursor => {
+            bail!("merging into Cursor sessions is not yet supported");
         }
     };
 
@@ -962,6 +968,7 @@ fn provider_for_new_codex_session(session: &SessionHandle) -> String {
     match session.source {
         SourceKind::Claude => "anthropic".to_string(),
         SourceKind::Codex => "openai".to_string(),
+        SourceKind::Cursor => "anthropic".to_string(),
     }
 }
 
@@ -999,7 +1006,7 @@ fn target_project_for_merge(
                 project_path,
             }
         }
-        SourceKind::Claude => {
+        SourceKind::Claude | SourceKind::Cursor => {
             let project_path = if source_session.project_path.trim().is_empty() {
                 source_session.project_name.clone()
             } else {
@@ -1046,6 +1053,7 @@ fn parse_source_kind(value: &str) -> Option<SourceKind> {
     match value {
         "claude" => Some(SourceKind::Claude),
         "codex" => Some(SourceKind::Codex),
+        "cursor" => Some(SourceKind::Cursor),
         _ => None,
     }
 }
@@ -1054,6 +1062,7 @@ fn source_filter_to_kind(value: SourceFilter) -> SourceKind {
     match value {
         SourceFilter::Claude => SourceKind::Claude,
         SourceFilter::Codex => SourceKind::Codex,
+        SourceFilter::Cursor => SourceKind::Cursor,
     }
 }
 
@@ -1061,6 +1070,7 @@ fn source_filter_as_str(value: SourceFilter) -> &'static str {
     match value {
         SourceFilter::Claude => "claude",
         SourceFilter::Codex => "codex",
+        SourceFilter::Cursor => "cursor",
     }
 }
 

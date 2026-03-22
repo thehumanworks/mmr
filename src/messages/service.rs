@@ -304,7 +304,7 @@ impl QueryService {
 }
 
 /// Resolve a project identifier against known projects, handling Codex path normalization.
-/// When source_filter is None, searches both sources.
+/// When source_filter is None, searches all sources.
 fn resolve_project(
     projects: &[ProjectAggregate],
     source_filter: Option<SourceFilter>,
@@ -332,6 +332,8 @@ fn resolve_project(
     let should_search_codex = source_filter.is_none() || source_filter == Some(SourceFilter::Codex);
     let should_search_claude =
         source_filter.is_none() || source_filter == Some(SourceFilter::Claude);
+    let should_search_cursor =
+        source_filter.is_none() || source_filter == Some(SourceFilter::Cursor);
 
     let mut matched_names = Vec::new();
 
@@ -356,6 +358,21 @@ fn resolve_project(
                 .iter()
                 .find(|item| {
                     item.source == SourceKind::Claude
+                        && (item.name == *candidate || item.original_path == *candidate)
+                })
+                .filter(|m| !matched_names.contains(&m.name))
+            {
+                matched_names.push(project_match.name.clone());
+            }
+        }
+    }
+
+    if should_search_cursor {
+        for candidate in &candidates {
+            if let Some(project_match) = projects
+                .iter()
+                .find(|item| {
+                    item.source == SourceKind::Cursor
                         && (item.name == *candidate || item.original_path == *candidate)
                 })
                 .filter(|m| !matched_names.contains(&m.name))
@@ -405,6 +422,7 @@ fn matches_source_filter(source: SourceKind, filter: Option<SourceFilter>) -> bo
         None => true,
         Some(SourceFilter::Claude) => source == SourceKind::Claude,
         Some(SourceFilter::Codex) => source == SourceKind::Codex,
+        Some(SourceFilter::Cursor) => source == SourceKind::Cursor,
     }
 }
 
