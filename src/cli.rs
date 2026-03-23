@@ -442,6 +442,7 @@ fn current_dir_project() -> Result<String> {
     Ok(std::env::current_dir()?.to_string_lossy().into_owned())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_next_messages_command(
     source: Option<SourceFilter>,
     pretty: bool,
@@ -490,7 +491,7 @@ fn build_next_messages_command(
         parts.push(format!("--sort-by {name}"));
     }
     if order != SortOrder::Asc {
-        parts.push(format!("--order desc"));
+        parts.push("--order desc".to_string());
     }
 
     parts.join(" ")

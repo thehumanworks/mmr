@@ -1129,15 +1129,59 @@ mod tests {
     #[test]
     fn messages_pagination_response_has_next_page_when_more_results() {
         let service = QueryService::from_messages(vec![
-            record(SourceKind::Claude, "-p", "s1", "user", "m1", "2025-01-01T00:00:00", 0),
-            record(SourceKind::Claude, "-p", "s1", "user", "m2", "2025-01-01T00:01:00", 1),
-            record(SourceKind::Claude, "-p", "s1", "user", "m3", "2025-01-01T00:02:00", 2),
-            record(SourceKind::Claude, "-p", "s1", "user", "m4", "2025-01-01T00:03:00", 3),
-            record(SourceKind::Claude, "-p", "s1", "user", "m5", "2025-01-01T00:04:00", 4),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m1",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m2",
+                "2025-01-01T00:01:00",
+                1,
+            ),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m3",
+                "2025-01-01T00:02:00",
+                2,
+            ),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m4",
+                "2025-01-01T00:03:00",
+                3,
+            ),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m5",
+                "2025-01-01T00:04:00",
+                4,
+            ),
         ]);
 
         let response = service.messages(
-            None, None, None, Some(2), 0,
+            None,
+            None,
+            None,
+            Some(2),
+            0,
             SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
         );
         assert_eq!(response.messages.len(), 2);
@@ -1149,13 +1193,41 @@ mod tests {
     #[test]
     fn messages_pagination_response_no_next_page_at_end() {
         let service = QueryService::from_messages(vec![
-            record(SourceKind::Claude, "-p", "s1", "user", "m1", "2025-01-01T00:00:00", 0),
-            record(SourceKind::Claude, "-p", "s1", "user", "m2", "2025-01-01T00:01:00", 1),
-            record(SourceKind::Claude, "-p", "s1", "user", "m3", "2025-01-01T00:02:00", 2),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m1",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m2",
+                "2025-01-01T00:01:00",
+                1,
+            ),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m3",
+                "2025-01-01T00:02:00",
+                2,
+            ),
         ]);
 
         let response = service.messages(
-            None, None, None, Some(2), 2,
+            None,
+            None,
+            None,
+            Some(2),
+            2,
             SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
         );
         assert_eq!(response.messages.len(), 1);
@@ -1167,12 +1239,32 @@ mod tests {
     #[test]
     fn messages_pagination_response_no_next_page_without_limit() {
         let service = QueryService::from_messages(vec![
-            record(SourceKind::Claude, "-p", "s1", "user", "m1", "2025-01-01T00:00:00", 0),
-            record(SourceKind::Claude, "-p", "s1", "user", "m2", "2025-01-01T00:01:00", 1),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m1",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Claude,
+                "-p",
+                "s1",
+                "user",
+                "m2",
+                "2025-01-01T00:01:00",
+                1,
+            ),
         ]);
 
         let response = service.messages(
-            None, None, None, None, 0,
+            None,
+            None,
+            None,
+            None,
+            0,
             SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
         );
         assert_eq!(response.messages.len(), 2);

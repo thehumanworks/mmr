@@ -1731,7 +1731,7 @@ fn messages_pagination_includes_next_page_and_next_command() {
     let json = parse_stdout_json(&output);
     assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
     assert_eq!(json["messages"].as_array().unwrap().len(), 2);
-    assert_eq!(json["next_page"].as_bool().unwrap(), true);
+    assert!(json["next_page"].as_bool().unwrap());
     assert_eq!(json["next_offset"].as_i64().unwrap(), 2);
     let next_cmd = json["next_command"].as_str().unwrap();
     assert!(next_cmd.contains("messages"), "next_command={next_cmd}");
@@ -1750,14 +1750,7 @@ fn messages_pagination_includes_next_page_and_next_command() {
 #[test]
 fn messages_pagination_no_next_command_when_all_results_fit() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
-        "--all",
-        "--limit",
-        "100",
-    ]);
+    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--limit", "100"]);
 
     assert!(
         output.status.success(),
@@ -1766,7 +1759,7 @@ fn messages_pagination_no_next_command_when_all_results_fit() {
     );
 
     let json = parse_stdout_json(&output);
-    assert_eq!(json["next_page"].as_bool().unwrap(), false);
+    assert!(!json["next_page"].as_bool().unwrap());
     assert!(json["next_command"].is_null());
 }
 
@@ -1793,16 +1786,13 @@ fn messages_pagination_next_command_preserves_sort_and_order() {
     );
 
     let json = parse_stdout_json(&output);
-    assert_eq!(json["next_page"].as_bool().unwrap(), true);
+    assert!(json["next_page"].as_bool().unwrap());
     let next_cmd = json["next_command"].as_str().unwrap();
     assert!(
         next_cmd.contains("--sort-by message-count"),
         "next_command={next_cmd}"
     );
-    assert!(
-        next_cmd.contains("--order desc"),
-        "next_command={next_cmd}"
-    );
+    assert!(next_cmd.contains("--order desc"), "next_command={next_cmd}");
     assert!(next_cmd.contains("--all"), "next_command={next_cmd}");
 }
 
@@ -1863,8 +1853,13 @@ fn messages_session_without_project_or_source_prints_hint() {
 fn messages_session_with_source_does_not_print_hint() {
     let fixture = TestFixture::seeded();
 
-    let output =
-        fixture.run_cli(&["--source", "claude", "messages", "--session", "sess-claude-1"]);
+    let output = fixture.run_cli(&[
+        "--source",
+        "claude",
+        "messages",
+        "--session",
+        "sess-claude-1",
+    ]);
     assert!(
         output.status.success(),
         "stderr={}",
