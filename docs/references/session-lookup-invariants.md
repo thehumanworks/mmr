@@ -29,6 +29,12 @@ hint: searching all sources for session; pass --source to narrow the search
 
 This nudges the caller toward a faster, more targeted lookup without blocking the operation.
 
+### Examples
+
+- `mmr messages --session sess-claude-1` searches every project across every source and prints the hint above on stderr.
+- `mmr --source claude messages --session sess-claude-1` still searches every project, but only within Claude history, so no hint is printed.
+- `mmr messages --session sess-claude-1 --project -Users-test-proj` restores explicit project scoping; if the chosen project does not contain that session, the result is empty.
+
 ### Contract tests
 
 Covered by integration tests in `tests/cli_contract.rs`:

@@ -1,9 +1,11 @@
 # Clap Derive Patterns
 
 ## Table of Contents
+
 - [Root Parser + Global Flags](#root-parser--global-flags)
 - [Subcommand Layout](#subcommand-layout)
 - [Sort Enums and Defaults](#sort-enums-and-defaults)
+- [Nested Args for `remember`](#nested-args-for-remember)
 - [Upstream Clap Patterns (via wit)](#upstream-clap-patterns-via-wit)
 - [Gotchas](#gotchas)
 
@@ -21,54 +23,110 @@ pub struct Cli {
 
     #[arg(long, global = true, value_enum)]
     pub source: Option<SourceFilter>,
+
+    #[command(subcommand)]
+    pub command: Commands,
 }
 ```
 
-Source: `src/cli.rs:8-24`
+Source: `src/cli.rs`
 
 ## Subcommand Layout
 
-Keep each subcommand as a structured variant with typed args.
+Keep each subcommand as a structured variant with typed args and explicit defaults.
 
 ```rust
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Projects {
-        #[arg(long)]
-        limit: Option<usize>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        #[arg(long, default_value = "last-activity")]
-        sort_by: ProjectSortBy,
+        #[arg(short = 's', long, default_value = "timestamp")]
+        sort_by: SortBy,
+        #[arg(short = 'o', long, default_value = "desc")]
+        order: SortOrder,
     },
     Sessions {
         #[arg(long)]
-        project: String,
+        project: Option<String>,
         #[arg(long)]
-        limit: Option<usize>,
+        all: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
+    Messages {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    Remember(RememberArgs),
 }
 ```
 
-Source: `src/cli.rs:27-55`
+Source: `src/cli.rs`
 
 ## Sort Enums and Defaults
 
-Use `ValueEnum` + kebab-case names to preserve wire compatibility.
+Use `ValueEnum` + kebab-case names to preserve CLI and JSON compatibility.
 
 ```rust
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[clap(rename_all = "kebab-case")]
-pub enum SessionSortBy {
+#[serde(rename_all = "kebab-case")]
+pub enum SortBy {
     #[default]
-    #[value(name = "last-activity")]
-    LastActivity,
+    Timestamp,
     #[value(name = "message-count")]
     MessageCount,
 }
 ```
 
-Source: `src/model.rs:25-40`
+`SortOrder` follows the same pattern:
+
+```rust
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[clap(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+```
+
+Source: `src/types/domain.rs`
+
+## Nested Args for `remember`
+
+Use `Args` for shared flags and a nested `Subcommand` for selectors like `all` and `session <id>`.
+
+```rust
+#[derive(Args, Debug)]
+pub struct RememberArgs {
+    #[arg(long, short = 'p', global = true)]
+    project: Option<String>,
+    #[arg(long, value_enum, global = true)]
+    agent: Option<Agent>,
+    #[arg(short = 'O', long = "output-format", value_enum, default_value = "md", global = true)]
+    output_format: RememberOutputFormatArg,
+    #[command(subcommand)]
+    selection: Option<RememberSelectorCommand>,
+}
+
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum RememberSelectorCommand {
+    All,
+    Session { session_id: String },
+}
+```
+
+Source: `src/cli.rs`
 
 ## Upstream Clap Patterns (via wit)
 
@@ -111,3 +169,4 @@ Source: `clap-rs/clap/tests/derive/subcommands.rs:185-200`
   - Source: `clap-rs/clap/clap_derive/src/item.rs:885-890`
 - Keep `#[arg(default_value_t)]` type-safe; mismatched types fail derive.
   - Source: `clap-rs/clap/tests/derive_ui/default_value_t_invalid.rs:14-16`
+- Keep clap help text aligned with runtime behavior. `messages --session <id>` has special scoping semantics, and `remember` defaults to markdown output, so derive annotations and surrounding docs must stay in sync with `run_cli`.

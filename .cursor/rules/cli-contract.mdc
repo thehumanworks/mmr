@@ -12,12 +12,13 @@ alwaysApply: false
   - `--source all` is not a valid value.
   - The read/query commands (`projects`, `sessions`, `messages`, `export`, `remember`) work without `--source`.
 - `sessions` and `messages` accept optional `--project`, optional `--all`, and `messages` accepts optional `--session`.
-  - When `--project` is given without `--source`, search both sources.
+  - When `--project` is given without `--source`, search all supported sources.
   - Without `--project` and without `--all`, auto-discover the cwd project by default.
   - If cwd auto-discovery fails, fall back to all items across all projects/sources.
   - If cwd auto-discovery succeeds but there are no matching records, return the empty result instead of falling back.
+  - `messages --session <id>` without `--project` is the exception: skip cwd auto-discovery and search all projects instead. If `--source` is also omitted, print the stderr hint about narrowing the search with `--source`.
 - `export` accepts optional `--project`.
-- `export` with no `--project` infers project from cwd: Codex = canonical path, Claude = path with `/` → `-` and leading hyphen. Output is `ApiMessagesResponse` (same as `messages`). `--source` applies to export the same way (filters which source(s) are queried).
+- `export` with no `--project` infers project from cwd: Codex = canonical path, Claude/Cursor = path with `/` → `-` and leading hyphen. Output is `ApiMessagesResponse` (same as `messages`). `--source` applies to export the same way (filters which source(s) are queried).
 - `remember` sends session transcripts to the backend chosen by `--agent` (`gemini`, `codex`, or `cursor`). When `--agent` is omitted, `MMR_DEFAULT_REMEMBER_AGENT` applies if set; otherwise the default is `cursor` (`composer-2-fast` unless `--model` is set). Memory-agent calls use a two-part system prompt:
   - Base (always present): agent identity + input format only. Must not contain output-directing language.
   - Output instruction (replaceable): without `--instructions`, uses the default (Purpose, Output Format, Rules, Resume Instructions). With `--instructions`, the user's text fully replaces the default output instruction.

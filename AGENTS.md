@@ -8,9 +8,10 @@
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and response contract semantics.
+- `src/types/query.rs`: shared query options such as sort fields and sort order.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -35,19 +36,21 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source cursor projects` — list projects from cursor only.
 - `cargo run -- sessions` — list sessions for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- sessions --all` — list sessions across all projects and sources.
-- `cargo run -- sessions --project /Users/test/codex-proj` — sessions for a project (searches both sources).
+- `cargo run -- sessions --project /Users/test/codex-proj` — sessions for a project (searches all supported sources unless `--source` narrows it).
 - `cargo run -- --source codex sessions --project /Users/test/codex-proj` — sessions for a specific source and project.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
-- `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- messages --session sess-123` — messages for a specific session across all projects when `--project` is omitted; prints a stderr hint suggesting `--source` when the lookup spans every source.
+- `cargo run -- --source claude messages --session sess-123` — the same session lookup narrowed to one source, suppressing the hint.
+- `cargo run -- messages --project /Users/test/codex-proj --limit 25 --offset 25` — page through one project's messages; use the response `next_command` to continue with the same filters.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
-- `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
+- `cargo run -- export` — all messages for the current directory (cwd) as project, across Claude, Codex, and Cursor, in chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
-- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session.
+- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session; stdout defaults to markdown.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json --project /path/to/proj` — return the remember response as JSON instead of the default markdown brief.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -59,6 +62,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` is the exception to cwd scoping: without `--project`, it skips auto-discovery and searches all projects because the session ID is already the primary lookup key. If `--source` is also omitted, the CLI prints a stderr hint suggesting `--source` to narrow the search.
+- `ApiMessagesResponse` includes `next_page`, `next_offset`, and `next_command`. When another page exists, `next_command` preserves the active filters (`--source`, `--project`, `--all`, `--sort-by`, `--order`, `--limit`) so callers can continue pagination without rebuilding the command manually.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
@@ -82,6 +87,11 @@ This separation ensures `--instructions` has full control over how the agent pro
 The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
 Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
+
+Operational constraints:
+
+- `remember` defaults to markdown output (`-O md`). Use `-O json` for machine-readable automation output.
+- `--model` is forwarded to the Gemini and Cursor remember backends. The Codex remember backend currently uses the built-in `gpt-5.4-mini` model with medium reasoning effort and does not expose a runtime model override.
 
 ## Coding Style & Naming Conventions
 
