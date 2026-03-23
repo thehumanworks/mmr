@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use super::api::ApiMessage;
-use super::domain::{SourceFilter, TargetAgent};
+use super::domain::SourceFilter;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RememberSelection {
@@ -30,22 +30,6 @@ pub(crate) struct SessionSelection {
     pub session_id: String,
     pub project_name: String,
     pub source: SourceFilter,
-}
-
-// Prompt command types
-pub struct PromptRequest<'a> {
-    pub agent: super::domain::Agent,
-    pub target: TargetAgent,
-    pub query: &'a str,
-    pub project: &'a str,
-    pub source: Option<SourceFilter>,
-    pub model: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PromptResponse {
-    pub target: TargetAgent,
-    pub prompt: String,
 }
 
 // Gemini API types
