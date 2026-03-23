@@ -366,17 +366,31 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             offset,
             sort_by,
             order,
-        } => serialize(
-            &service.messages(
-                session.as_deref(),
-                effective_project_scope(project, all).as_deref(),
-                source_filter,
-                Some(limit),
-                offset,
-                SortOptions::new(sort_by, order),
-            ),
-            cli.pretty,
-        )?,
+        } => {
+            // When a session ID is provided without an explicit project,
+            // skip cwd auto-discovery and search all projects instead.
+            let project_scope = if session.is_some() && project.is_none() {
+                if source_filter.is_none() {
+                    eprintln!(
+                        "hint: searching all sources for session; pass --source to narrow the search"
+                    );
+                }
+                None
+            } else {
+                effective_project_scope(project, all)
+            };
+            serialize(
+                &service.messages(
+                    session.as_deref(),
+                    project_scope.as_deref(),
+                    source_filter,
+                    Some(limit),
+                    offset,
+                    SortOptions::new(sort_by, order),
+                ),
+                cli.pretty,
+            )?
+        }
         Commands::Export { project } => {
             let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
             if let Some(proj) = project {
