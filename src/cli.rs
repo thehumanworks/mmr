@@ -209,9 +209,22 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             sort_by,
             order,
         } => {
+            // When a session ID is provided without an explicit project,
+            // skip cwd auto-discovery and search all projects instead.
+            let project_scope = if session.is_some() && project.is_none() {
+                if source_filter.is_none() {
+                    eprintln!(
+                        "hint: searching all sources for session; pass --source to narrow the search"
+                    );
+                }
+                None
+            } else {
+                effective_project_scope(project.clone(), all)
+            };
+
             let mut response = service.messages(
                 session.as_deref(),
-                effective_project_scope(project.clone(), all).as_deref(),
+                project_scope.as_deref(),
                 source_filter,
                 Some(limit),
                 offset,

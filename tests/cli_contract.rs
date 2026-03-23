@@ -1805,3 +1805,110 @@ fn messages_pagination_next_command_preserves_sort_and_order() {
     );
     assert!(next_cmd.contains("--all"), "next_command={next_cmd}");
 }
+
+// ---------------------------------------------------------------------------
+// messages --session without --project bypasses cwd auto-discovery
+// ---------------------------------------------------------------------------
+
+#[test]
+fn messages_session_without_project_searches_all_projects() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+
+    // With auto-discovery enabled and a valid cwd project, passing --session
+    // but NOT --project should still return the session even though it belongs
+    // to a different project (the seeded claude session lives under
+    // /Users/test/proj, not the cwd project).
+    let output = fixture.run_cli_in_dir_with_env(
+        &["messages", "--session", "sess-claude-1"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(
+        messages.len(),
+        2,
+        "should find sess-claude-1 even though cwd points to a different project"
+    );
+    assert_eq!(messages[0]["session_id"].as_str().unwrap(), "sess-claude-1");
+}
+
+#[test]
+fn messages_session_without_project_or_source_prints_hint() {
+    let fixture = TestFixture::seeded();
+
+    let output = fixture.run_cli(&["messages", "--session", "sess-claude-1"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--source"),
+        "expected hint about --source in stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn messages_session_with_source_does_not_print_hint() {
+    let fixture = TestFixture::seeded();
+
+    let output =
+        fixture.run_cli(&["--source", "claude", "messages", "--session", "sess-claude-1"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("--source"),
+        "hint should NOT appear when --source is provided, got: {stderr}"
+    );
+}
+
+#[test]
+fn messages_session_with_explicit_project_uses_project_scope() {
+    let fixture = TestFixture::seeded();
+
+    // When --project is explicitly provided alongside --session, the project
+    // filter should apply (no bypass).
+    let output = fixture.run_cli(&[
+        "messages",
+        "--session",
+        "sess-claude-1",
+        "--project=-Users-test-proj",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+
+    // Asking for a project that doesn't contain the session → 0 messages
+    let empty_output = fixture.run_cli(&[
+        "messages",
+        "--session",
+        "sess-claude-1",
+        "--project",
+        "/Users/test/codex-proj",
+    ]);
+    assert!(empty_output.status.success());
+    let empty_json = parse_stdout_json(&empty_output);
+    assert_eq!(empty_json["total_messages"].as_i64().unwrap(), 0);
+}
