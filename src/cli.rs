@@ -1,15 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::agent::ai;
-use crate::agent::prompt;
-use crate::merge::{self, MergeRequest};
 use crate::messages::service::QueryService;
 use crate::types::{
-    Agent, ApiMessage, ApiMessagesResponse, PromptRequest, RememberRequest, RememberResponse,
-    RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter, TargetAgent,
+    Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
+    SortBy, SortOptions, SortOrder, SourceFilter,
 };
 
 const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
@@ -105,47 +103,6 @@ pub enum Commands {
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
-    /// Generate an optimized prompt for a target AI coding agent
-    Prompt(PromptArgs),
-    /// Merge history between sessions or sources
-    #[command(after_help = MERGE_AFTER_HELP)]
-    Merge(MergeArgs),
-    /// Sync conversation history with cloud storage
-    Sync(SyncArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct SyncArgs {
-    #[command(subcommand)]
-    pub action: SyncAction,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum SyncAction {
-    /// Initialize sync configuration (interactive setup)
-    Init,
-    /// Push local conversation history to cloud storage
-    Push {
-        /// Only show what would be pushed without actually uploading
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Pull remote conversation history to local (non-destructive)
-    Pull {
-        /// Only show what would be pulled without actually downloading
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Show sync status: what's changed locally and remotely
-    Status,
-    /// Install the background sync daemon/agent
-    Install {
-        /// Interval in minutes between syncs
-        #[arg(long, default_value_t = 15)]
-        interval: u32,
-    },
-    /// Remove the background sync daemon/agent
-    Uninstall,
 }
 
 #[derive(Args, Debug)]
@@ -184,121 +141,6 @@ impl RememberArgs {
             Some(RememberSelectorCommand::Session { session_id }) => RememberSelection::Session {
                 session_id: session_id.clone(),
             },
-        }
-    }
-}
-
-#[derive(Args, Debug)]
-pub struct PromptArgs {
-    /// What you want to accomplish (the task description)
-    query: String,
-    /// Target agent the prompt is optimized for
-    #[arg(long, value_enum)]
-    target: TargetAgent,
-    /// Backend agent to use for optimization (defaults to MMR_DEFAULT_REMEMBER_AGENT or cursor / composer-2-fast)
-    #[arg(long, value_enum)]
-    agent: Option<Agent>,
-    /// Project name or path (omit to use current directory)
-    #[arg(long, short = 'p')]
-    project: Option<String>,
-    /// Override backend model
-    #[arg(long)]
-    model: Option<String>,
-}
-
-const MERGE_AFTER_HELP: &str = "\
-Examples:
-  mmr merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run
-  mmr merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run --zip-output /tmp/mmr-merge-inputs.zip
-  mmr merge --from-session sess-claude-1 --to-session sess-codex-1
-  mmr merge --from-session sess-claude-1 --from-agent claude --to-session sess-codex-1 --to-agent codex
-  mmr merge --from-agent codex --to-agent claude --project /Users/test/codex-proj
-  mmr merge --from-agent claude --to-agent codex --session sess-claude-1 --project /Users/test/proj";
-
-#[derive(Args, Debug)]
-pub struct MergeArgs {
-    /// Source session ID for a session-to-session merge
-    #[arg(long, conflicts_with = "session")]
-    from_session: Option<String>,
-    /// Destination session ID for a session-to-session merge
-    #[arg(long, conflicts_with = "session")]
-    to_session: Option<String>,
-    /// Source agent for an agent-to-agent merge or for session disambiguation
-    #[arg(long, value_enum)]
-    from_agent: Option<SourceFilter>,
-    /// Destination agent for an agent-to-agent merge or for session disambiguation
-    #[arg(long, value_enum)]
-    to_agent: Option<SourceFilter>,
-    /// Narrow an agent-to-agent merge to one source session
-    #[arg(long, conflicts_with_all = ["from_session", "to_session"])]
-    session: Option<String>,
-    /// Narrow an agent-to-agent merge to one project
-    #[arg(long, conflicts_with_all = ["from_session", "to_session"])]
-    project: Option<String>,
-    /// Validate and print the merge plan without mutating history files
-    #[arg(long)]
-    dry_run: bool,
-    /// Write a ZIP archive of the resolved dry-run history inputs
-    #[arg(long, value_name = "PATH")]
-    zip_output: Option<String>,
-}
-
-impl MergeArgs {
-    fn into_request(self, global_source: Option<SourceFilter>) -> Result<MergeRequest> {
-        if global_source.is_some() {
-            anyhow::bail!(
-                "merge does not use the global --source flag; use --from-agent/--to-agent or let sessions infer their source"
-            );
-        }
-
-        if self.zip_output.is_some() && !self.dry_run {
-            anyhow::bail!("--zip-output requires --dry-run");
-        }
-
-        let execution = if self.dry_run {
-            merge::MergeExecution::DryRun {
-                zip_output: self.zip_output.map(PathBuf::from),
-            }
-        } else {
-            merge::MergeExecution::Apply
-        };
-
-        match (
-            self.from_session,
-            self.to_session,
-            self.from_agent,
-            self.to_agent,
-            self.session,
-            self.project,
-        ) {
-            (Some(from_session), Some(to_session), from_agent, to_agent, None, None) => {
-                Ok(MergeRequest {
-                    execution,
-                    operation: merge::MergeOperation::SessionToSession {
-                        from_session,
-                        to_session,
-                        from_agent,
-                        to_agent,
-                    },
-                })
-            }
-            (None, None, Some(from_agent), Some(to_agent), session, project) => Ok(MergeRequest {
-                execution,
-                operation: merge::MergeOperation::AgentToAgent {
-                    from_agent,
-                    to_agent,
-                    session,
-                    project,
-                },
-            }),
-            (Some(_), None, _, _, _, _) | (None, Some(_), _, _, _, _) => {
-                anyhow::bail!(
-                    "session-to-session merges require both --from-session and --to-session"
-                )
-            }
-            _ => anyhow::bail!(
-                "choose one merge mode: --from-session/--to-session or --from-agent/--to-agent"
-            ),
         }
     }
 }
@@ -454,53 +296,6 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             )
             .await?;
             format_remember_response(&response, remember.output_format, cli.pretty)?
-        }
-        Commands::Prompt(prompt_args) => {
-            let project = match prompt_args.project {
-                Some(project) => project,
-                None => current_dir_project().context("could not resolve current directory")?,
-            };
-
-            let response = prompt::optimize_prompt(
-                &service,
-                PromptRequest {
-                    agent: effective_remember_agent(prompt_args.agent),
-                    target: prompt_args.target,
-                    query: &prompt_args.query,
-                    project: &project,
-                    source: source_filter,
-                    model: prompt_args.model.as_deref(),
-                },
-            )
-            .await?;
-
-            prompt::try_copy_to_clipboard(&response.prompt);
-            response.prompt
-        }
-        Commands::Merge(merge_args) => {
-            let request = merge_args.into_request(cli.source)?;
-            let response = merge::merge(&service, request)?;
-            serialize(&response, cli.pretty)?
-        }
-        Commands::Sync(sync_args) => {
-            use crate::sync;
-            match sync_args.action {
-                SyncAction::Init => sync::run_init()?,
-                SyncAction::Push { dry_run } => {
-                    let response = sync::run_push(dry_run).await?;
-                    serialize(&response, cli.pretty)?
-                }
-                SyncAction::Pull { dry_run } => {
-                    let response = sync::run_pull(dry_run).await?;
-                    serialize(&response, cli.pretty)?
-                }
-                SyncAction::Status => {
-                    let response = sync::run_status().await?;
-                    serialize(&response, cli.pretty)?
-                }
-                SyncAction::Install { interval } => sync::run_install(interval)?,
-                SyncAction::Uninstall => sync::run_uninstall()?,
-            }
         }
     };
 
@@ -834,175 +629,17 @@ mod tests {
     }
 
     #[test]
-    fn merge_session_mode_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "merge",
-            "--from-session",
-            "sess-a",
-            "--from-agent",
-            "claude",
-            "--to-session",
-            "sess-b",
-            "--to-agent",
-            "codex",
-        ])
-        .expect("merge session mode should parse");
-
-        let Commands::Merge(merge) = parsed.command else {
-            panic!("expected merge command");
-        };
-        assert_eq!(merge.from_session.as_deref(), Some("sess-a"));
-        assert_eq!(merge.to_session.as_deref(), Some("sess-b"));
-        assert_eq!(merge.from_agent, Some(SourceFilter::Claude));
-        assert_eq!(merge.to_agent, Some(SourceFilter::Codex));
+    fn prompt_command_is_rejected() {
+        assert!(Cli::try_parse_from(["mmr", "prompt", "fix bug", "--target", "codex"]).is_err());
     }
 
     #[test]
-    fn merge_agent_mode_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "merge",
-            "--from-agent",
-            "codex",
-            "--to-agent",
-            "claude",
-            "--project",
-            "/Users/test/proj",
-            "--session",
-            "sess-a",
-        ])
-        .expect("merge agent mode should parse");
-
-        let Commands::Merge(merge) = parsed.command else {
-            panic!("expected merge command");
-        };
-        assert_eq!(merge.from_agent, Some(SourceFilter::Codex));
-        assert_eq!(merge.to_agent, Some(SourceFilter::Claude));
-        assert_eq!(merge.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(merge.session.as_deref(), Some("sess-a"));
+    fn merge_command_is_rejected() {
+        assert!(Cli::try_parse_from(["mmr", "merge", "--from-session", "sess-a"]).is_err());
     }
 
     #[test]
-    fn merge_dry_run_mode_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "merge",
-            "--from-session",
-            "sess-a",
-            "--to-session",
-            "sess-b",
-            "--dry-run",
-            "--zip-output",
-            "/tmp/merge-inputs.zip",
-        ])
-        .expect("merge dry-run mode should parse");
-
-        let Commands::Merge(merge) = parsed.command else {
-            panic!("expected merge command");
-        };
-        assert_eq!(merge.from_session.as_deref(), Some("sess-a"));
-        assert_eq!(merge.to_session.as_deref(), Some("sess-b"));
-        assert!(merge.dry_run);
-        assert_eq!(merge.zip_output.as_deref(), Some("/tmp/merge-inputs.zip"));
-    }
-
-    #[test]
-    fn prompt_command_parses_with_all_flags() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "prompt",
-            "add user authentication",
-            "--target",
-            "claude",
-            "--agent",
-            "gemini",
-            "--project",
-            "/Users/test/proj",
-            "--model",
-            "gemini-2.5-pro",
-        ]);
-
-        let parsed = parsed.expect("prompt with all flags should parse");
-        let Commands::Prompt(prompt) = parsed.command else {
-            panic!("expected prompt command");
-        };
-        assert_eq!(prompt.query, "add user authentication");
-        assert_eq!(prompt.target, TargetAgent::Claude);
-        assert_eq!(prompt.agent, Some(Agent::Gemini));
-        assert_eq!(prompt.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(prompt.model.as_deref(), Some("gemini-2.5-pro"));
-    }
-
-    #[test]
-    fn prompt_command_parses_minimal() {
-        let parsed = Cli::try_parse_from(["mmr", "prompt", "fix bug", "--target", "codex"]);
-
-        let parsed = parsed.expect("prompt with minimal args should parse");
-        let Commands::Prompt(prompt) = parsed.command else {
-            panic!("expected prompt command");
-        };
-        assert_eq!(prompt.query, "fix bug");
-        assert_eq!(prompt.target, TargetAgent::Codex);
-        assert_eq!(prompt.agent, None);
-        assert_eq!(prompt.project, None);
-        assert_eq!(prompt.model, None);
-    }
-
-    #[test]
-    fn prompt_command_requires_target() {
-        assert!(Cli::try_parse_from(["mmr", "prompt", "some query"]).is_err());
-    }
-
-    #[test]
-    fn prompt_command_requires_query() {
-        assert!(Cli::try_parse_from(["mmr", "prompt", "--target", "claude"]).is_err());
-    }
-
-    #[test]
-    fn prompt_command_rejects_invalid_target() {
-        assert!(Cli::try_parse_from(["mmr", "prompt", "some query", "--target", "gpt"]).is_err());
-    }
-
-    #[test]
-    fn merge_requires_one_mode() {
-        let args = MergeArgs {
-            from_session: None,
-            to_session: None,
-            from_agent: Some(SourceFilter::Codex),
-            to_agent: None,
-            session: None,
-            project: None,
-            dry_run: false,
-            zip_output: None,
-        };
-
-        let error = args
-            .into_request(None)
-            .expect_err("merge should reject incomplete mode");
-        assert!(error.to_string().contains("choose one merge mode"));
-    }
-
-    #[test]
-    fn merge_rejects_zip_output_without_dry_run() {
-        let args = MergeArgs {
-            from_session: Some("sess-a".to_string()),
-            to_session: Some("sess-b".to_string()),
-            from_agent: None,
-            to_agent: None,
-            session: None,
-            project: None,
-            dry_run: false,
-            zip_output: Some("/tmp/merge-inputs.zip".to_string()),
-        };
-
-        let error = args
-            .into_request(None)
-            .expect_err("merge should reject zip output without dry-run");
-        assert!(
-            error
-                .to_string()
-                .contains("--zip-output requires --dry-run")
-        );
+    fn sync_command_is_rejected() {
+        assert!(Cli::try_parse_from(["mmr", "sync", "status"]).is_err());
     }
 }

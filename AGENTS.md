@@ -48,8 +48,6 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
 - `cargo run -- remember -O md` — output as markdown instead of JSON.
-- `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run` — validate and print a non-mutating merge plan, including resolved history inputs.
-- `cargo run -- merge --from-session sess-claude-1 --to-session sess-codex-1 --dry-run --zip-output /tmp/mmr-merge-inputs.zip` — create a ZIP archive of the exact resolved dry-run history inputs before experimenting with a real merge.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -67,7 +65,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
-- `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` and `prompt --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+- `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
 
 ## Remember command and `--instructions` system prompt architecture
 

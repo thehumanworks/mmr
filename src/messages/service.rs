@@ -26,10 +26,6 @@ impl QueryService {
         Ok(Self::from_messages(messages))
     }
 
-    pub(crate) fn records(&self) -> &[MessageRecord] {
-        &self.messages
-    }
-
     fn from_messages(messages: Vec<MessageRecord>) -> Self {
         let mut project_map: HashMap<(SourceKind, String), ProjectAggregateState> = HashMap::new();
         let mut session_map: HashMap<(SourceKind, String, String), SessionAggregateState> =

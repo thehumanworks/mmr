@@ -6,13 +6,10 @@ pub mod source;
 
 pub use agent::{
     CodexGenerateRequest, CodexGenerateResponse, GeminiGenerateRequest, GeminiGenerateResponse,
-    InteractionInput, InteractionInputType, PromptRequest, PromptResponse, RememberRequest,
-    RememberSelection,
+    InteractionInput, InteractionInputType, RememberRequest, RememberSelection,
 };
 pub use api::{
-    ApiMergeResponse, ApiMergeSession, ApiMessage, ApiMessagesResponse, ApiProject,
-    ApiProjectsResponse, ApiSession, ApiSessionsResponse, RememberResponse,
+    ApiMessage, ApiMessagesResponse, ApiProject, ApiProjectsResponse, ApiSession,
+    ApiSessionsResponse, RememberResponse,
 };
-pub use domain::{
-    Agent, MessageRecord, SortBy, SortOptions, SortOrder, SourceFilter, SourceKind, TargetAgent,
-};
+pub use domain::{Agent, MessageRecord, SortBy, SortOptions, SortOrder, SourceFilter, SourceKind};
