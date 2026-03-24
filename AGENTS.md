@@ -6,13 +6,16 @@
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
-- `src/types/`: public API response types and sort/source enums.
+- `src/types/api.rs`: public API response types for projects, sessions, messages, and remember output.
+- `src/types/domain.rs`: shared domain types such as source filters, sort options, agents, and `MessageRecord`.
+- `src/types/query.rs`: internal aggregation and project-resolution structs used by the query layer.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and project/session query semantics.
+- `src/messages/utils.rs`: shared query helpers and pagination utilities.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
-- `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
+- `docs/tech-debt/`: tech-debt documentation guidance and templates for codebase review follow-up (see `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
 - `tests/common/mod.rs`: fixture + temp `HOME` helpers.
@@ -59,6 +62,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` skips cwd auto-discovery when `--project` is omitted and searches all projects instead; without `--source`, it also prints a stderr hint suggesting `--source` to narrow the lookup. See `docs/references/session-lookup-invariants.md`.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
