@@ -52,7 +52,7 @@ The acceptance bar is behavioral, not internal. A user must be able to stand in 
   Rationale: The user explicitly requested two distinct branches: discovery failure falls back to global results, while a valid discovered project with no messages must return an empty list.
   Date/Author: 2026-03-18 / Codex
 
-- Decision: Apply `MMR_DEFAULT_SOURCE` to the CLI-level default source only when `--source` is absent, and accept only `codex`, `claude`, or empty.
+- Decision: Apply `MMR_DEFAULT_SOURCE` to the CLI-level default source only when `--source` is absent, and accept only `codex`, `claude`, `cursor`, or empty.
   Rationale: This mirrors existing flag precedence and keeps invalid env input non-fatal. A bad env var should degrade to the historical "both sources" behavior rather than break the CLI.
   Date/Author: 2026-03-18 / Codex
 
@@ -183,7 +183,7 @@ When cwd resolution succeeds but the discovered project has no history, the comm
 
 `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd auto-discovery, while `MMR_AUTO_DISCOVER_PROJECT=1` keeps it enabled.
 
-`MMR_DEFAULT_SOURCE` supplies the default source for commands that use `cli.source`, but explicit `--source` overrides it and empty or invalid env values preserve the historical “both sources” behavior.
+`MMR_DEFAULT_SOURCE` supplies the default source for commands that use `cli.source`, including `cursor`, but explicit `--source` overrides it and empty or invalid env values preserve the historical “both sources” behavior.
 
 `MMR_DEFAULT_REMEMBER_AGENT` supplies the default `remember` agent, but explicit `--agent` overrides it.
 

@@ -8,9 +8,9 @@
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -40,6 +40,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
 - `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- --source claude messages --session sess-123` — session lookup narrowed to one source; avoids the all-sources session lookup path.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
@@ -59,6 +60,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` bypasses cwd project auto-discovery when `--project` is omitted and searches all projects instead. When `--source` is also omitted, it prints a stderr hint recommending `--source` for a narrower lookup.
+- `ApiMessagesResponse` includes pagination metadata: `next_page`, `next_offset`, and `next_command`. `next_command` is emitted only when another page is available and preserves the active filters, sorting, and `--all` flag.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
@@ -66,6 +69,11 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+
+## History data root
+
+- `mmr` reads transcript data from `SIMPLEMMR_HOME` when it is set; otherwise it falls back to the resolved `HOME` directory.
+- This matters in tests and automation: if `mmr` appears to miss expected history files, check `SIMPLEMMR_HOME` before debugging source-specific loaders.
 
 ## Remember command and `--instructions` system prompt architecture
 
