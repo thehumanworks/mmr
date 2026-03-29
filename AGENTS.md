@@ -7,10 +7,10 @@
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
-- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), home-directory resolution, and parallel ingest wiring in `mod.rs`.
+- `src/messages/`: in-memory aggregation, filtering, sorting, pagination, and contract semantics (`service.rs`, `utils.rs`).
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -66,6 +66,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+- `SIMPLEMMR_HOME=/path/to/home` overrides the home directory used for history discovery before falling back to the OS home directory. This is primarily useful for hermetic tests and local fixture-driven debugging.
 
 ## Remember command and `--instructions` system prompt architecture
 
@@ -102,7 +103,7 @@ Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMI
 
 ## Commit & Pull Request Guidelines
 
-- No project commit history exists yet; use imperative, concise commit messages (e.g., `add cli source filtering tests`).
+- Use imperative, concise commit messages (e.g., `add cli source filtering tests`).
 - In PRs, include: scope summary, contract changes, commands run, and relevant test/lint/build outputs.
 - Avoid mixing refactors with behavior changes unless the PR clearly separates them.
 
