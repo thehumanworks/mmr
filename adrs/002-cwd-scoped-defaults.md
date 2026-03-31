@@ -12,7 +12,7 @@ Accepted
 
 ADR-001 made `sessions` and `messages` progressively explorable by allowing all filters to be omitted. That improved discovery, but it also made the most common workflow noisier: users often run `mmr` from inside a project directory because they want the history for that project, not the combined history for every project on disk.
 
-The repository already had one cwd-aware behavior in `export`, which infers the project from the current working directory using the canonical path for Codex and the slash-to-hyphen form for Claude. `remember` also already defaults its project from cwd. `sessions` and `messages` were the remaining commands that still required an explicit `--project` to feel project-local.
+The repository already had one cwd-aware behavior in `export`, which infers the project from the current working directory using the canonical path for Codex and the slash-to-hyphen form for Claude and Cursor. `remember` also already defaults its project from cwd. `sessions` and `messages` were the remaining commands that still required an explicit `--project` to feel project-local.
 
 The change must preserve two edge cases explicitly:
 
@@ -44,7 +44,7 @@ Both `sessions` and `messages` gain `--all`.
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`.
 - `MMR_AUTO_DISCOVER_PROJECT=1` or unset keeps cwd project auto-discovery enabled.
-- `MMR_DEFAULT_SOURCE=codex|claude` supplies the default source filter when `--source` is omitted.
+- `MMR_DEFAULT_SOURCE=codex|claude|cursor` supplies the default source filter when `--source` is omitted.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` supplies the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` overrides).
 
 Empty or invalid values for `MMR_DEFAULT_SOURCE` and `MMR_DEFAULT_REMEMBER_AGENT` are treated as unset so the CLI remains usable.
