@@ -4,13 +4,17 @@
 
 `mmr` is a Rust CLI focused on local Claude/Codex/Cursor history parsing.
 
+- `README.md`: operator-facing entrypoint covering transcript locations, quick start, env vars, and troubleshooting.
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
-- `src/cli.rs`: clap command surface and command routing.
-- `src/types/`: public API response types and sort/source enums.
-- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
-- `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/cli.rs`: clap command surface, cwd/default resolution, pagination command synthesis, and command routing.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and response-envelope semantics.
+- `src/messages/utils.rs`: session transcript loading and formatting used by `remember`.
+- `src/types/`: public API response types plus source/sort/domain enums and query aggregates.
+- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), home-dir resolution, and parallel ingest wiring in `mod.rs`.
+- `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, backend dispatch, session selection, transcript formatting, and the `remember()` entry point.
+- `src/agent/gemini_api.rs`: Gemini API client (model, API key resolution, HTTP transport).
+- `src/agent/cursor.rs`: Cursor `agent` CLI wrapper for remember generation.
+- `src/agent/codex.rs`: Codex app-server client with the repo's fixed default model/reasoning settings.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -47,7 +51,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember` — emits Markdown by default.
+- `cargo run -- remember -O json` — emit JSON instead of the default Markdown.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -59,7 +64,14 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` bypasses cwd project auto-discovery when `--project` is omitted and searches all projects instead. If `--source` is also omitted, the CLI prints a narrowing hint on stderr and still returns JSON on stdout.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
+
+## Messages pagination contract
+
+- `ApiMessagesResponse` includes `next_page`, `next_offset`, and optional `next_command`.
+- `next_command` is emitted only when another page exists and preserves the effective CLI filters (`--source`, `--project`, `--session`, `--all`, `--sort-by`, `--order`, `--pretty`).
+- When sorting messages by ascending timestamp, pagination is computed from the newest window and the returned page is then re-ordered chronologically. This preserves the historical "latest N messages, but readable oldest-to-newest within the page" behavior.
 
 ## CLI default env vars
 
@@ -69,7 +81,15 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Remember command and `--instructions` system prompt architecture
 
-The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted). For each backend, the memory flow uses a system prompt composed of two parts:
+The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted) and emits Markdown by default unless `--output-format json` is requested.
+
+Backend notes:
+
+- **Cursor**: uses the local `agent` CLI and honors `--model`, defaulting to `composer-2-fast`.
+- **Gemini**: uses `GOOGLE_API_KEY` or `GEMINI_API_KEY`, supports `GEMINI_API_BASE_URL`, and honors `--model`.
+- **Codex**: uses the app-server SDK and currently fixes the backend model to `gpt-5.4-mini` with medium reasoning effort; `--model` does not override that backend.
+
+For each backend, the memory flow uses a system prompt composed of two parts:
 
 1. **Base instruction** (`MEMORY_AGENT_BASE_INSTRUCTION` in `src/agent/ai.rs`): Always present. Contains only the agent's identity ("You are a Memory Agent") and the input format description. Must **never** contain output-directing language (e.g. "continuity brief", "sole purpose", output quality directives).
 

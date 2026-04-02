@@ -125,7 +125,7 @@ pub struct RememberArgs {
         global = true
     )]
     output_format: RememberOutputFormatArg,
-    /// Gemini model to use
+    /// Backend model override (currently used by Cursor and Gemini)
     #[arg(long, global = true)]
     model: Option<String>,
     /// Session selector (omit for latest)
