@@ -14,6 +14,8 @@ alwaysApply: false
 - `sessions` and `messages` accept optional `--project`, optional `--all`, and `messages` accepts optional `--session`.
   - When `--project` is given without `--source`, search both sources.
   - Without `--project` and without `--all`, auto-discover the cwd project by default.
+  - Exception: `messages --session <id>` without `--project` bypasses cwd auto-discovery and searches all projects instead.
+  - When that `messages --session <id>` lookup also omits `--source`, print the stderr hint `hint: searching all sources for session; pass --source to narrow the search`.
   - If cwd auto-discovery fails, fall back to all items across all projects/sources.
   - If cwd auto-discovery succeeds but there are no matching records, return the empty result instead of falling back.
 - `export` accepts optional `--project`.

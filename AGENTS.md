@@ -39,7 +39,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source codex sessions --project /Users/test/codex-proj` — sessions for a specific source and project.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
-- `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- messages --session sess-123` — messages for a specific session across all projects when `--project` is omitted; prints a stderr hint suggesting `--source` when the source is also omitted.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
@@ -59,6 +59,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` is the exception: when `--project` is omitted, it bypasses cwd auto-discovery and searches all projects instead because session IDs are treated as global lookups. If `--source` is also omitted, the CLI prints `hint: searching all sources for session; pass --source to narrow the search` on stderr.
+- `mmr messages --session <id> --project <path>` still honors the explicit project scope; the bypass applies only when `--session` is present and `--project` is absent.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
