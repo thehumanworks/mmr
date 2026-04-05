@@ -4,15 +4,16 @@
 
 `mmr` is a Rust CLI focused on local Claude/Codex/Cursor history parsing.
 
+- `README.md`: quick start, command overview, setup, and troubleshooting entrypoint.
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and project resolution semantics.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
-- `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
+- `docs/tech-debt/`: tech-debt process docs and templates (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
 - `tests/common/mod.rs`: fixture + temp `HOME` helpers.
@@ -39,7 +40,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source codex sessions --project /Users/test/codex-proj` — sessions for a specific source and project.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
-- `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- messages --session sess-123` — messages for a specific session; if `--project` is omitted, searches all projects and prints a narrowing hint unless `--source` is set.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
@@ -47,7 +48,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json` — output JSON instead of the default markdown continuity brief.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -66,6 +67,16 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+- `SIMPLEMMR_HOME=/tmp/mmr-home` overrides the home directory used for transcript discovery (useful for fixture-driven runs and debugging missing history).
+
+## Troubleshooting and common pitfalls
+
+- `mmr sessions` and `mmr messages` scope to the auto-discovered cwd project by default. If you expected global history, pass `--all` or set `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` intentionally bypasses cwd auto-discovery when `--project` is omitted and searches all projects instead. Without `--source`, the CLI prints a stderr hint suggesting `--source` for a narrower lookup.
+- `mmr messages` pagination metadata lives in `ApiMessagesResponse`: use `next_page` / `next_offset` for automation, and `next_command` when you want a ready-to-run follow-up CLI invocation.
+- `mmr remember` defaults to markdown output. Use `-O json` if a script needs machine-readable output.
+- `remember` backend requirements differ by agent: Cursor needs `CURSOR_API_KEY` and the `agent` CLI on `PATH`; Gemini needs `GOOGLE_API_KEY` or `GEMINI_API_KEY`; Codex uses the local Codex CLI authentication flow.
+- When invoking `mmr` from scripts, pass `--project` and the project value as separate argv entries so the value is not quoted literally.
 
 ## Remember command and `--instructions` system prompt architecture
 

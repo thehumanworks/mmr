@@ -1,13 +1,17 @@
 # mmr Query Contract
 
 ## Table of Contents
-- [Projects Response Contract](#projects-response-contract)
-- [Sessions Response Contract](#sessions-response-contract)
-- [Messages Response Contract](#messages-response-contract)
-- [Sorting and Pagination Semantics](#sorting-and-pagination-semantics)
-- [Codex Project Normalization](#codex-project-normalization)
 
-## Projects Response Contract
+- [Response Shapes](#response-shapes)
+- [Per-item Metadata](#per-item-metadata)
+- [Sorting and Pagination Semantics](#sorting-and-pagination-semantics)
+- [Project Resolution Semantics](#project-resolution-semantics)
+
+## Response Shapes
+
+All public query response structs live in `src/types/api.rs`.
+
+### Projects
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -18,58 +22,99 @@ pub struct ApiProjectsResponse {
 }
 ```
 
-Source: `src/model.rs:81-86`
-
-## Sessions Response Contract
+### Sessions
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiSessionsResponse {
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub sessions: Vec<ApiSession>,
+    pub total_sessions: i64,
 }
 ```
 
-Source: `src/model.rs:101-107`
-
-## Messages Response Contract
+### Messages
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiMessagesResponse {
-    pub session_id: String,
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub messages: Vec<ApiMessage>,
+    pub total_messages: i64,
+    pub next_page: bool,
+    pub next_offset: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_command: Option<String>,
 }
 ```
 
-Source: `src/model.rs:121-127`
+`next_command` is optional. `QueryService::messages` returns it as `None`; the CLI layer populates it when another page exists and it can suggest a follow-up `mmr messages ...` invocation.
+
+## Per-item Metadata
+
+The response envelopes stay small; source and project metadata live on each returned session/message item.
+
+### `ApiSession`
+
+`ApiSession` includes:
+
+- `session_id`
+- `source`
+- `project_name`
+- `project_path`
+- `first_timestamp`
+- `last_timestamp`
+- `message_count`
+- `user_messages`
+- `assistant_messages`
+- `preview`
+
+### `ApiMessage`
+
+`ApiMessage` includes:
+
+- `session_id`
+- `source`
+- `project_name`
+- `role`
+- `content`
+- `model`
+- `timestamp`
+- `is_subagent`
+- `msg_type`
+- `input_tokens`
+- `output_tokens`
 
 ## Sorting and Pagination Semantics
 
-Projects sort defaults to `last-activity`; messages paginate from newest then reverse to chronological output.
+Sort enums live in `src/types/domain.rs`:
+
+- `SortBy::Timestamp` (default)
+- `SortBy::MessageCount`
+- `SortOrder::Asc`
+- `SortOrder::Desc`
+
+Key rules from `src/messages/service.rs`:
+
+- `projects` and `sessions` use deterministic tie-breakers so results stay stable when primary sort fields match.
+- `messages` sorts chronologically by timestamp, then `source_file`, then `line_index`, and finally `session_id`.
+- When sorting messages by `timestamp asc`, pagination preserves the historical CLI contract: select the newest window first, then reverse that page back into chronological order before returning it.
 
 ```rust
-let descending = chronological.into_iter().rev().collect::<Vec<_>>();
+let descending = filtered.into_iter().rev().collect::<Vec<_>>();
 let mut paged = apply_pagination(descending, limit, offset);
 paged.reverse();
 ```
 
-Source: `src/query.rs:317-319`
+That means a default `messages` query still returns each page oldest-to-newest, even though pagination advances through the newest messages first.
 
-Projects and sessions sort tie-breakers preserve deterministic ordering:
-- Projects: `last_activity/message_count/session_count` then name
-- Sessions: selected metric then `session_id`
+## Project Resolution Semantics
 
-Source: `src/query.rs:416-463`
+Project resolution lives in `src/messages/service.rs` and is intentionally source-aware:
 
-## Codex Project Normalization
+- With no `--source` filter, project matching searches across Codex, Claude, and Cursor names.
+- Codex project lookups accept either `/path/to/proj` or `path/to/proj`.
+- Claude and Cursor project matching uses the stored project identifier from their transcript directories.
 
-Codex `sessions --project` accepts either with or without leading slash:
+Codex normalization accepts both leading-slash forms:
 
 ```rust
 if trimmed.starts_with('/') {
@@ -82,4 +127,4 @@ if trimmed.starts_with('/') {
 }
 ```
 
-Source: `src/query.rs:384-391`
+Do not move `source`, `project_name`, or `project_path` back onto the top-level response envelopes; downstream callers depend on the current per-item metadata layout.
