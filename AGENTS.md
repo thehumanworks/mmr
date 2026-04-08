@@ -6,11 +6,13 @@
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
+- `README.md`: primary user-facing CLI overview, quickstart, and troubleshooting.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/types/query.rs`: internal aggregation states and project-resolution helpers.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -47,7 +49,9 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json` — emit machine-readable JSON instead of the default markdown.
+- `cargo run -- --pretty messages --all --limit 5` — pretty-print JSON for human inspection without changing the schema.
+- `cargo run -- sessions --all --sort-by message-count --order desc` — rank sessions by total message count.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -66,6 +70,17 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+
+## CLI output, sorting, and pagination
+
+- `--pretty` is a global flag that pretty-prints JSON on stdout; schema fields do not change.
+- `projects`, `sessions`, and `messages` all accept `--sort-by timestamp|message-count` and `--order asc|desc`.
+- `projects` and `sessions` default to `--sort-by timestamp --order desc`; `messages` defaults to `--sort-by timestamp --order asc`.
+- For `messages --sort-by message-count`, messages are ordered by their parent session's total message count, then by message chronology as a tie-breaker.
+- `ApiMessagesResponse` includes `next_page`, `next_offset`, and optional `next_command`. `next_command` is only populated when another page exists and mirrors the active source, project/session, paging, and sorting flags.
+- Under the default `messages` ordering (`timestamp asc`), limit/offset select the newest window first and then return that window in chronological order.
+- `export` reuses `ApiMessagesResponse` and always returns chronological output. It sets `next_page` to `false` and `next_command` to `null`.
+- `remember` writes Markdown by default; use `-O json` when another tool needs structured output.
 
 ## Remember command and `--instructions` system prompt architecture
 
