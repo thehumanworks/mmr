@@ -8,9 +8,9 @@
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -64,8 +64,9 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 ## CLI default env vars
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
-- `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
+- `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty, invalid, or unset preserves the default of all sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+- `SIMPLEMMR_HOME=/path/to/home` overrides home-directory discovery for all source loaders. Use it in tests, CI, or troubleshooting when the history files live somewhere other than the current user's real home directory.
 
 ## Remember command and `--instructions` system prompt architecture
 
@@ -82,6 +83,14 @@ This separation ensures `--instructions` has full control over how the agent pro
 The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
 Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
+
+Backend defaults and troubleshooting:
+
+- **Cursor** defaults to model `composer-2-fast` and shells out to `agent -f --approve-mcps --model <model> -p <input>`. Missing `CURSOR_API_KEY` or a missing `agent` binary fails the command immediately.
+- **Codex** defaults to model `gpt-5.4-mini` with medium reasoning effort and connects through the Codex WebSocket client.
+- **Gemini** defaults to model `gemini-3.1-flash-lite-preview` and POSTs to `${GEMINI_API_BASE_URL:-https://generativelanguage.googleapis.com/v1beta}/interactions` with `x-goog-api-key`.
+- `remember` first looks up sessions for the chosen project and fails with `No sessions found for project ...` if no transcripts match.
+- When `--project` is omitted, `remember` uses the raw `current_dir()` string, while `export`, `sessions`, and `messages` canonicalize cwd before deriving project identifiers. Prefer `--project <canonical-path>` for symlinked directories or when matching projects returned by `mmr projects`.
 
 ## Coding Style & Naming Conventions
 
