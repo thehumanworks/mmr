@@ -4,6 +4,8 @@
 
 Superseded by ADR-002
 
+This ADR is historical context only. It predates Cursor support and the cwd-scoped defaults added later. For the current `--source` and environment-variable behavior, see ADR-002 and `src/cli.rs`.
+
 ## Date
 
 2026-02-25

@@ -52,7 +52,7 @@ The acceptance bar is behavioral, not internal. A user must be able to stand in 
   Rationale: The user explicitly requested two distinct branches: discovery failure falls back to global results, while a valid discovered project with no messages must return an empty list.
   Date/Author: 2026-03-18 / Codex
 
-- Decision: Apply `MMR_DEFAULT_SOURCE` to the CLI-level default source only when `--source` is absent, and accept only `codex`, `claude`, or empty.
+- Decision: Apply `MMR_DEFAULT_SOURCE` to the CLI-level default source only when `--source` is absent, and accept only `codex`, `claude`, `cursor`, or empty.
   Rationale: This mirrors existing flag precedence and keeps invalid env input non-fatal. A bad env var should degrade to the historical "both sources" behavior rather than break the CLI.
   Date/Author: 2026-03-18 / Codex
 
@@ -112,7 +112,7 @@ At the end of this milestone, the new defaults will be discoverable in command h
 
 Begin in `tests/cli_contract.rs`. Add integration tests that exercise `sessions` and `messages` from a real directory under the temporary fixture `HOME` so the cwd path can be canonicalized and matched. Reuse `TestFixture::run_cli_in_dir` for cwd-aware cases and `run_cli_with_home_and_env` for environment-variable cases. Add one fixture directory whose path is known to the seeded history and a second directory that exists on disk but has no seeded history so the empty-result branch is exercised separately from the “cwd discovery failed” branch.
 
-After the tests are in place, update `src/cli.rs`. Introduce small helper functions that read the environment variables, validate them, and resolve the effective defaults. The helper for `MMR_DEFAULT_SOURCE` should parse `codex`, `claude`, and empty string. The helper for `MMR_DEFAULT_REMEMBER_AGENT` should parse `codex`, `gemini`, and empty string. The helper for project auto-discovery should apply only to `sessions` and `messages`, should return `None` when the user provided `--project` or `--all`, should respect `MMR_AUTO_DISCOVER_PROJECT=0` by disabling discovery, should treat unset or `1` as enabled, and should use the existing cwd-to-Codex/Claude normalization rules already present in `resolve_project_from_cwd`.
+After the tests are in place, update `src/cli.rs`. Introduce small helper functions that read the environment variables, validate them, and resolve the effective defaults. The helper for `MMR_DEFAULT_SOURCE` should parse `codex`, `claude`, `cursor`, and empty string. The helper for `MMR_DEFAULT_REMEMBER_AGENT` should parse `codex`, `cursor`, `gemini`, and empty string. The helper for project auto-discovery should apply only to `sessions` and `messages`, should return `None` when the user provided `--project` or `--all`, should respect `MMR_AUTO_DISCOVER_PROJECT=0` by disabling discovery, should treat unset or `1` as enabled, and should use the existing cwd-to-Codex/Claude normalization rules already present in `resolve_project_from_cwd`.
 
 Keep the command handlers simple. For `sessions`, compute the effective project and effective source, then call `service.sessions` exactly once with those resolved values. For `messages`, compute the effective session, project, and source, then call `service.messages` exactly once. The logic must not perform a second query to determine whether the discovered project has results; the requested empty-list behavior falls out naturally from querying the discovered project directly. Only when cwd resolution itself fails should the command fall back to the global unscoped behavior.
 

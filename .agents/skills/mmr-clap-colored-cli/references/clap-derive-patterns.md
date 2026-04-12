@@ -34,23 +34,25 @@ Keep each subcommand as a structured variant with typed args.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Projects {
-        #[arg(long)]
-        limit: Option<usize>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        #[arg(long, default_value = "last-activity")]
-        sort_by: ProjectSortBy,
+        #[arg(short = 's', long, default_value = "timestamp")]
+        sort_by: SortBy,
     },
     Sessions {
         #[arg(long)]
-        project: String,
+        project: Option<String>,
         #[arg(long)]
-        limit: Option<usize>,
+        all: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
 }
 ```
 
-Source: `src/cli.rs:27-55`
+Source: `src/cli.rs`
 
 ## Sort Enums and Defaults
 
@@ -59,16 +61,16 @@ Use `ValueEnum` + kebab-case names to preserve wire compatibility.
 ```rust
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[clap(rename_all = "kebab-case")]
-pub enum SessionSortBy {
+#[serde(rename_all = "kebab-case")]
+pub enum SortBy {
     #[default]
-    #[value(name = "last-activity")]
-    LastActivity,
+    Timestamp,
     #[value(name = "message-count")]
     MessageCount,
 }
 ```
 
-Source: `src/model.rs:25-40`
+Source: `src/types/domain.rs`
 
 ## Upstream Clap Patterns (via wit)
 

@@ -1,13 +1,14 @@
 # mmr Query Contract
 
 ## Table of Contents
-- [Projects Response Contract](#projects-response-contract)
-- [Sessions Response Contract](#sessions-response-contract)
-- [Messages Response Contract](#messages-response-contract)
-- [Sorting and Pagination Semantics](#sorting-and-pagination-semantics)
-- [Codex Project Normalization](#codex-project-normalization)
 
-## Projects Response Contract
+- [Projects response contract](#projects-response-contract)
+- [Sessions response contract](#sessions-response-contract)
+- [Messages response contract](#messages-response-contract)
+- [Sorting and pagination semantics](#sorting-and-pagination-semantics)
+- [Project resolution semantics](#project-resolution-semantics)
+
+## Projects response contract
 
 ```rust
 #[derive(Debug, Serialize)]
@@ -18,68 +19,98 @@ pub struct ApiProjectsResponse {
 }
 ```
 
-Source: `src/model.rs:81-86`
+Source of truth: `src/types/api.rs`
 
-## Sessions Response Contract
+Notes:
+
+- `projects` omits envelope-level source or project metadata because each `ApiProject` is self-describing.
+- Default CLI behavior with no `--source` is "all sources" unless `MMR_DEFAULT_SOURCE` supplies a default.
+
+## Sessions response contract
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiSessionsResponse {
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub sessions: Vec<ApiSession>,
+    pub total_sessions: i64,
 }
 ```
 
-Source: `src/model.rs:101-107`
+Source of truth: `src/types/api.rs`
 
-## Messages Response Contract
+Each `ApiSession` currently includes per-item:
+
+- `session_id`
+- `source`
+- `project_name`
+- `project_path`
+- `first_timestamp`
+- `last_timestamp`
+- `message_count`
+- `user_messages`
+- `assistant_messages`
+- `preview`
+
+## Messages response contract
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiMessagesResponse {
-    pub session_id: String,
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub messages: Vec<ApiMessage>,
+    pub total_messages: i64,
+    pub next_page: bool,
+    pub next_offset: i64,
+    pub next_command: Option<String>,
 }
 ```
 
-Source: `src/model.rs:121-127`
+Source of truth: `src/types/api.rs`
 
-## Sorting and Pagination Semantics
+Each `ApiMessage` currently includes per-item:
 
-Projects sort defaults to `last-activity`; messages paginate from newest then reverse to chronological output.
+- `session_id`
+- `source`
+- `project_name`
+- `role`
+- `content`
+- `model`
+- `timestamp`
+- `is_subagent`
+- `msg_type`
+- `input_tokens`
+- `output_tokens`
+
+`next_command` is populated by the CLI layer in `src/cli.rs`, not by `QueryService` itself.
+
+## Sorting and pagination semantics
+
+Source of truth: `src/messages/service.rs`
+
+- Project and session sorting use deterministic tie-breakers so output remains stable when primary sort keys match.
+- `messages` default sorting is `timestamp asc`.
+- For that default ascending-timestamp view, pagination preserves the historical "newest window, then chronological output" contract:
 
 ```rust
-let descending = chronological.into_iter().rev().collect::<Vec<_>>();
+let descending = filtered.into_iter().rev().collect::<Vec<_>>();
 let mut paged = apply_pagination(descending, limit, offset);
 paged.reverse();
 ```
 
-Source: `src/query.rs:317-319`
+- `next_page` is `true` only when a `limit` was provided and more results remain.
+- `next_offset` is computed as `offset + returned page size`.
 
-Projects and sessions sort tie-breakers preserve deterministic ordering:
-- Projects: `last_activity/message_count/session_count` then name
-- Sessions: selected metric then `session_id`
+## Project resolution semantics
 
-Source: `src/query.rs:416-463`
+Source of truth: `src/messages/service.rs`
 
-## Codex Project Normalization
+When `--project` is provided:
 
-Codex `sessions --project` accepts either with or without leading slash:
+- Codex lookup accepts either `/Users/test/proj` or `Users/test/proj`.
+- With no `--source`, project resolution searches all supported sources.
+- Claude and Cursor project matching use the same resolved project-name machinery as the CLI-facing commands.
 
-```rust
-if trimmed.starts_with('/') {
-    let without_leading = trimmed.trim_start_matches('/');
-    if !without_leading.is_empty() {
-        candidates.push(without_leading.to_string());
-    }
-} else {
-    candidates.push(format!("/{trimmed}"));
-}
-```
+Current supported sources are:
 
-Source: `src/query.rs:384-391`
+- `claude`
+- `codex`
+- `cursor`
