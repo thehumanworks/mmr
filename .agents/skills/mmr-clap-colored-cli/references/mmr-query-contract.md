@@ -18,40 +18,38 @@ pub struct ApiProjectsResponse {
 }
 ```
 
-Source: `src/model.rs:81-86`
+Source: `src/types/api.rs`
 
 ## Sessions Response Contract
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiSessionsResponse {
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub sessions: Vec<ApiSession>,
+    pub total_sessions: i64,
 }
 ```
 
-Source: `src/model.rs:101-107`
+Source: `src/types/api.rs`
 
 ## Messages Response Contract
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiMessagesResponse {
-    pub session_id: String,
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub messages: Vec<ApiMessage>,
+    pub total_messages: i64,
+    pub next_page: bool,
+    pub next_offset: i64,
+    pub next_command: Option<String>,
 }
 ```
 
-Source: `src/model.rs:121-127`
+Source: `src/types/api.rs`
 
 ## Sorting and Pagination Semantics
 
-Projects sort defaults to `last-activity`; messages paginate from newest then reverse to chronological output.
+Projects default to the timestamp/last-activity sort; timestamp-ascending `messages` pagination takes the newest window first and then reverses that page back to chronological output.
 
 ```rust
 let descending = chronological.into_iter().rev().collect::<Vec<_>>();
@@ -59,13 +57,19 @@ let mut paged = apply_pagination(descending, limit, offset);
 paged.reverse();
 ```
 
-Source: `src/query.rs:317-319`
+Source: `src/messages/service.rs`
 
 Projects and sessions sort tie-breakers preserve deterministic ordering:
-- Projects: `last_activity/message_count/session_count` then name
-- Sessions: selected metric then `session_id`
+- Projects: `last_activity/message_count/session_count` then `name`, `original_path`, and `source`
+- Sessions: selected metric then `session_id`, `project_name`, `project_path`, and `source`
 
-Source: `src/query.rs:416-463`
+Additional pagination metadata:
+- `total_messages` is the full match count before pagination.
+- `next_page` is `true` only when `limit` is set and more records remain.
+- `next_offset` is `offset + page_size`, even on the last page.
+- `next_command` is populated by `src/cli.rs` for `mmr messages` when `next_page` is `true`; `mmr export` reuses `ApiMessagesResponse` but always returns `next_page: false` with `next_command: None`.
+
+Source: `src/messages/service.rs`, `src/cli.rs`
 
 ## Codex Project Normalization
 
@@ -82,4 +86,6 @@ if trimmed.starts_with('/') {
 }
 ```
 
-Source: `src/query.rs:384-391`
+When no source filter is provided, project resolution searches Codex, Claude, and Cursor project identifiers.
+
+Source: `src/messages/service.rs`
