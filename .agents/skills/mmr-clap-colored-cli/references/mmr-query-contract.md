@@ -1,11 +1,13 @@
 # mmr Query Contract
 
 ## Table of Contents
+
 - [Projects Response Contract](#projects-response-contract)
 - [Sessions Response Contract](#sessions-response-contract)
 - [Messages Response Contract](#messages-response-contract)
 - [Sorting and Pagination Semantics](#sorting-and-pagination-semantics)
-- [Codex Project Normalization](#codex-project-normalization)
+- [Project Matching Rules](#project-matching-rules)
+- [CLI-Layer Scoping Rules](#cli-layer-scoping-rules)
 
 ## Projects Response Contract
 
@@ -18,68 +20,96 @@ pub struct ApiProjectsResponse {
 }
 ```
 
-Source: `src/model.rs:81-86`
+Source: `src/types/api.rs`
+
+Notes:
+
+- `projects` items are self-describing through per-item `source` and `original_path`
+- Omitting `--source` means all sources unless `MMR_DEFAULT_SOURCE` supplies a default
 
 ## Sessions Response Contract
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiSessionsResponse {
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub sessions: Vec<ApiSession>,
+    pub total_sessions: i64,
 }
 ```
 
-Source: `src/model.rs:101-107`
+Source: `src/types/api.rs`
+
+Each `ApiSession` includes:
+
+- `session_id`
+- `source`
+- `project_name`
+- `project_path`
+- `first_timestamp`
+- `last_timestamp`
+- `message_count`
+- `user_messages`
+- `assistant_messages`
+- `preview`
 
 ## Messages Response Contract
 
 ```rust
 #[derive(Debug, Serialize)]
 pub struct ApiMessagesResponse {
-    pub session_id: String,
-    pub project_name: String,
-    pub project_path: String,
-    pub source: String,
     pub messages: Vec<ApiMessage>,
+    pub total_messages: i64,
+    pub next_page: bool,
+    pub next_offset: i64,
+    pub next_command: Option<String>,
 }
 ```
 
-Source: `src/model.rs:121-127`
+Source: `src/types/api.rs`
+
+Each `ApiMessage` includes per-item metadata such as `session_id`, `source`, and `project_name`.
+
+`next_command` is optional and is populated by the CLI only when another page exists.
 
 ## Sorting and Pagination Semantics
 
-Projects sort defaults to `last-activity`; messages paginate from newest then reverse to chronological output.
+Relevant sources: `src/messages/service.rs` and `src/cli.rs`
+
+- `projects` and `sessions` support `timestamp` and `message-count` sorting
+- Sorts include deterministic tie-breakers so output remains stable when primary keys match
+- `messages` defaults to `--sort-by timestamp --order asc`
+- For timestamp-ascending message queries, pagination is applied from the newest window first, then the selected page is reversed back into chronological order
 
 ```rust
-let descending = chronological.into_iter().rev().collect::<Vec<_>>();
+let descending = filtered.into_iter().rev().collect::<Vec<_>>();
 let mut paged = apply_pagination(descending, limit, offset);
 paged.reverse();
 ```
 
-Source: `src/query.rs:317-319`
+- `next_offset` is `offset + page_size`
+- `next_page` is true only when `limit` is set and more messages remain
+- The CLI builds `next_command` so callers can continue pagination without reconstructing flags by hand
 
-Projects and sessions sort tie-breakers preserve deterministic ordering:
-- Projects: `last_activity/message_count/session_count` then name
-- Sessions: selected metric then `session_id`
+## Project Matching Rules
 
-Source: `src/query.rs:416-463`
+Relevant source: `src/messages/service.rs`
 
-## Codex Project Normalization
+When `--project` is provided:
 
-Codex `sessions --project` accepts either with or without leading slash:
+- Codex matching accepts either `/Users/me/proj` or `Users/me/proj`
+- When `--source` is omitted, project resolution searches all supported sources
+- Claude matching can succeed on either the stored project directory name or the preserved `cwd`-based `project_path`
+- Cursor matching currently uses the stored project directory name under `~/.cursor/projects/`
 
-```rust
-if trimmed.starts_with('/') {
-    let without_leading = trimmed.trim_start_matches('/');
-    if !without_leading.is_empty() {
-        candidates.push(without_leading.to_string());
-    }
-} else {
-    candidates.push(format!("/{trimmed}"));
-}
-```
+This means Cursor project filters typically need the encoded name (for example `-Users-me-proj`) unless the CLI branch does its own cwd-to-name translation first, as `export` does.
 
-Source: `src/query.rs:384-391`
+## CLI-Layer Scoping Rules
+
+Relevant source: `src/cli.rs`
+
+- `sessions` and `messages` auto-discover the cwd project by default unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`
+- If cwd discovery fails, `sessions` and `messages` fall back to all projects
+- If cwd discovery succeeds but there are no matching records, the CLI returns an empty result instead of widening the query
+- `messages --session <id>` bypasses cwd project auto-discovery when `--project` is omitted and searches all projects instead
+- When `messages --session` is used without `--source`, the CLI prints a narrowing hint on stderr
+- `export` without `--project` infers the project from cwd and queries each matching source separately before merging results chronologically
