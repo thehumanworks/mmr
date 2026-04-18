@@ -36,7 +36,7 @@ The original CLI required explicit `--source` for `sessions` (only `codex` or `c
 `ApiSession` now includes `source`, `project_name`, and `project_path` fields.
 `ApiMessage` now includes `session_id`, `source`, and `project_name` fields.
 
-This ensures each item is self-describing regardless of whether envelope-level filters were applied. The `ApiSessionsResponse` envelope was simplified to `{ sessions, total_sessions }` and `ApiMessagesResponse` to `{ messages, total_messages }`.
+This ensures each item is self-describing regardless of whether envelope-level filters were applied. The `ApiSessionsResponse` envelope was simplified to `{ sessions, total_sessions }`, and `ApiMessagesResponse` was simplified to `{ messages, total_messages, next_page, next_offset, next_command? }`.
 
 ### `projects` command
 

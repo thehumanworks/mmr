@@ -13,7 +13,7 @@ The transform is intentionally defined as a `mmr`-compatible transform, not as a
 ## Progress
 
 - [x] (2026-03-11 21:05Z) Reviewed `/Users/mish/projects/mmr/docs/references/schemas/claude/message_schema.md`, `/Users/mish/projects/mmr/docs/references/schemas/codex/message_schema.md`, and both example JSON files to map the documented raw-message contracts and the current normalized output.
-- [x] (2026-03-11 21:12Z) Reviewed `/Users/mish/projects/mmr/src/model.rs`, `/Users/mish/projects/mmr/src/source/claude.rs`, `/Users/mish/projects/mmr/src/source/codex.rs`, `/Users/mish/projects/mmr/src/cli.rs`, `/Users/mish/projects/mmr/src/agent/ai.rs`, and `/Users/mish/projects/mmr/tests/cli_contract.rs` to anchor the plan in current types, parsing rules, and CLI/testing patterns.
+- [x] (2026-03-11 21:12Z) Reviewed `/Users/mish/projects/mmr/src/types/domain.rs`, `/Users/mish/projects/mmr/src/types/api.rs`, `/Users/mish/projects/mmr/src/source/claude.rs`, `/Users/mish/projects/mmr/src/source/codex.rs`, `/Users/mish/projects/mmr/src/cli.rs`, `/Users/mish/projects/mmr/src/agent/ai.rs`, and `/Users/mish/projects/mmr/tests/cli_contract.rs` to anchor the plan in current types, parsing rules, and CLI/testing patterns.
 - [x] (2026-03-11 21:25Z) Drafted this ExecPlan with explicit schema convergence/divergence analysis, a concrete `transform` CLI surface, model default rules, and validation steps.
 - [ ] Implement `src/transform.rs`, expose it from `/Users/mish/projects/mmr/src/lib.rs`, and wire a new `transform` subcommand in `/Users/mish/projects/mmr/src/cli.rs`.
 - [ ] Extract reusable single-file parsing entry points from `/Users/mish/projects/mmr/src/source/claude.rs` and `/Users/mish/projects/mmr/src/source/codex.rs` so the transform path can reuse the same defensive parsing rules as normal ingestion.
@@ -24,7 +24,7 @@ The transform is intentionally defined as a `mmr`-compatible transform, not as a
 ## Surprises & Discoveries
 
 - Observation: The two source formats already converge inside `mmr` at `MessageRecord`, so there is a natural canonical intermediate representation for the transform implementation.
-  Evidence: `/Users/mish/projects/mmr/src/source/claude.rs` and `/Users/mish/projects/mmr/src/source/codex.rs` both normalize into the same `crate::model::MessageRecord` struct in `/Users/mish/projects/mmr/src/model.rs`.
+  Evidence: `/Users/mish/projects/mmr/src/source/claude.rs` and `/Users/mish/projects/mmr/src/source/codex.rs` both normalize into the same `crate::types::domain::MessageRecord` struct in `/Users/mish/projects/mmr/src/types/domain.rs`.
 
 - Observation: The documented Codex schema is stateful while the documented Claude schema is self-contained per message line.
   Evidence: Codex requires a prior `session_meta` record to establish `session_id`, `cwd`, and model metadata for subsequent lines, while each Claude `user` or `assistant` line carries its own `sessionId` and optional `cwd`.
@@ -66,7 +66,7 @@ Planning completed. The repo now has a concrete, restartable implementation plan
 
 ## Context and Orientation
 
-`mmr` is a Rust command-line tool that loads local Claude and Codex history, normalizes both into a common internal type, and exposes JSON responses through existing subcommands in `/Users/mish/projects/mmr/src/cli.rs`. The common normalized message shape lives in `/Users/mish/projects/mmr/src/model.rs` as `MessageRecord`, and the source-specific readers live in `/Users/mish/projects/mmr/src/source/claude.rs` and `/Users/mish/projects/mmr/src/source/codex.rs`.
+`mmr` is a Rust command-line tool that loads local Claude and Codex history, normalizes both into a common internal type, and exposes JSON responses through existing subcommands in `/Users/mish/projects/mmr/src/cli.rs`. The common normalized message shape lives in `/Users/mish/projects/mmr/src/types/domain.rs` as `MessageRecord`, and the source-specific readers live in `/Users/mish/projects/mmr/src/source/claude.rs` and `/Users/mish/projects/mmr/src/source/codex.rs`.
 
 For this task, “transform” means reading one raw JSONL session file in one ecosystem’s schema and writing one raw JSONL session file in the other ecosystem’s schema. “Canonical intermediate representation” means the internal data shape the transform uses between parse and serialize. In this repository, that canonical representation is the combination of `MessageRecord` values plus a small amount of session-level metadata that `MessageRecord` alone does not currently capture, specifically the target model choice and Codex reasoning effort.
 
@@ -84,7 +84,9 @@ Those differences imply two important boundaries. First, the transform is inhere
 
 The files that will matter during implementation are:
 
-`/Users/mish/projects/mmr/src/model.rs`, which defines `SourceFilter`, `SourceKind`, `MessageRecord`, and the API response types.
+`/Users/mish/projects/mmr/src/types/domain.rs`, which defines `SourceFilter`, `SourceKind`, and `MessageRecord`.
+
+`/Users/mish/projects/mmr/src/types/api.rs`, which defines the API response types.
 
 `/Users/mish/projects/mmr/src/source/claude.rs`, which currently parses Claude files defensively and recursively extracts text content.
 

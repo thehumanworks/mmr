@@ -8,9 +8,10 @@
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and response assembly.
+- `src/types/query.rs`: query aggregate structs and helper state used by `QueryService`.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
