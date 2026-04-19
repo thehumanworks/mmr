@@ -4,14 +4,18 @@
 
 `mmr` is a Rust CLI focused on local Claude/Codex/Cursor history parsing.
 
-- `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
-- `src/cli.rs`: clap command surface and command routing.
-- `src/types/`: public API response types and sort/source enums.
-- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/main.rs`: binary entrypoint that parses clap args, prints machine-readable stdout, and reports human-facing errors on stderr.
+- `src/lib.rs`: crate module wiring for CLI, source ingestion, message queries, agents, and shared types.
+- `src/cli.rs`: clap command surface, env-default resolution, cwd project discovery, and command routing.
+- `src/types/`: domain enums plus query aggregates and public API response types.
+- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`) and parallel ingest wiring in `mod.rs`.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, project resolution, and response shaping.
+- `src/messages/utils.rs`: session-selection helpers shared by the `remember` flow.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/{cursor.rs,codex.rs,gemini_api.rs}`: backend clients for Cursor agent CLI, Codex app server, and Gemini Interactions API.
 - `adrs/`: architecture decision records.
+- `docs/references/`: durable behavioral references such as session lookup invariants and source transcript schemas.
+- `docs/references/schemas/`: raw transcript schema notes for Codex, Claude, and Cursor loader inputs.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
@@ -48,6 +52,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
 - `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- --help` and `cargo run -- <subcommand> --help` — inspect the automation-friendly CLI surface and examples.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -59,6 +64,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- Direct `--project` filters check both the stored `project_name` and `project_path` for each source. Codex always matches canonical paths; Claude can also match canonical paths when transcript records include `cwd`; Cursor currently matches the encoded project directory name stored under `~/.cursor/projects/`.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
