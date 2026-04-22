@@ -7,11 +7,12 @@ description: Build and evolve the local Rust CLI in this repo using clap derive 
 
 ## Quick Start
 
-1. Keep stdout as JSON and reserve colored output for stderr only.
+1. Keep query-command stdout as JSON; `remember` defaults to markdown unless `-O json` is requested. Reserve colored output for stderr only.
 2. Use clap derive (`Parser`, `Subcommand`, `ValueEnum`) for all CLI surface changes.
 3. Preserve `mmr` contract semantics:
-   - `projects`: default `--source` to `codex`
-   - `sessions`: require `--source codex|claude` (reject `all`)
+   - `--source` accepts `claude`, `codex`, or `cursor`; omitting it means all sources unless `MMR_DEFAULT_SOURCE` supplies a default
+   - `sessions` and `messages` auto-discover the cwd project unless `--project`, `--all`, or `MMR_AUTO_DISCOVER_PROJECT=0` disables that behavior
+   - `messages --session <id>` without `--project` bypasses cwd auto-discovery and searches all projects; print the stderr hint when `--source` is also omitted
    - `messages`: paginate from newest, then return chronological window
 4. Validate before finishing:
    - `cargo test`

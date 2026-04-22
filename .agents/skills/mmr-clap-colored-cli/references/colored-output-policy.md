@@ -8,7 +8,9 @@
 
 ## Local Policy in mmr
 
-Keep stdout machine-readable JSON. Use color only for human-facing stderr paths.
+Keep query-command stdout machine-readable JSON. `remember` is the exception:
+it defaults to markdown and returns JSON only when `-O json` / `--output-format json`
+is requested. Use color only for human-facing stderr paths.
 
 ```rust
 match run_cli(cli) {

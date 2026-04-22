@@ -16,16 +16,18 @@ alwaysApply: false
   - Without `--project` and without `--all`, auto-discover the cwd project by default.
   - If cwd auto-discovery fails, fall back to all items across all projects/sources.
   - If cwd auto-discovery succeeds but there are no matching records, return the empty result instead of falling back.
+  - `messages --session <id>` without `--project` bypasses cwd auto-discovery and searches all projects instead; if `--source` is also omitted, print the narrowing hint on `stderr`.
 - `export` accepts optional `--project`.
-- `export` with no `--project` infers project from cwd: Codex = canonical path, Claude = path with `/` → `-` and leading hyphen. Output is `ApiMessagesResponse` (same as `messages`). `--source` applies to export the same way (filters which source(s) are queried).
+- `export` with no `--project` infers project from cwd: Codex = canonical path, Claude/Cursor = path with `/` → `-` and leading hyphen. Output is `ApiMessagesResponse` (same as `messages`). `--source` applies to export the same way (filters which source(s) are queried).
 - `remember` sends session transcripts to the backend chosen by `--agent` (`gemini`, `codex`, or `cursor`). When `--agent` is omitted, `MMR_DEFAULT_REMEMBER_AGENT` applies if set; otherwise the default is `cursor` (`composer-2-fast` unless `--model` is set). Memory-agent calls use a two-part system prompt:
   - Base (always present): agent identity + input format only. Must not contain output-directing language.
   - Output instruction (replaceable): without `--instructions`, uses the default (Purpose, Output Format, Rules, Resume Instructions). With `--instructions`, the user's text fully replaces the default output instruction.
   - The user prompt is neutral ("Analyze the following AI coding session transcript(s).") — the system instruction has sole authority over output behavior.
   - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` may supply the default `--agent` when the flag is omitted.
 - Keep `messages` pagination semantics: page from newest window, then return chronological order.
+- Keep `ApiMessagesResponse` pagination metadata stable: populate `next_page`, `next_offset`, and `next_command` when another page is available; leave `next_command` null when pagination is exhausted.
 - Each `ApiSession` and `ApiMessage` includes per-item `source` and `project_name` metadata.
-- Do not color JSON output; only color human-facing errors on `stderr`.
+- Query commands keep stdout machine-readable JSON. `remember` defaults to markdown unless `-O json` is requested. Do not color stdout output; only color human-facing errors on `stderr`.
 
 ## Example
 

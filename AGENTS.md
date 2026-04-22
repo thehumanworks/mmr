@@ -8,9 +8,10 @@
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and response shaping for `projects`, `sessions`, and `messages`.
+- `src/messages/utils.rs`: transcript loading and input formatting helpers used by `remember`.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -35,19 +36,19 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source cursor projects` — list projects from cursor only.
 - `cargo run -- sessions` — list sessions for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- sessions --all` — list sessions across all projects and sources.
-- `cargo run -- sessions --project /Users/test/codex-proj` — sessions for a project (searches both sources).
+- `cargo run -- sessions --project /Users/test/codex-proj` — sessions for a project (searches all sources unless `--source` is set).
 - `cargo run -- --source codex sessions --project /Users/test/codex-proj` — sessions for a specific source and project.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
-- `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- messages --session sess-123` — messages for a specific session across all projects; bypasses cwd auto-discovery unless `--project` is also set.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
-- `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
+- `cargo run -- export` — all messages for current directory (cwd) as project, all matching sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
-- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session.
+- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session (markdown by default).
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json` — return `RememberResponse` JSON instead of the default markdown summary.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -59,6 +60,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` without `--project` skips cwd auto-discovery and searches all projects instead; if `--source` is omitted, the CLI prints a stderr hint suggesting `--source` to narrow the lookup.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
@@ -89,7 +91,7 @@ Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMI
 - Keep imports at file top; avoid inline imports.
 - Use descriptive, domain-specific names (`ApiProjectsResponse`, `SourceFilter`, `load_codex_messages`).
 - For sort comparators, include full deterministic tie-breakers so ordering is stable even when primary/secondary keys match.
-- Keep stdout machine-readable JSON; reserve colored output for human-facing stderr messages.
+- Keep query-command stdout machine-readable JSON; `remember` defaults to markdown unless `-O json` is requested. Reserve colored output for human-facing stderr messages.
 
 ## Testing Guidelines
 
@@ -102,7 +104,7 @@ Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMI
 
 ## Commit & Pull Request Guidelines
 
-- No project commit history exists yet; use imperative, concise commit messages (e.g., `add cli source filtering tests`).
+- Use imperative, concise commit messages (e.g., `add cli source filtering tests`).
 - In PRs, include: scope summary, contract changes, commands run, and relevant test/lint/build outputs.
 - Avoid mixing refactors with behavior changes unless the PR clearly separates them.
 

@@ -13,7 +13,10 @@ Use global flags at the root and let every subcommand reuse them.
 
 ```rust
 #[derive(Parser, Debug)]
-#[command(name = "mmr")]
+#[command(
+    name = "mmr",
+    about = "Browse AI conversation history from Claude, Codex, and Cursor"
+)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -21,36 +24,55 @@ pub struct Cli {
 
     #[arg(long, global = true, value_enum)]
     pub source: Option<SourceFilter>,
+
+    #[command(subcommand)]
+    pub command: Commands,
 }
 ```
 
-Source: `src/cli.rs:8-24`
+Source: `src/cli.rs`
 
 ## Subcommand Layout
 
-Keep each subcommand as a structured variant with typed args.
+Keep each subcommand as a structured variant with typed args and command-specific defaults.
 
 ```rust
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    Projects {
-        #[arg(long)]
-        limit: Option<usize>,
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        #[arg(long, default_value = "last-activity")]
-        sort_by: ProjectSortBy,
-    },
     Sessions {
         #[arg(long)]
-        project: String,
+        project: Option<String>,
         #[arg(long)]
-        limit: Option<usize>,
+        all: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(short = 's', long, default_value = "timestamp")]
+        sort_by: SortBy,
+        #[arg(short = 'o', long, default_value = "desc")]
+        order: SortOrder,
+    },
+    Messages {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(short = 's', long, default_value = "timestamp")]
+        sort_by: SortBy,
+        #[arg(short = 'o', long, default_value = "asc")]
+        order: SortOrder,
     },
 }
 ```
 
-Source: `src/cli.rs:27-55`
+Source: `src/cli.rs`
 
 ## Sort Enums and Defaults
 
@@ -59,16 +81,16 @@ Use `ValueEnum` + kebab-case names to preserve wire compatibility.
 ```rust
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[clap(rename_all = "kebab-case")]
-pub enum SessionSortBy {
+#[serde(rename_all = "kebab-case")]
+pub enum SortBy {
     #[default]
-    #[value(name = "last-activity")]
-    LastActivity,
+    Timestamp,
     #[value(name = "message-count")]
     MessageCount,
 }
 ```
 
-Source: `src/model.rs:25-40`
+Source: `src/types/domain.rs`
 
 ## Upstream Clap Patterns (via wit)
 
