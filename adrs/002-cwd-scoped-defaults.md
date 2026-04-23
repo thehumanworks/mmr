@@ -44,8 +44,9 @@ Both `sessions` and `messages` gain `--all`.
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`.
 - `MMR_AUTO_DISCOVER_PROJECT=1` or unset keeps cwd project auto-discovery enabled.
-- `MMR_DEFAULT_SOURCE=codex|claude` supplies the default source filter when `--source` is omitted.
+- `MMR_DEFAULT_SOURCE=codex|claude|cursor` supplies the default source filter when `--source` is omitted.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` supplies the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` overrides).
+- Message ingestion resolves the history root from `SIMPLEMMR_HOME` before falling back to the process `HOME`. This keeps fixture-driven tests and local debugging able to point `mmr` at an alternate history tree without changing the rest of the CLI contract.
 
 Empty or invalid values for `MMR_DEFAULT_SOURCE` and `MMR_DEFAULT_REMEMBER_AGENT` are treated as unset so the CLI remains usable.
 

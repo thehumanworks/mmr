@@ -35,13 +35,13 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source cursor projects` — list projects from cursor only.
 - `cargo run -- sessions` — list sessions for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- sessions --all` — list sessions across all projects and sources.
-- `cargo run -- sessions --project /Users/test/codex-proj` — sessions for a project (searches both sources).
+- `cargo run -- sessions --project /Users/test/codex-proj` — sessions for a project (searches all sources unless `--source` is set).
 - `cargo run -- --source codex sessions --project /Users/test/codex-proj` — sessions for a specific source and project.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
 - `cargo run -- messages --session sess-123` — messages for a specific session.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
-- `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
+- `cargo run -- export` — all messages for current directory (cwd) as project, all sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
 - `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
@@ -66,6 +66,13 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+
+## Session lookup and history root troubleshooting
+
+- `mmr messages --session <session-id>` bypasses cwd project auto-discovery when `--project` is omitted. The lookup searches all projects instead so a known session ID is not hidden by the current directory.
+- When `--session` is provided without `--source`, the CLI prints a stderr hint recommending `--source` for a narrower search. See `docs/references/session-lookup-invariants.md` for the full lookup matrix.
+- Message ingestion resolves its history root from `SIMPLEMMR_HOME` first, then falls back to `HOME` via `dirs::home_dir()`. Use `SIMPLEMMR_HOME` when tests, sandboxes, or local debugging need `mmr` to read from a different history tree.
+- If `sessions`, `messages`, or `export` unexpectedly return empty results, verify both the cwd-derived project identifier and whether `SIMPLEMMR_HOME` or `HOME` points at the history directory you expect.
 
 ## Remember command and `--instructions` system prompt architecture
 
