@@ -28,47 +28,49 @@ Source: `src/cli.rs:8-24`
 
 ## Subcommand Layout
 
-Keep each subcommand as a structured variant with typed args.
+Keep each subcommand as a structured variant with typed args, and document default scoping in the help text where behavior is non-obvious.
 
 ```rust
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Projects {
-        #[arg(long)]
-        limit: Option<usize>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        #[arg(long, default_value = "last-activity")]
-        sort_by: ProjectSortBy,
+        #[arg(short = 's', long, default_value = "timestamp")]
+        sort_by: SortBy,
+        #[arg(short = 'o', long, default_value = "desc")]
+        order: SortOrder,
     },
     Sessions {
         #[arg(long)]
-        project: String,
+        project: Option<String>,
         #[arg(long)]
-        limit: Option<usize>,
+        all: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
 }
 ```
 
-Source: `src/cli.rs:27-55`
+Source: `src/cli.rs`
 
 ## Sort Enums and Defaults
 
-Use `ValueEnum` + kebab-case names to preserve wire compatibility.
+Use `ValueEnum` + kebab-case names to preserve CLI compatibility.
 
 ```rust
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[clap(rename_all = "kebab-case")]
-pub enum SessionSortBy {
+pub enum RememberOutputFormatArg {
+    Json,
     #[default]
-    #[value(name = "last-activity")]
-    LastActivity,
-    #[value(name = "message-count")]
-    MessageCount,
+    Md,
 }
 ```
 
-Source: `src/model.rs:25-40`
+Source: `src/cli.rs`
 
 ## Upstream Clap Patterns (via wit)
 
