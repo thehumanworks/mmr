@@ -8,7 +8,7 @@
 
 ## Fixture Strategy
 
-Seed Claude and Codex JSONL fixtures under a temp HOME so tests are hermetic.
+Seed Claude, Codex, and Cursor fixtures under a temp HOME so tests are hermetic.
 
 ```rust
 pub struct TestFixture {
@@ -23,19 +23,21 @@ impl TestFixture {
         fs::create_dir_all(&home).expect("create HOME");
         seed_claude_fixture(&home);
         seed_codex_fixture(&home);
+        seed_cursor_fixture(&home);
         Self { _tmp: tmp, home }
     }
 }
 ```
 
-Source: `tests/common/mod.rs:6-19`
+Source: `tests/common/mod.rs`
 
 ## Contract Integration Tests
 
 Keep behavior checks at the CLI level:
 
-- default source behavior
-- required source validation for `sessions`
+- source filtering defaults and overrides
+- cwd auto-discovery, `--all`, and explicit `--project` scope
+- `messages --session` all-project lookup behavior and stderr hints
 - sort and pagination behavior
 - chronological message output
 
@@ -45,10 +47,10 @@ Example assertion pattern:
 let output = fixture.run_cli(&["projects"]);
 assert!(output.status.success());
 let json = parse_stdout_json(&output);
-assert_eq!(json["total_messages"].as_i64().unwrap(), 8);
+assert!(!json["projects"].as_array().unwrap().is_empty());
 ```
 
-Source: `tests/cli_contract.rs:5-18`
+Source: `tests/cli_contract.rs`
 
 ## Benchmark Test
 
@@ -62,13 +64,14 @@ fn benchmark_projects_query_parses_large_fixture() {
 }
 ```
 
-Source: `tests/cli_benchmark.rs:37-84`
+Source: `tests/cli_benchmark.rs`
 
 ## Verification Commands
 
 Run this exact loop before claiming success:
 
 ```bash
+cargo fmt
 cargo test
 cargo test --test cli_benchmark -- --ignored --nocapture
 cargo clippy --all-targets --all-features -- -D warnings
