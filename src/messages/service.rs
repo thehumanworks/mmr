@@ -13,6 +13,22 @@ use crate::types::{
     ApiSessionsResponse, MessageRecord, SortBy, SortOptions, SortOrder, SourceFilter, SourceKind,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageIndexRange {
+    pub from: Option<usize>,
+    pub to: Option<usize>,
+}
+
+impl MessageIndexRange {
+    pub fn new(from: Option<usize>, to: Option<usize>) -> Option<Self> {
+        if from.is_none() && to.is_none() {
+            None
+        } else {
+            Some(Self { from, to })
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct QueryService {
     messages: Vec<MessageRecord>,
@@ -248,6 +264,7 @@ impl QueryService {
         limit: Option<usize>,
         offset: usize,
         sort: SortOptions,
+        message_index_range: Option<MessageIndexRange>,
     ) -> ApiMessagesResponse {
         let resolved_project = project.map(|p| resolve_project(&self.projects, source_filter, p));
 
@@ -264,6 +281,10 @@ impl QueryService {
         let total_messages = filtered.len() as i64;
         let session_message_counts = build_session_message_counts(&filtered);
         sort_messages(&mut filtered, sort.by, sort.order, &session_message_counts);
+        let selected_total = message_index_range
+            .map(|range| message_index_range_len(filtered.len(), range))
+            .unwrap_or(filtered.len());
+        let filtered = apply_message_index_range(filtered, message_index_range);
 
         let paged = if sort.by == SortBy::Timestamp && sort.order == SortOrder::Asc {
             // Preserve the historical "newest window, then chronological output" behavior.
@@ -277,7 +298,7 @@ impl QueryService {
 
         let page_size = paged.len();
         let next_offset = (offset + page_size) as i64;
-        let next_page = limit.is_some() && next_offset < total_messages;
+        let next_page = limit.is_some() && next_offset < selected_total as i64;
 
         let messages = paged
             .into_iter()
@@ -300,6 +321,75 @@ impl QueryService {
             messages,
             total_messages,
             next_page,
+            next_offset,
+            next_command: None,
+        }
+    }
+
+    pub fn latest_session_messages(
+        &self,
+        session_id: Option<&str>,
+        project: Option<&str>,
+        source_filter: Option<SourceFilter>,
+        window: usize,
+        message_index_range: Option<MessageIndexRange>,
+    ) -> ApiMessagesResponse {
+        let resolved_project = project.map(|p| resolve_project(&self.projects, source_filter, p));
+
+        let scoped = self
+            .messages
+            .iter()
+            .filter(|message| {
+                matches_source_filter(message.source, source_filter)
+                    && matches_session_filter(message.session_id.as_str(), session_id)
+                    && matches_message_project_filter(message, resolved_project.as_ref())
+            })
+            .collect::<Vec<_>>();
+
+        let Some(latest) = scoped
+            .iter()
+            .max_by(|a, b| latest_session_message_cmp(a, b))
+        else {
+            return ApiMessagesResponse {
+                messages: Vec::new(),
+                total_messages: 0,
+                next_page: false,
+                next_offset: 0,
+                next_command: None,
+            };
+        };
+        let latest_key = (
+            latest.source,
+            latest.project_name.clone(),
+            latest.session_id.clone(),
+        );
+
+        let mut latest_session_messages = scoped
+            .into_iter()
+            .filter(|message| session_key(message) == latest_key)
+            .cloned()
+            .collect::<Vec<_>>();
+        sort_messages(
+            &mut latest_session_messages,
+            SortBy::Timestamp,
+            SortOrder::Asc,
+            &HashMap::new(),
+        );
+
+        let total_messages = latest_session_messages.len() as i64;
+        let ranged = apply_message_index_range(latest_session_messages, message_index_range);
+        let mut windowed = ranged
+            .into_iter()
+            .rev()
+            .take(window)
+            .collect::<Vec<_>>();
+        windowed.reverse();
+        let next_offset = windowed.len() as i64;
+
+        ApiMessagesResponse {
+            messages: windowed.into_iter().map(api_message_from_record).collect(),
+            total_messages,
+            next_page: false,
             next_offset,
             next_command: None,
         }
@@ -508,6 +598,38 @@ fn sort_messages(
     });
 }
 
+fn latest_session_message_cmp(a: &MessageRecord, b: &MessageRecord) -> Ordering {
+    message_chronological_cmp(a, b)
+        .then_with(|| a.session_id.cmp(&b.session_id))
+        .then_with(|| a.project_name.cmp(&b.project_name))
+        .then_with(|| a.project_path.cmp(&b.project_path))
+        .then_with(|| a.source.cmp(&b.source))
+}
+
+fn session_key(message: &MessageRecord) -> SessionMessageCountKey {
+    (
+        message.source,
+        message.project_name.clone(),
+        message.session_id.clone(),
+    )
+}
+
+fn api_message_from_record(message: MessageRecord) -> ApiMessage {
+    ApiMessage {
+        session_id: message.session_id,
+        source: message.source.as_str().to_string(),
+        project_name: message.project_name,
+        role: message.role,
+        content: message.content,
+        model: message.model,
+        timestamp: message.timestamp,
+        is_subagent: message.is_subagent,
+        msg_type: message.msg_type,
+        input_tokens: message.input_tokens,
+        output_tokens: message.output_tokens,
+    }
+}
+
 fn message_session_count(
     message: &MessageRecord,
     session_message_counts: &HashMap<SessionMessageCountKey, i32>,
@@ -534,6 +656,27 @@ fn apply_pagination<T>(items: Vec<T>, limit: Option<usize>, offset: usize) -> Ve
         None => items.len(),
     };
     items.into_iter().skip(start).take(end - start).collect()
+}
+
+fn apply_message_index_range<T>(items: Vec<T>, range: Option<MessageIndexRange>) -> Vec<T> {
+    let Some(range) = range else {
+        return items;
+    };
+    let start = range.from.unwrap_or(0).min(items.len());
+    let end = range.to.unwrap_or(items.len()).min(items.len());
+    if end < start {
+        return Vec::new();
+    }
+    items.into_iter().skip(start).take(end - start).collect()
+}
+
+fn message_index_range_len(len: usize, range: MessageIndexRange) -> usize {
+    let start = range.from.unwrap_or(0).min(len);
+    let end = range.to.unwrap_or(len).min(len);
+    if end < start {
+        return 0;
+    }
+    end - start
 }
 
 fn preview_cmp(a: &PreviewCandidate, b: &PreviewCandidate) -> Ordering {
@@ -636,6 +779,64 @@ mod tests {
         );
         assert_eq!(response.messages.len(), 1);
         assert_eq!(response.messages[0].content, "second");
+    }
+
+    #[test]
+    fn latest_session_messages_selects_latest_session_then_chronological_window() {
+        let service = QueryService::from_messages(vec![
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "older-session",
+                "user",
+                "older",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "latest-session",
+                "user",
+                "first",
+                "2025-01-02T00:00:00",
+                1,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "latest-session",
+                "assistant",
+                "second",
+                "2025-01-02T00:01:00",
+                2,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "latest-session",
+                "user",
+                "third",
+                "2025-01-02T00:02:00",
+                3,
+            ),
+        ]);
+
+        let response = service.latest_session_messages(
+            None,
+            Some("/Users/test/proj"),
+            Some(SourceFilter::Codex),
+            2,
+        );
+
+        assert_eq!(response.total_messages, 3);
+        assert_eq!(response.messages.len(), 2);
+        assert_eq!(response.messages[0].content, "second");
+        assert_eq!(response.messages[1].content, "third");
+        assert!(response.messages.iter().all(|message| {
+            message.session_id == "latest-session" && message.project_name == "/Users/test/proj"
+        }));
+        assert!(!response.next_page);
     }
 
     #[test]

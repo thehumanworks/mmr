@@ -813,6 +813,130 @@ fn messages_returns_empty_for_discovered_but_empty_project() {
 }
 
 #[test]
+fn messages_latest_selects_newest_message_from_latest_session() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--latest", "1"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages[0]["session_id"].as_str().unwrap(),
+        "sess-codex-recent-1"
+    );
+    assert_eq!(
+        messages[0]["content"].as_str().unwrap(),
+        "recent project answer"
+    );
+    assert!(!json["next_page"].as_bool().unwrap());
+    assert!(json["next_command"].is_null());
+}
+
+#[test]
+fn messages_latest_without_value_defaults_to_one() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--latest"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages[0]["session_id"].as_str().unwrap(),
+        "sess-codex-recent-1"
+    );
+    assert_eq!(
+        messages[0]["content"].as_str().unwrap(),
+        "recent project answer"
+    );
+}
+
+#[test]
+fn messages_latest_window_returns_chronological_tail_of_latest_session() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--latest",
+        "5",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["session_id"].as_str().unwrap(), "sess-codex-1");
+    assert_eq!(messages[0]["content"].as_str().unwrap(), "hello from codex");
+    assert_eq!(
+        messages[1]["content"].as_str().unwrap(),
+        "short codex answer"
+    );
+}
+
+#[test]
+fn messages_message_index_range_slices_chronological_filtered_messages() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--from-message-index",
+        "1",
+        "--to-message-index",
+        "4",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
+    assert_eq!(messages.len(), 3);
+    let contents = messages
+        .iter()
+        .map(|message| message["content"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contents,
+        vec![
+            "start longer codex thread",
+            "first long codex answer",
+            "follow-up question"
+        ]
+    );
+    assert!(!json["next_page"].as_bool().unwrap());
+    assert!(json["next_command"].is_null());
+}
+
+#[test]
 fn messages_with_session_are_chronological_and_paginated() {
     let fixture = TestFixture::seeded();
 

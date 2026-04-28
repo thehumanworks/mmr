@@ -1,10 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use crate::agent::ai;
-use crate::messages::service::QueryService;
+use crate::messages::service::{MessageIndexRange, QueryService};
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
@@ -82,6 +83,15 @@ pub enum Commands {
         /// Return messages across all projects instead of the auto-discovered cwd project
         #[arg(long)]
         all: bool,
+        /// Return the newest N messages from the latest session in scope
+        #[arg(long, num_args = 0..=1, default_missing_value = "1")]
+        latest: Option<NonZeroUsize>,
+        /// First zero-based message index to include after filtering and sorting
+        #[arg(long)]
+        from_message_index: Option<usize>,
+        /// Zero-based message index to stop before after filtering and sorting
+        #[arg(long)]
+        to_message_index: Option<usize>,
         /// Return only the latest N messages
         #[arg(long, default_value_t = 50)]
         limit: usize,
@@ -204,11 +214,16 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             session,
             project,
             all,
+            latest,
+            from_message_index,
+            to_message_index,
             limit,
             offset,
             sort_by,
             order,
         } => {
+            let message_index_range =
+                validate_message_index_range(from_message_index, to_message_index)?;
             // When a session ID is provided without an explicit project,
             // skip cwd auto-discovery and search all projects instead.
             let project_scope = if session.is_some() && project.is_none() {
@@ -222,21 +237,33 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                 effective_project_scope(project.clone(), all)
             };
 
-            let mut response = service.messages(
-                session.as_deref(),
-                project_scope.as_deref(),
-                source_filter,
-                Some(limit),
-                offset,
-                SortOptions::new(sort_by, order),
-            );
-            if response.next_page {
+            let mut response = if let Some(latest) = latest {
+                service.latest_session_messages(
+                    session.as_deref(),
+                    project_scope.as_deref(),
+                    source_filter,
+                    latest.get(),
+                    message_index_range,
+                )
+            } else {
+                service.messages(
+                    session.as_deref(),
+                    project_scope.as_deref(),
+                    source_filter,
+                    Some(limit),
+                    offset,
+                    SortOptions::new(sort_by, order),
+                    message_index_range,
+                )
+            };
+            if latest.is_none() && response.next_page {
                 response.next_command = Some(build_next_messages_command(
                     cli.source,
                     cli.pretty,
                     session.as_deref(),
                     project.as_deref(),
                     all,
+                    message_index_range,
                     limit,
                     response.next_offset as usize,
                     sort_by,
@@ -249,7 +276,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
             if let Some(proj) = project {
                 let response =
-                    service.messages(None, Some(proj.as_str()), source_filter, None, 0, sort);
+                    service.messages(None, Some(proj.as_str()), source_filter, None, 0, sort, None);
                 serialize(&response, cli.pretty)?
             } else {
                 let (codex_path, claude_name) =
@@ -264,6 +291,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         None,
                         0,
                         sort,
+                        None,
                     );
                     messages.extend(codex.messages);
                 }
@@ -275,6 +303,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         None,
                         0,
                         sort,
+                        None,
                     );
                     messages.extend(claude.messages);
                 }
@@ -286,6 +315,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         None,
                         0,
                         sort,
+                        None,
                     );
                     messages.extend(cursor.messages);
                 }
@@ -355,6 +385,18 @@ fn effective_remember_agent(cli_agent: Option<Agent>) -> Agent {
     cli_agent
         .or_else(default_remember_agent_from_env)
         .unwrap_or(Agent::Cursor)
+}
+
+fn validate_message_index_range(
+    from: Option<usize>,
+    to: Option<usize>,
+) -> Result<Option<MessageIndexRange>> {
+    if let (Some(from), Some(to)) = (from, to)
+        && from > to
+    {
+        bail!("--from-message-index must be less than or equal to --to-message-index");
+    }
+    Ok(MessageIndexRange::new(from, to))
 }
 
 fn default_remember_agent_from_env() -> Option<Agent> {
@@ -449,6 +491,7 @@ fn build_next_messages_command(
     session: Option<&str>,
     project: Option<&str>,
     all: bool,
+    message_index_range: Option<MessageIndexRange>,
     limit: usize,
     next_offset: usize,
     sort_by: SortBy,
@@ -478,6 +521,14 @@ fn build_next_messages_command(
     }
     if all {
         parts.push("--all".to_string());
+    }
+    if let Some(range) = message_index_range {
+        if let Some(from) = range.from {
+            parts.push(format!("--from-message-index {from}"));
+        }
+        if let Some(to) = range.to {
+            parts.push(format!("--to-message-index {to}"));
+        }
     }
 
     parts.push(format!("--limit {limit}"));

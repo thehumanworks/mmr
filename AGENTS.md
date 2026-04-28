@@ -11,6 +11,7 @@
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
 - `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).

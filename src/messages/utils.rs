@@ -35,6 +35,7 @@ pub(crate) fn load_session_transcripts(
                 None,
                 0,
                 SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                None,
             );
             SessionTranscript {
                 session_id: selection.session_id.clone(),
