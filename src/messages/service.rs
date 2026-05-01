@@ -29,6 +29,33 @@ impl MessageIndexRange {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageQueryOptions {
+    pub limit: Option<usize>,
+    pub offset: usize,
+    pub sort: SortOptions,
+    pub message_index_range: Option<MessageIndexRange>,
+}
+
+impl MessageQueryOptions {
+    pub fn new(limit: Option<usize>, offset: usize, sort: SortOptions) -> Self {
+        Self {
+            limit,
+            offset,
+            sort,
+            message_index_range: None,
+        }
+    }
+
+    pub fn with_message_index_range(
+        mut self,
+        message_index_range: Option<MessageIndexRange>,
+    ) -> Self {
+        self.message_index_range = message_index_range;
+        self
+    }
+}
+
 #[derive(Debug)]
 pub struct QueryService {
     messages: Vec<MessageRecord>,
@@ -261,10 +288,7 @@ impl QueryService {
         session_id: Option<&str>,
         project: Option<&str>,
         source_filter: Option<SourceFilter>,
-        limit: Option<usize>,
-        offset: usize,
-        sort: SortOptions,
-        message_index_range: Option<MessageIndexRange>,
+        options: MessageQueryOptions,
     ) -> ApiMessagesResponse {
         let resolved_project = project.map(|p| resolve_project(&self.projects, source_filter, p));
 
@@ -280,25 +304,32 @@ impl QueryService {
             .collect::<Vec<_>>();
         let total_messages = filtered.len() as i64;
         let session_message_counts = build_session_message_counts(&filtered);
-        sort_messages(&mut filtered, sort.by, sort.order, &session_message_counts);
-        let selected_total = message_index_range
+        sort_messages(
+            &mut filtered,
+            options.sort.by,
+            options.sort.order,
+            &session_message_counts,
+        );
+        let selected_total = options
+            .message_index_range
             .map(|range| message_index_range_len(filtered.len(), range))
             .unwrap_or(filtered.len());
-        let filtered = apply_message_index_range(filtered, message_index_range);
+        let filtered = apply_message_index_range(filtered, options.message_index_range);
 
-        let paged = if sort.by == SortBy::Timestamp && sort.order == SortOrder::Asc {
+        let paged = if options.sort.by == SortBy::Timestamp && options.sort.order == SortOrder::Asc
+        {
             // Preserve the historical "newest window, then chronological output" behavior.
             let descending = filtered.into_iter().rev().collect::<Vec<_>>();
-            let mut paged = apply_pagination(descending, limit, offset);
+            let mut paged = apply_pagination(descending, options.limit, options.offset);
             paged.reverse();
             paged
         } else {
-            apply_pagination(filtered, limit, offset)
+            apply_pagination(filtered, options.limit, options.offset)
         };
 
         let page_size = paged.len();
-        let next_offset = (offset + page_size) as i64;
-        let next_page = limit.is_some() && next_offset < selected_total as i64;
+        let next_offset = (options.offset + page_size) as i64;
+        let next_page = options.limit.is_some() && next_offset < selected_total as i64;
 
         let messages = paged
             .into_iter()
@@ -378,11 +409,7 @@ impl QueryService {
 
         let total_messages = latest_session_messages.len() as i64;
         let ranged = apply_message_index_range(latest_session_messages, message_index_range);
-        let mut windowed = ranged
-            .into_iter()
-            .rev()
-            .take(window)
-            .collect::<Vec<_>>();
+        let mut windowed = ranged.into_iter().rev().take(window).collect::<Vec<_>>();
         windowed.reverse();
         let next_offset = windowed.len() as i64;
 
@@ -773,9 +800,11 @@ mod tests {
             Some("session-1"),
             None,
             None,
-            Some(1),
-            1,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            MessageQueryOptions::new(
+                Some(1),
+                1,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            ),
         );
         assert_eq!(response.messages.len(), 1);
         assert_eq!(response.messages[0].content, "second");
@@ -827,6 +856,7 @@ mod tests {
             Some("/Users/test/proj"),
             Some(SourceFilter::Codex),
             2,
+            None,
         );
 
         assert_eq!(response.total_messages, 3);
@@ -957,9 +987,7 @@ mod tests {
             None,
             None,
             None,
-            None,
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
         );
         assert_eq!(response.total_messages, 2);
         assert_eq!(response.messages.len(), 2);
@@ -992,9 +1020,7 @@ mod tests {
             None,
             Some("-Users-test-proj"),
             Some(SourceFilter::Claude),
-            None,
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
         );
         assert_eq!(response.total_messages, 1);
         assert_eq!(response.messages[0].project_name, "-Users-test-proj");
@@ -1381,9 +1407,11 @@ mod tests {
             None,
             None,
             None,
-            Some(2),
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            MessageQueryOptions::new(
+                Some(2),
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            ),
         );
         assert_eq!(response.messages.len(), 2);
         assert_eq!(response.total_messages, 5);
@@ -1427,9 +1455,11 @@ mod tests {
             None,
             None,
             None,
-            Some(2),
-            2,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            MessageQueryOptions::new(
+                Some(2),
+                2,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            ),
         );
         assert_eq!(response.messages.len(), 1);
         assert_eq!(response.total_messages, 3);
@@ -1464,9 +1494,7 @@ mod tests {
             None,
             None,
             None,
-            None,
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
         );
         assert_eq!(response.messages.len(), 2);
         assert!(!response.next_page);

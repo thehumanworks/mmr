@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use crate::agent::ai;
-use crate::messages::service::{MessageIndexRange, QueryService};
+use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
@@ -250,10 +250,8 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     session.as_deref(),
                     project_scope.as_deref(),
                     source_filter,
-                    Some(limit),
-                    offset,
-                    SortOptions::new(sort_by, order),
-                    message_index_range,
+                    MessageQueryOptions::new(Some(limit), offset, SortOptions::new(sort_by, order))
+                        .with_message_index_range(message_index_range),
                 )
             };
             if latest.is_none() && response.next_page {
@@ -275,8 +273,12 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Export { project } => {
             let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
             if let Some(proj) = project {
-                let response =
-                    service.messages(None, Some(proj.as_str()), source_filter, None, 0, sort, None);
+                let response = service.messages(
+                    None,
+                    Some(proj.as_str()),
+                    source_filter,
+                    MessageQueryOptions::new(None, 0, sort),
+                );
                 serialize(&response, cli.pretty)?
             } else {
                 let (codex_path, claude_name) =
@@ -288,10 +290,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         None,
                         Some(&codex_path),
                         Some(SourceFilter::Codex),
-                        None,
-                        0,
-                        sort,
-                        None,
+                        MessageQueryOptions::new(None, 0, sort),
                     );
                     messages.extend(codex.messages);
                 }
@@ -300,10 +299,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         None,
                         Some(&claude_name),
                         Some(SourceFilter::Claude),
-                        None,
-                        0,
-                        sort,
-                        None,
+                        MessageQueryOptions::new(None, 0, sort),
                     );
                     messages.extend(claude.messages);
                 }
@@ -312,10 +308,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         None,
                         Some(&cursor_name),
                         Some(SourceFilter::Cursor),
-                        None,
-                        0,
-                        sort,
-                        None,
+                        MessageQueryOptions::new(None, 0, sort),
                     );
                     messages.extend(cursor.messages);
                 }
@@ -672,6 +665,41 @@ mod tests {
         assert_eq!(parse_agent_env("GEMINI"), Some(Agent::Gemini));
         assert_eq!(parse_agent_env(""), None);
         assert_eq!(parse_agent_env("invalid"), None);
+    }
+
+    #[test]
+    fn message_index_range_validation_accepts_open_and_closed_ranges() {
+        assert_eq!(validate_message_index_range(None, None).unwrap(), None);
+        assert_eq!(
+            validate_message_index_range(Some(1), None).unwrap(),
+            Some(MessageIndexRange {
+                from: Some(1),
+                to: None,
+            })
+        );
+        assert_eq!(
+            validate_message_index_range(None, Some(3)).unwrap(),
+            Some(MessageIndexRange {
+                from: None,
+                to: Some(3),
+            })
+        );
+        assert_eq!(
+            validate_message_index_range(Some(1), Some(3)).unwrap(),
+            Some(MessageIndexRange {
+                from: Some(1),
+                to: Some(3),
+            })
+        );
+    }
+
+    #[test]
+    fn message_index_range_validation_rejects_inverted_range() {
+        let err = validate_message_index_range(Some(4), Some(1)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--from-message-index must be less than or equal to --to-message-index")
+        );
     }
 
     #[test]

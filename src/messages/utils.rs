@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 
 use crate::{
-    messages::service::QueryService,
+    messages::service::{MessageQueryOptions, QueryService},
     types::{
         ApiSession, RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter,
         agent::{SessionSelection, SessionTranscript},
@@ -32,10 +32,11 @@ pub(crate) fn load_session_transcripts(
                 Some(&selection.session_id),
                 Some(&selection.project_name),
                 Some(selection.source),
-                None,
-                0,
-                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                None,
+                MessageQueryOptions::new(
+                    None,
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
             );
             SessionTranscript {
                 session_id: selection.session_id.clone(),
