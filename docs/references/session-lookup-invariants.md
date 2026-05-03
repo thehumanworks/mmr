@@ -2,6 +2,8 @@
 
 This document specifies the invariant behavior when looking up messages by session ID.
 
+It is intentionally narrow: this document covers only session-ID lookup scope and stderr hinting. For the full `messages` command contract, including pagination metadata, `--latest`, and message-index ranges, see `specs/messages.md`.
+
 ## Invariant: `--session` bypasses cwd project auto-discovery
 
 When `mmr messages --session <ID>` is called **without** an explicit `--project`, the command must search across **all projects** — the default cwd-based project auto-discovery is not applied.
@@ -37,3 +39,9 @@ Covered by integration tests in `tests/cli_contract.rs`:
 - `messages_session_without_project_or_source_prints_hint` — hint appears on stderr
 - `messages_session_with_source_does_not_print_hint` — hint suppressed when `--source` provided
 - `messages_session_with_explicit_project_uses_project_scope` — explicit `--project` still applies project scoping
+
+### Related behavior
+
+- `--latest` still respects the same session lookup scope rules before selecting the latest session in scope.
+- When `--project` is omitted and `--session` is also omitted, normal cwd auto-discovery rules apply instead.
+- `next_page`, `next_offset`, and `next_command` are part of the general `messages` response contract, not specific to session lookup.
