@@ -11,4 +11,4 @@ When implementing or reviewing behavior:
 
 ## Index
 
-- [Messages command](messages.md)
+- [Messages command](messages.md) - scope resolution, latest-session queries, message-index windows, and pagination metadata
