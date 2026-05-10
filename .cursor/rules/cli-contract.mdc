@@ -23,9 +23,10 @@ alwaysApply: false
   - Output instruction (replaceable): without `--instructions`, uses the default (Purpose, Output Format, Rules, Resume Instructions). With `--instructions`, the user's text fully replaces the default output instruction.
   - The user prompt is neutral ("Analyze the following AI coding session transcript(s).") — the system instruction has sole authority over output behavior.
   - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` may supply the default `--agent` when the flag is omitted.
+  - `remember` defaults to `--output-format md`: stdout is the trimmed `RememberResponse.text`, or `(No continuity brief returned.)` if the text is empty. Use `-O json` for machine-readable `RememberResponse` output.
 - Keep `messages` pagination semantics: page from newest window, then return chronological order.
 - Each `ApiSession` and `ApiMessage` includes per-item `source` and `project_name` metadata.
-- Do not color JSON output; only color human-facing errors on `stderr`.
+- Do not color JSON output; only color human-facing errors on `stderr`. `remember` markdown output is plain text on stdout, not JSON.
 
 ## Example
 

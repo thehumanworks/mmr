@@ -44,11 +44,12 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
-- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session.
+- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session as markdown on stdout.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json --project /path/to/proj` — emit the structured remember response as JSON.
+- `cargo run -- remember -O md` — explicitly request markdown output (the default).
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -82,6 +83,8 @@ This separation ensures `--instructions` has full control over how the agent pro
 
 The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
+`remember` defaults to markdown stdout (`-O md`): the CLI prints the trimmed `RememberResponse.text` directly, and if that text is empty it prints `(No continuity brief returned.)`. Use `-O json` when you need machine-readable output from `remember`; `--pretty` applies only to that JSON mode.
+
 Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
 
 ## Coding Style & Naming Conventions
@@ -90,7 +93,7 @@ Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMI
 - Keep imports at file top; avoid inline imports.
 - Use descriptive, domain-specific names (`ApiProjectsResponse`, `SourceFilter`, `load_codex_messages`).
 - For sort comparators, include full deterministic tie-breakers so ordering is stable even when primary/secondary keys match.
-- Keep stdout machine-readable JSON; reserve colored output for human-facing stderr messages.
+- Keep stdout machine-readable JSON for `projects`, `sessions`, `messages`, and `export`; `remember` is the exception and defaults to markdown unless `-O json` is selected. Reserve colored output for human-facing stderr messages.
 
 ## Testing Guidelines
 
