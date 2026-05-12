@@ -8,9 +8,10 @@
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, latest-session windowing, and `messages` contract semantics.
+- `src/messages/utils.rs`: session selection, transcript loading, and message formatting helpers used by `remember`.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
@@ -40,8 +41,10 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source codex sessions --project /Users/test/codex-proj` — sessions for a specific source and project.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
-- `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- messages --session sess-123` — messages for a specific session; without `--project`, this bypasses cwd auto-discovery and searches all projects.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
+- `cargo run -- --source codex messages --project /Users/test/codex-proj --latest 5` — newest five messages from the latest scoped session.
+- `cargo run -- --source codex messages --project /Users/test/codex-proj --from-message-index 10 --to-message-index 20` — slice a chronological message window before pagination.
 - `cargo run -- export` — all messages for current directory (cwd) as project, both sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
 - `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session.
@@ -60,7 +63,15 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex matches on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` bypasses cwd project auto-discovery unless `--project` is supplied. When `--source` is also omitted, the CLI prints a hint on `stderr` suggesting `--source` to narrow the lookup.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
+
+## Messages command notes
+
+- `mmr messages` keeps the historical "newest window, then chronological output" behavior when sorting by `timestamp asc`: pagination advances from the newest matching messages, but the returned page is reversed back into chronological order.
+- `mmr messages --latest` selects the latest session in scope and returns the newest message from that session; `--latest <N>` returns the newest `N` messages from that same session in chronological order.
+- `--from-message-index` and `--to-message-index` apply after scope filtering and sorting, before pagination. They are zero-based, inclusive/exclusive respectively.
+- `ApiMessagesResponse.next_command` is populated only when another page exists for a non-`--latest` query, and it preserves the effective filter and pagination flags needed to continue the same query shape.
 
 ## CLI default env vars
 
