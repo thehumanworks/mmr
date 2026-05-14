@@ -11,4 +11,5 @@ When implementing or reviewing behavior:
 
 ## Index
 
+- [Query scoping and source selection](query-scoping.md)
 - [Messages command](messages.md)

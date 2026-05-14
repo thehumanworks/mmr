@@ -1,5 +1,7 @@
 # Messages Command
 
+For default source selection, cwd project scoping, `--all`, and session-lookup behavior, see [Query scoping and source selection](query-scoping.md).
+
 ## `--latest`
 
 `mmr messages --latest` selects the latest session in the current scope and returns only the latest message from that session.
