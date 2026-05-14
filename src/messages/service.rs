@@ -454,6 +454,7 @@ fn resolve_project(
         source_filter.is_none() || source_filter == Some(SourceFilter::Claude);
     let should_search_cursor =
         source_filter.is_none() || source_filter == Some(SourceFilter::Cursor);
+    let should_search_pi = source_filter.is_none() || source_filter == Some(SourceFilter::Pi);
 
     let mut matched_names = Vec::new();
 
@@ -493,6 +494,21 @@ fn resolve_project(
                 .iter()
                 .find(|item| {
                     item.source == SourceKind::Cursor
+                        && (item.name == *candidate || item.original_path == *candidate)
+                })
+                .filter(|m| !matched_names.contains(&m.name))
+            {
+                matched_names.push(project_match.name.clone());
+            }
+        }
+    }
+
+    if should_search_pi {
+        for candidate in &candidates {
+            if let Some(project_match) = projects
+                .iter()
+                .find(|item| {
+                    item.source == SourceKind::Pi
                         && (item.name == *candidate || item.original_path == *candidate)
                 })
                 .filter(|m| !matched_names.contains(&m.name))
@@ -543,6 +559,7 @@ fn matches_source_filter(source: SourceKind, filter: Option<SourceFilter>) -> bo
         Some(SourceFilter::Claude) => source == SourceKind::Claude,
         Some(SourceFilter::Codex) => source == SourceKind::Codex,
         Some(SourceFilter::Cursor) => source == SourceKind::Cursor,
+        Some(SourceFilter::Pi) => source == SourceKind::Pi,
     }
 }
 

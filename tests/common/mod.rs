@@ -17,6 +17,7 @@ impl TestFixture {
         seed_claude_fixture(&home);
         seed_codex_fixture(&home);
         seed_cursor_fixture(&home);
+        seed_pi_fixture(&home);
 
         Self { _tmp: tmp, home }
     }
@@ -100,6 +101,24 @@ fn seed_cursor_fixture(home: &Path) {
         &cursor_session,
         r#"{"role":"user","message":{"content":[{"type":"text","text":"hello from cursor"}]}}
 {"role":"assistant","message":{"content":[{"type":"text","text":"hi from cursor assistant"}]}}"#,
+    );
+}
+
+fn seed_pi_fixture(home: &Path) {
+    let pi_session = home
+        .join(".pi")
+        .join("agent")
+        .join("sessions")
+        .join("--Users-test-pi-proj--")
+        .join("2025-01-04T00-00-00-000Z_sess-pi-1.jsonl");
+
+    write_file(
+        &pi_session,
+        r#"{"type":"session","version":3,"id":"sess-pi-1","timestamp":"2025-01-04T00:00:00.000Z","cwd":"/Users/test/pi-proj"}
+{"type":"model_change","id":"model-1","parentId":null,"timestamp":"2025-01-04T00:00:00.100Z","provider":"openai-codex","modelId":"gpt-5.5"}
+{"type":"message","id":"msg-pi-u1","parentId":"model-1","timestamp":"2025-01-04T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"hello from pi"}],"timestamp":1735948801000}}
+{"type":"message","id":"msg-pi-a1","parentId":"msg-pi-u1","timestamp":"2025-01-04T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"internal"},{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"Cargo.toml"}},{"type":"text","text":"hi from pi assistant"}],"model":"gpt-5.5","usage":{"input":12,"output":6},"timestamp":1735948802000}}
+{"type":"message","id":"msg-pi-t1","parentId":"msg-pi-a1","timestamp":"2025-01-04T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call-1","toolName":"read","content":[{"type":"text","text":"tool output should not be a chat message"}],"isError":false,"timestamp":1735948803000}}"#,
     );
 }
 

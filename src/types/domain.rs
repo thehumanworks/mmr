@@ -8,6 +8,7 @@ pub enum SourceFilter {
     Claude,
     Codex,
     Cursor,
+    Pi,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -45,6 +46,7 @@ pub enum SourceKind {
     Claude,
     Codex,
     Cursor,
+    Pi,
 }
 
 impl SourceKind {
@@ -53,6 +55,7 @@ impl SourceKind {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Cursor => "cursor",
+            Self::Pi => "pi",
         }
     }
 }

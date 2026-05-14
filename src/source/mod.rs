@@ -7,6 +7,7 @@ use crate::types::MessageRecord;
 mod claude;
 mod codex;
 mod cursor;
+mod pi;
 
 pub fn resolve_home_dir() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("SIMPLEMMR_HOME") {
@@ -18,12 +19,17 @@ pub fn resolve_home_dir() -> Result<PathBuf> {
 
 pub fn load_messages() -> Result<Vec<MessageRecord>> {
     let home = resolve_home_dir()?;
-    let (codex_result, (claude_result, cursor_result)) = rayon::join(
+    let (codex_result, (claude_result, (cursor_result, pi_result))) = rayon::join(
         || codex::load_codex_messages(&home),
         || {
             rayon::join(
                 || claude::load_claude_messages(&home),
-                || cursor::load_cursor_messages(&home),
+                || {
+                    rayon::join(
+                        || cursor::load_cursor_messages(&home),
+                        || pi::load_pi_messages(&home),
+                    )
+                },
             )
         },
     );
@@ -31,6 +37,7 @@ pub fn load_messages() -> Result<Vec<MessageRecord>> {
     let mut messages = codex_result?;
     messages.extend(claude_result?);
     messages.extend(cursor_result?);
+    messages.extend(pi_result?);
     Ok(messages)
 }
 
