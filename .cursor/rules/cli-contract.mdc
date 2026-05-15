@@ -13,6 +13,8 @@ alwaysApply: false
   - The read/query commands (`projects`, `sessions`, `messages`, `export`, `remember`) work without `--source`.
 - `sessions` and `messages` accept optional `--project`, optional `--all`, and `messages` accepts optional `--session`.
   - When `--project` is given without `--source`, search all sources.
+  - When `--session` is given without `--project`, bypass cwd auto-discovery and search all projects instead.
+  - When `--session` is given without `--project` or `--source`, print the narrowing hint on `stderr`.
   - Without `--project` and without `--all`, auto-discover the cwd project by default.
   - If cwd auto-discovery fails, fall back to all items across all projects/sources.
   - If cwd auto-discovery succeeds but there are no matching records, return the empty result instead of falling back.

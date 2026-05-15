@@ -8,7 +8,7 @@
 
 ## Fixture Strategy
 
-Seed Claude and Codex JSONL fixtures under a temp HOME so tests are hermetic.
+Seed Claude, Codex, Cursor, and Pi fixtures under a temp HOME so tests are hermetic.
 
 ```rust
 pub struct TestFixture {
@@ -23,21 +23,25 @@ impl TestFixture {
         fs::create_dir_all(&home).expect("create HOME");
         seed_claude_fixture(&home);
         seed_codex_fixture(&home);
+        seed_cursor_fixture(&home);
+        seed_pi_fixture(&home);
         Self { _tmp: tmp, home }
     }
 }
 ```
 
-Source: `tests/common/mod.rs:6-19`
+Source: `tests/common/mod.rs`
 
 ## Contract Integration Tests
 
 Keep behavior checks at the CLI level:
 
 - default source behavior
-- required source validation for `sessions`
+- cwd auto-discovery and `--all` overrides
+- `messages --session` scope behavior and narrowing hint
 - sort and pagination behavior
 - chronological message output
+- `next_page` / `next_offset` / `next_command` metadata
 
 Example assertion pattern:
 
@@ -69,6 +73,7 @@ Source: `tests/cli_benchmark.rs:37-84`
 Run this exact loop before claiming success:
 
 ```bash
+cargo fmt
 cargo test
 cargo test --test cli_benchmark -- --ignored --nocapture
 cargo clippy --all-targets --all-features -- -D warnings

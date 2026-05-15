@@ -6,11 +6,12 @@
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
-- `src/types/`: public API response types and sort/source enums.
-- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/types/`: public API response types, query structs, and sort/source enums.
+- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `pi.rs`), home-resolution helpers, and parallel ingest wiring in `mod.rs`.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and query contract semantics.
+- `src/messages/utils.rs`: session transcript loading and formatting helpers used by `remember`.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
@@ -42,6 +43,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
 - `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- messages --latest 10` — latest 10 messages from the latest session in scope, returned chronologically.
+- `cargo run -- messages --from-message-index 20 --to-message-index 40` — zero-based message window after filtering and sorting.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, all sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
@@ -49,7 +52,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json` — output a machine-readable remember response instead of the default markdown text.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -61,6 +64,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex and Pi match on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` bypasses cwd auto-discovery when `--project` is omitted and searches all projects instead; when `--source` is also omitted, the CLI prints a narrowing hint on stderr.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
@@ -68,6 +72,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for `sessions` and `messages`; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor|pi` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
 - `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default `remember --agent` value when `--agent` is omitted. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+- `SIMPLEMMR_HOME=/path/to/home` overrides the home directory used when loading local source data.
 
 ## Remember command and `--instructions` system prompt architecture
 

@@ -9,7 +9,8 @@ alwaysApply: false
 - Keep the implementation fully Rust-native and storage-free (no DuckDB/cache layers).
 - Parse JSONL defensively: skip malformed lines and continue ingesting valid records.
 - Preserve deterministic ordering metadata (`source_file`, `line_index`) for stable sorting.
-- Maintain parallel file-level ingest using `rayon` for Codex + Claude loaders.
+- Maintain parallel file-level ingest using `rayon` across the Codex, Claude, Cursor, and Pi loaders.
+- Preserve the `SIMPLEMMR_HOME` override so tests and debugging can point ingestion at an alternate home tree.
 
 ## Example
 
