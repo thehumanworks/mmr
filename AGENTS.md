@@ -7,11 +7,12 @@
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
-- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `pi.rs`), plus parallel ingest wiring in `mod.rs`.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, latest-session selection, and response construction.
+- `src/messages/utils.rs`: transcript loading and formatting helpers used by `remember`.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
-- `specs/`: canonical product and behavior specifications.
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `specs/`: canonical product and behavior specifications (`messages.md`, `remember.md`).
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
