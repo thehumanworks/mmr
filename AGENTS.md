@@ -34,6 +34,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Build, Test, and Development Commands
 
+- `Cargo.toml` uses Rust edition 2024. If the host `cargo` is too old to parse the manifest (for example Cargo 1.83 in some cloud runners), use the same commands with `cargo +stable ...`.
 - `cargo run -- projects` — list all projects across all sources.
 - `cargo run -- --source codex projects` — list projects from codex only.
 - `cargo run -- --source cursor projects` — list projects from cursor only.

@@ -8,7 +8,7 @@
 
 ## Fixture Strategy
 
-Seed Claude and Codex JSONL fixtures under a temp HOME so tests are hermetic.
+Seed Claude, Codex, Cursor, Grok, and Pi fixtures under a temp HOME so tests are hermetic.
 
 ```rust
 pub struct TestFixture {
@@ -23,19 +23,23 @@ impl TestFixture {
         fs::create_dir_all(&home).expect("create HOME");
         seed_claude_fixture(&home);
         seed_codex_fixture(&home);
+        seed_cursor_fixture(&home);
+        seed_grok_fixture(&home);
+        seed_pi_fixture(&home);
         Self { _tmp: tmp, home }
     }
 }
 ```
 
-Source: `tests/common/mod.rs:6-19`
+Source: `tests/common/mod.rs`
 
 ## Contract Integration Tests
 
 Keep behavior checks at the CLI level:
 
 - default source behavior
-- required source validation for `sessions`
+- cwd-scoped defaults and `--all` overrides
+- source filtering across `claude|codex|cursor|grok|pi`
 - sort and pagination behavior
 - chronological message output
 
@@ -45,10 +49,10 @@ Example assertion pattern:
 let output = fixture.run_cli(&["projects"]);
 assert!(output.status.success());
 let json = parse_stdout_json(&output);
-assert_eq!(json["total_messages"].as_i64().unwrap(), 8);
+assert_eq!(json["total_messages"].as_i64().unwrap(), 17);
 ```
 
-Source: `tests/cli_contract.rs:5-18`
+Source: `tests/cli_contract.rs`
 
 ## Benchmark Test
 
@@ -69,8 +73,11 @@ Source: `tests/cli_benchmark.rs:37-84`
 Run this exact loop before claiming success:
 
 ```bash
+cargo fmt
 cargo test
 cargo test --test cli_benchmark -- --ignored --nocapture
 cargo clippy --all-targets --all-features -- -D warnings
 cargo build --release
 ```
+
+If the host `cargo` is too old to parse this repo's Rust 2024 manifest, rerun the same loop with `cargo +stable ...`.

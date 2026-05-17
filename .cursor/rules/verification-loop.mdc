@@ -11,6 +11,7 @@ alwaysApply: true
   - `cargo test --test cli_benchmark -- --ignored --nocapture`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo build --release`
+- This repo uses Rust edition 2024. If the host `cargo` is too old to parse `Cargo.toml`, rerun the same sequence with `cargo +stable ...`.
 - Report failures with concrete command output and fix before finalizing.
 - Keep machine-readable output on `stdout`; diagnostics belong on `stderr`.
 

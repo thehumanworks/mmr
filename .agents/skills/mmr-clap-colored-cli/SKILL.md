@@ -15,6 +15,7 @@ description: Build and evolve the local Rust CLI in this repo using clap derive 
    - `messages --session <id>` without `--project` searches all projects and prints a hint when `--source` is omitted
    - `messages` paginates from the newest window, then returns that window in chronological order
 4. Validate before finishing:
+   - If the host `cargo` is too old for Rust edition 2024, run the same commands with `cargo +stable ...`
    - `cargo test`
    - `cargo test --test cli_benchmark -- --ignored --nocapture`
    - `cargo clippy --all-targets --all-features -- -D warnings`
