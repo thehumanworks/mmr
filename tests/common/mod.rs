@@ -17,6 +17,7 @@ impl TestFixture {
         seed_claude_fixture(&home);
         seed_codex_fixture(&home);
         seed_cursor_fixture(&home);
+        seed_grok_fixture(&home);
         seed_pi_fixture(&home);
 
         Self { _tmp: tmp, home }
@@ -101,6 +102,28 @@ fn seed_cursor_fixture(home: &Path) {
         &cursor_session,
         r#"{"role":"user","message":{"content":[{"type":"text","text":"hello from cursor"}]}}
 {"role":"assistant","message":{"content":[{"type":"text","text":"hi from cursor assistant"}]}}"#,
+    );
+}
+
+fn seed_grok_fixture(home: &Path) {
+    let grok_session = home
+        .join(".grok")
+        .join("sessions")
+        .join("%2FUsers%2Ftest%2Fgrok-proj")
+        .join("sess-grok-1");
+
+    write_file(
+        &grok_session.join("summary.json"),
+        r#"{"info":{"id":"sess-grok-1","cwd":"/Users/test/grok-proj"},"session_summary":"Grok fixture session","created_at":"2025-01-05T00:00:00Z","updated_at":"2025-01-05T00:00:03Z","current_model_id":"grok-build","num_messages":3}"#,
+    );
+    write_file(
+        &grok_session.join("updates.jsonl"),
+        r#"{"timestamp":1736035200,"method":"session/update","params":{"sessionId":"sess-grok-1","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}
+not-json
+{"timestamp":1736035201,"method":"session/update","params":{"sessionId":"sess-grok-1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello from grok"},"_meta":{"modelId":"grok-build"}},"_meta":{"agentTimestampMs":1736035201000}}}
+{"timestamp":1736035202,"method":"session/update","params":{"sessionId":"sess-grok-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi "}},"_meta":{"agentTimestampMs":1736035202000}}}
+{"timestamp":1736035202,"method":"session/update","params":{"sessionId":"sess-grok-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"from grok assistant"}},"_meta":{"agentTimestampMs":1736035202100}}}
+{"timestamp":1736035203,"method":"session/update","params":{"sessionId":"sess-grok-1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"follow-up from grok"},"_meta":{"modelId":"grok-build"}},"_meta":{"agentTimestampMs":1736035203000}}}"#,
     );
 }
 

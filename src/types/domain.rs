@@ -8,6 +8,7 @@ pub enum SourceFilter {
     Claude,
     Codex,
     Cursor,
+    Grok,
     Pi,
 }
 
@@ -46,6 +47,7 @@ pub enum SourceKind {
     Claude,
     Codex,
     Cursor,
+    Grok,
     Pi,
 }
 
@@ -55,6 +57,7 @@ impl SourceKind {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Cursor => "cursor",
+            Self::Grok => "grok",
             Self::Pi => "pi",
         }
     }

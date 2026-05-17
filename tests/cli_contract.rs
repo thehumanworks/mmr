@@ -251,9 +251,9 @@ fn projects_without_source_returns_all_sources() {
     );
 
     let json = parse_stdout_json(&output);
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 14);
-    assert_eq!(json["total_sessions"].as_i64().unwrap(), 6);
-    // 3 codex projects + 1 claude project + 1 cursor project + 1 pi project = we should see all sources
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 17);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 7);
+    // 3 codex projects + 1 claude project + 1 cursor project + 1 grok project + 1 pi project = we should see all sources
     let projects = json["projects"].as_array().unwrap();
     let sources: Vec<&str> = projects
         .iter()
@@ -268,6 +268,7 @@ fn projects_without_source_returns_all_sources() {
         sources.contains(&"cursor"),
         "should include cursor projects"
     );
+    assert!(sources.contains(&"grok"), "should include grok projects");
     assert!(sources.contains(&"pi"), "should include pi projects");
 }
 
@@ -419,6 +420,91 @@ fn sessions_with_source_cursor() {
 }
 
 #[test]
+fn projects_with_source_grok_filters() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["--source", "grok", "projects"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 3);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 1);
+    let projects = json["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0]["source"].as_str().unwrap(), "grok");
+    assert_eq!(
+        projects[0]["name"].as_str().unwrap(),
+        "/Users/test/grok-proj"
+    );
+    assert_eq!(
+        projects[0]["original_path"].as_str().unwrap(),
+        "/Users/test/grok-proj"
+    );
+}
+
+#[test]
+fn messages_filtered_by_source_grok() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli_with_env(&["--source", "grok", "messages", "--all"], &[]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 3);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3);
+    assert!(
+        messages
+            .iter()
+            .all(|msg| msg["source"].as_str().unwrap() == "grok")
+    );
+    assert_eq!(messages[0]["role"].as_str().unwrap(), "user");
+    assert_eq!(messages[0]["content"].as_str().unwrap(), "hello from grok");
+    assert_eq!(messages[1]["role"].as_str().unwrap(), "assistant");
+    assert_eq!(
+        messages[1]["content"].as_str().unwrap(),
+        "hi from grok assistant"
+    );
+    assert_eq!(messages[2]["role"].as_str().unwrap(), "user");
+    assert_eq!(
+        messages[2]["content"].as_str().unwrap(),
+        "follow-up from grok"
+    );
+}
+
+#[test]
+fn sessions_with_source_grok() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli_with_env(&["--source", "grok", "sessions", "--all"], &[]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 1);
+    let sessions = json["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["source"].as_str().unwrap(), "grok");
+    assert_eq!(sessions[0]["session_id"].as_str().unwrap(), "sess-grok-1");
+    assert_eq!(
+        sessions[0]["project_path"].as_str().unwrap(),
+        "/Users/test/grok-proj"
+    );
+    assert_eq!(sessions[0]["preview"].as_str().unwrap(), "hello from grok");
+}
+
+#[test]
 fn projects_with_source_pi_filters() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&["--source", "pi", "projects"]);
@@ -546,8 +632,8 @@ fn sessions_all_bypasses_cwd_discovery() {
 
     let json = parse_stdout_json(&output);
     let sessions = json["sessions"].as_array().unwrap();
-    assert_eq!(json["total_sessions"].as_i64().unwrap(), 8);
-    assert_eq!(sessions.len(), 8);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 9);
+    assert_eq!(sessions.len(), 9);
 
     let session_ids = sessions
         .iter()
@@ -594,7 +680,7 @@ fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() 
     let disabled_sessions_json = parse_stdout_json(&disabled_sessions);
     assert_eq!(
         disabled_sessions_json["total_sessions"].as_i64().unwrap(),
-        8
+        9
     );
 
     let enabled_sessions =
@@ -617,7 +703,7 @@ fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() 
     let disabled_messages_json = parse_stdout_json(&disabled_messages);
     assert_eq!(
         disabled_messages_json["total_messages"].as_i64().unwrap(),
-        18
+        21
     );
 
     let enabled_messages =
@@ -861,8 +947,8 @@ fn messages_all_bypasses_cwd_discovery() {
 
     let json = parse_stdout_json(&output);
     let messages = json["messages"].as_array().unwrap();
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 18);
-    assert_eq!(messages.len(), 18);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 21);
+    assert_eq!(messages.len(), 21);
     assert!(
         messages
             .iter()
@@ -1186,8 +1272,8 @@ fn default_source_empty_string_keeps_both_sources() {
 
     let json = parse_stdout_json(&output);
     let sessions = json["sessions"].as_array().unwrap();
-    assert_eq!(json["total_sessions"].as_i64().unwrap(), 8);
-    assert_eq!(sessions.len(), 8);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 9);
+    assert_eq!(sessions.len(), 9);
     let sources = sessions
         .iter()
         .map(|session| session["source"].as_str().unwrap())
@@ -1195,6 +1281,7 @@ fn default_source_empty_string_keeps_both_sources() {
     assert!(sources.contains(&"claude"));
     assert!(sources.contains(&"codex"));
     assert!(sources.contains(&"cursor"));
+    assert!(sources.contains(&"grok"));
     assert!(sources.contains(&"pi"));
 }
 
@@ -1313,6 +1400,45 @@ fn export_with_source_and_project_filters_by_source() {
 }
 
 #[test]
+fn export_with_source_grok_and_project_filters_by_source() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "grok",
+        "export",
+        "--project",
+        "/Users/test/grok-proj",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 3);
+    let messages = json["messages"].as_array().unwrap();
+    let contents = messages
+        .iter()
+        .map(|message| message["content"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        contents,
+        vec![
+            "hello from grok",
+            "hi from grok assistant",
+            "follow-up from grok"
+        ]
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| message["source"].as_str().unwrap() == "grok")
+    );
+}
+
+#[test]
 fn export_without_project_uses_cwd() {
     let fixture = TestFixture::seeded();
     let proj_dir = fixture.home.join("proj");
@@ -1359,6 +1485,56 @@ fn export_without_project_uses_cwd() {
         assert!(msg["role"].as_str().is_some());
         assert!(msg["content"].as_str().is_some());
     }
+}
+
+#[test]
+fn export_without_project_can_read_grok_cwd() {
+    let fixture = TestFixture::seeded();
+    let proj_dir = fixture.home.join("grok-cwd-proj");
+    fs::create_dir_all(&proj_dir).expect("create grok cwd project dir");
+    let cwd_str = fs::canonicalize(&proj_dir)
+        .expect("canonicalize grok cwd project")
+        .to_string_lossy()
+        .into_owned();
+    let encoded_cwd = cwd_str.replace('/', "%2F");
+
+    let session_dir = fixture
+        .home
+        .join(".grok")
+        .join("sessions")
+        .join(encoded_cwd)
+        .join("sess-cwd-grok");
+    write_file(
+        &session_dir.join("summary.json"),
+        &format!(
+            r#"{{"info":{{"id":"sess-cwd-grok","cwd":"{}"}},"created_at":"2025-01-09T00:00:00Z","updated_at":"2025-01-09T00:00:02Z","current_model_id":"grok-build"}}"#,
+            cwd_str
+        ),
+    );
+    write_file(
+        &session_dir.join("updates.jsonl"),
+        r#"{"timestamp":1736380801,"method":"session/update","params":{"sessionId":"sess-cwd-grok","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"cwd grok question"},"_meta":{"modelId":"grok-build"}},"_meta":{"agentTimestampMs":1736380801000}}}
+{"timestamp":1736380802,"method":"session/update","params":{"sessionId":"sess-cwd-grok","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"cwd grok answer"}},"_meta":{"agentTimestampMs":1736380802000}}}"#,
+    );
+
+    let output = fixture.run_cli_in_dir(&["--source", "grok", "export"], &proj_dir);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(messages[0]["source"].as_str().unwrap(), "grok");
+    assert_eq!(messages[0]["project_name"].as_str().unwrap(), cwd_str);
+    assert_eq!(
+        messages[0]["content"].as_str().unwrap(),
+        "cwd grok question"
+    );
+    assert_eq!(messages[1]["content"].as_str().unwrap(), "cwd grok answer");
 }
 
 // --- remember ---

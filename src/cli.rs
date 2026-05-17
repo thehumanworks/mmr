@@ -18,7 +18,7 @@ const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 #[derive(Parser, Debug)]
 #[command(
     name = "mmr",
-    about = "Browse AI conversation history from Claude, Codex, Cursor, and Pi"
+    about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi"
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -26,7 +26,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub pretty: bool,
 
-    /// Filter by source: claude, codex, cursor, pi (omit to use MMR_DEFAULT_SOURCE or all)
+    /// Filter by source: claude, codex, cursor, grok, pi (omit to use MMR_DEFAULT_SOURCE or all)
     #[arg(long, global = true, value_enum)]
     pub source: Option<SourceFilter>,
 
@@ -312,6 +312,15 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     );
                     messages.extend(cursor.messages);
                 }
+                if source_filter.is_none() || source_filter == Some(SourceFilter::Grok) {
+                    let grok = service.messages(
+                        None,
+                        Some(&codex_path),
+                        Some(SourceFilter::Grok),
+                        MessageQueryOptions::new(None, 0, sort),
+                    );
+                    messages.extend(grok.messages);
+                }
                 if source_filter.is_none() || source_filter == Some(SourceFilter::Pi) {
                     let pi = service.messages(
                         None,
@@ -379,6 +388,7 @@ fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
         "claude" => Some(SourceFilter::Claude),
         "codex" => Some(SourceFilter::Codex),
         "cursor" => Some(SourceFilter::Cursor),
+        "grok" => Some(SourceFilter::Grok),
         "pi" => Some(SourceFilter::Pi),
         _ => None,
     }
@@ -510,6 +520,7 @@ fn build_next_messages_command(
             SourceFilter::Claude => "claude",
             SourceFilter::Codex => "codex",
             SourceFilter::Cursor => "cursor",
+            SourceFilter::Grok => "grok",
             SourceFilter::Pi => "pi",
         };
         parts.push(format!("--source {name}"));
@@ -664,6 +675,8 @@ mod tests {
             parse_source_filter_env("CURSOR"),
             Some(SourceFilter::Cursor)
         );
+        assert_eq!(parse_source_filter_env("grok"), Some(SourceFilter::Grok));
+        assert_eq!(parse_source_filter_env("GROK"), Some(SourceFilter::Grok));
         assert_eq!(parse_source_filter_env("pi"), Some(SourceFilter::Pi));
         assert_eq!(parse_source_filter_env("PI"), Some(SourceFilter::Pi));
         assert_eq!(parse_source_filter_env(""), None);
