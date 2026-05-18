@@ -11,6 +11,7 @@ alwaysApply: true
   - `cargo test --test cli_benchmark -- --ignored --nocapture`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo build --release`
+- If the default `cargo` is too old to parse this repo's Rust 2024 edition (for example Cargo 1.83.0 in some cloud environments), run the same sequence with `cargo +stable ...`.
 - Report failures with concrete command output and fix before finalizing.
 - Keep machine-readable output on `stdout`; diagnostics belong on `stderr`.
 
@@ -19,6 +20,7 @@ alwaysApply: true
 ```bash
 # ✅ GOOD
 cargo test && cargo clippy --all-targets --all-features -- -D warnings
+cargo +stable test && cargo +stable clippy --all-targets --all-features -- -D warnings
 
 # ❌ BAD (claiming success without verification)
 echo "looks good, should pass"

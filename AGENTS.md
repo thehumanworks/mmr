@@ -2,15 +2,18 @@
 
 ## Project Structure & Module Organization
 
-`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Pi history parsing.
+`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Grok/Pi history parsing.
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, and command-facing query semantics.
+- `src/messages/utils.rs`: session transcript loading and formatting helpers used by `remember`.
+- `src/types/query.rs`: internal aggregate and resolved-project types used by the query layer.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `README.md`: user-facing setup, workflow, and troubleshooting guide.
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
@@ -31,6 +34,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Build, Test, and Development Commands
 
+This repo uses Rust edition `2024`. In this cloud environment the preinstalled `cargo 1.83.0` is too old to parse that edition, so prefer `cargo +stable ...` when running commands here.
+
 - `cargo run -- projects` — list all projects across all sources.
 - `cargo run -- --source codex projects` — list projects from codex only.
 - `cargo run -- --source cursor projects` — list projects from cursor only.
@@ -50,7 +55,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O md` — output as markdown (the default) instead of JSON.
+- `cargo run -- remember -O json` — return machine-readable JSON instead of markdown.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -62,6 +68,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr export` uses the current working directory to infer the project: Codex, Grok, and Pi match on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
 - `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` bypasses cwd project auto-discovery when `--project` is omitted and searches across all projects instead; without `--source`, it prints a narrowing hint on `stderr`.
+- Direct Cursor-only `--project` lookups currently match the encoded Cursor project directory name (for example `-Users-mish-proj`); `export` without `--project` and cwd auto-discovery perform that translation automatically.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars

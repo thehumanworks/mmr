@@ -12,3 +12,11 @@ When implementing or reviewing behavior:
 ## Index
 
 - [Messages command](messages.md)
+
+## Related references
+
+- [Session lookup invariants](../docs/references/session-lookup-invariants.md)
+- [Codex message schema](../docs/references/schemas/codex/message_schema.md)
+- [Claude message schema](../docs/references/schemas/claude/message_schema.md)
+- [Grok message schema](../docs/references/schemas/grok/message_schema.md)
+- [Pi message schema](../docs/references/schemas/pi/message_schema.md)
