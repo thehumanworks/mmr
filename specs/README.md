@@ -12,3 +12,8 @@ When implementing or reviewing behavior:
 ## Index
 
 - [Messages command](messages.md)
+- [Remember command](remember.md)
+
+## Related references
+
+- `docs/references/schemas/` documents the raw per-source transcript layouts that `mmr` normalizes into the public API shapes described by these specs.
