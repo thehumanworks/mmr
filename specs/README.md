@@ -12,3 +12,8 @@ When implementing or reviewing behavior:
 ## Index
 
 - [Messages command](messages.md)
+
+## Related References
+
+- [`docs/references/session-lookup-invariants.md`](../docs/references/session-lookup-invariants.md) — `messages --session` scope rules and stderr hint behavior.
+- [`docs/references/schemas/`](../docs/references/schemas/) — source-specific raw transcript layouts and `mmr` field mappings for Claude, Codex, Grok, and Pi.

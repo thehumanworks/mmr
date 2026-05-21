@@ -2,16 +2,18 @@
 
 ## Project Structure & Module Organization
 
-`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Pi history parsing.
+`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Grok/Pi history parsing.
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
-- `src/types/`: public API response types and sort/source enums.
-- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/types/`: public API response types, query helper structs, and sort/source enums.
+- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`) plus home-resolution and parallel ingest wiring in `mod.rs`.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, latest-session selection, and project-resolution semantics.
+- `src/messages/utils.rs`: shared message formatting helpers used by agent flows.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `specs/`: canonical product and behavior specifications.
+- `docs/references/schemas/`: source-specific raw transcript layouts and `mmr` field-mapping notes.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
@@ -32,6 +34,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 ## Build, Test, and Development Commands
 
 - `cargo run -- projects` — list all projects across all sources.
+- `cargo run -- --source claude projects` — list projects from claude only.
 - `cargo run -- --source codex projects` — list projects from codex only.
 - `cargo run -- --source cursor projects` — list projects from cursor only.
 - `cargo run -- --source grok projects` — list projects from grok only.
@@ -43,6 +46,9 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
 - `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- messages --latest` — latest message from the latest session in scope.
+- `cargo run -- messages --latest 5` — latest five messages from the latest session in scope.
+- `cargo run -- messages --from-message-index 10 --to-message-index 20` — zero-based message window after filtering and sorting.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, all sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
