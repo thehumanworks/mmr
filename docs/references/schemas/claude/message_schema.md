@@ -78,7 +78,7 @@ See `example.json` for mmr output (normalized messages). Raw JSONL examples:
 | --------------- | ------------------------------------------- |
 | `source`        | `"claude"`                                  |
 | `project_name`  | Directory name under `projects/`            |
-| `project_path`  | First `cwd` in file, else decoded from name |
+| `project_path`  | First `cwd` in file, else the stored project directory name |
 | `session_id`    | `sessionId`                                 |
 | `role`          | `message.role` or `type`                    |
 | `content`       | Extracted from `message.content`            |

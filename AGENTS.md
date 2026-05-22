@@ -2,15 +2,17 @@
 
 ## Project Structure & Module Organization
 
-`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Pi history parsing.
+`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Grok/Pi history parsing.
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
-- `src/types/`: public API response types and sort/source enums.
-- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/types/`: public API response types, internal query structs, and sort/source enums.
+- `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), `SIMPLEMMR_HOME` resolution, and parallel ingest wiring in `mod.rs`.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, project resolution, and contract semantics.
+- `src/messages/utils.rs`: `remember` session selection, transcript loading, formatting, and tool-message truncation.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/{cursor,codex}.rs`: Cursor and Codex backend adapters for `remember`.
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
@@ -32,6 +34,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 ## Build, Test, and Development Commands
 
 - `cargo run -- projects` — list all projects across all sources.
+- `cargo run -- --source claude projects` — list projects from claude only.
 - `cargo run -- --source codex projects` — list projects from codex only.
 - `cargo run -- --source cursor projects` — list projects from cursor only.
 - `cargo run -- --source grok projects` — list projects from grok only.
@@ -46,11 +49,11 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, all sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
-- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session.
+- `cargo run -- remember --project /path/to/proj` — generate a continuity brief from the latest session (markdown by default).
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
-- `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember --instructions "Return only a keyword."` — replace the default output-format/rules section of the system prompt.
+- `cargo run -- remember -O json` — return structured JSON instead of the default markdown summary.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -61,7 +64,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 - `mmr export` uses the current working directory to infer the project: Codex, Grok, and Pi match on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`). The CLI calls `QueryService::messages` once per source when using cwd, then merges and sorts by timestamp (asc).
 - `mmr export --project <path>` passes the project to a single `messages` call (all sources unless `--source` is set). Reuses existing `ApiMessagesResponse`; no new response type.
-- `mmr sessions` and `mmr messages` now use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr sessions` and `mmr messages` use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set, or `MMR_AUTO_DISCOVER_PROJECT=0`.
+- `mmr messages --session <id>` without `--project` bypasses cwd project auto-discovery and searches all projects instead; if `--source` is also omitted, the CLI prints a stderr hint suggesting `--source` to narrow the search.
 - Scripts that need only the message array can pipe through `jq '.messages'`.
 
 ## CLI default env vars
@@ -72,7 +76,11 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Remember command and `--instructions` system prompt architecture
 
-The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted). For each backend, the memory flow uses a system prompt composed of two parts:
+The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted). The command supports three selectors: omit the selector for the latest session, use `all` for all matching sessions, or use `session <id>` for one specific session. Output defaults to markdown; pass `-O json` to receive the serialized `RememberResponse`.
+
+Project resolution is intentionally different from `export`/`sessions`/`messages`: when `--project` is omitted, `remember` uses the raw `current_dir()` string instead of the canonicalized cwd path. That can matter for Codex/Grok/Pi when the caller is inside a symlinked or otherwise non-canonical directory; scripts that need predictable matching should pass `--project` explicitly.
+
+For each backend, the memory flow uses a system prompt composed of two parts:
 
 1. **Base instruction** (`MEMORY_AGENT_BASE_INSTRUCTION` in `src/agent/ai.rs`): Always present. Contains only the agent's identity ("You are a Memory Agent") and the input format description. Must **never** contain output-directing language (e.g. "continuity brief", "sole purpose", output quality directives).
 
@@ -84,7 +92,23 @@ This separation ensures `--instructions` has full control over how the agent pro
 
 The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
-Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
+Environment/runtime details:
+
+- **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL`; `--model` applies here.
+- **Codex** — Codex app-server websocket client; fixed model `gpt-5.4-mini`; `--model` is currently ignored.
+- **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`; default model `composer-2-fast`; `--model` applies here.
+
+Transcript formatting details:
+
+- Sessions are loaded newest-first, but each selected session's messages are formatted chronologically.
+- Tool messages longer than 2000 characters are truncated before being sent to the backend and suffixed with `... [truncated]`.
+
+## Messages pagination contract
+
+- `ApiMessagesResponse` now includes `next_page`, `next_offset`, and optional `next_command` in addition to `messages` and `total_messages`.
+- With the default `--sort-by timestamp --order asc`, pagination still follows the historical CLI contract: select the newest page-sized window first, then return that window in chronological order.
+- `next_command` is only emitted when another page exists and `--latest` is not active; it preserves the active filters plus non-default sort/order flags.
+- `--from-message-index` is inclusive and `--to-message-index` is exclusive. The index range is applied after filtering/sorting and before pagination. `total_messages` remains the full scoped count before the range is applied.
 
 ## Coding Style & Naming Conventions
 
