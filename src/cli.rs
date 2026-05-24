@@ -845,10 +845,26 @@ fn reconcile_default_sources(
             status: "imported".to_string(),
             discovered_sessions: report.discovered_sessions,
             imported_events: report.imported_events,
-            warnings: report.warnings,
+            warnings: public_import_warnings(report.warnings),
         });
     }
     Ok(reports)
+}
+
+fn public_import_warnings(warnings: Vec<String>) -> Vec<String> {
+    warnings
+        .into_iter()
+        .map(|warning| {
+            if warning.starts_with('/') {
+                warning
+                    .split_once(": ")
+                    .map(|(_, message)| message.to_string())
+                    .unwrap_or_else(|| "source import warning".to_string())
+            } else {
+                warning
+            }
+        })
+        .collect()
 }
 
 fn default_source_root_for(source: SourceFilter) -> Result<Option<PathBuf>> {

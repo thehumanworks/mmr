@@ -149,7 +149,7 @@
     `memory_fabric_contract` with 10 active tests passed and 11 pending ignored
     contracts
   - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-    (`elapsed_ms=809`)
+    (`elapsed_ms=800` after the follow-up import-warning sanitization fix)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
 - NHL-273 focused checks:
