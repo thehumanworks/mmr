@@ -2,15 +2,16 @@
 
 ## Project Structure & Module Organization
 
-`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Pi history parsing.
+`mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Grok/Pi history parsing.
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
-- `src/types/`: public API response types and sort/source enums.
+- `src/types/`: public API response types plus shared sort/query/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
+- `src/messages/service.rs`: in-memory aggregation, filtering, sorting, pagination, project resolution, and API response construction.
+- `src/messages/utils.rs`: `remember` session selection, transcript loading, and prompt-input formatting.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/gemini_api.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
@@ -50,7 +51,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- remember all --project /path/to/proj` — generate a continuity brief from all sessions.
 - `cargo run -- remember session <session-id> --project /path/to/proj` — generate a continuity brief from one specific session.
 - `cargo run -- remember --instructions "Return only a keyword."` — override the default output format and rules.
-- `cargo run -- remember -O md` — output as markdown instead of JSON.
+- `cargo run -- remember -O json` — emit structured JSON instead of the default markdown output.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
@@ -72,7 +73,9 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Remember command and `--instructions` system prompt architecture
 
-The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted). For each backend, the memory flow uses a system prompt composed of two parts:
+The `remember` command sends session transcripts to the backend selected with `--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with `composer-2-fast` when `--model` is omitted). By default, `mmr remember` uses the latest matching session for the target project; `remember all` includes all matching sessions; and `remember session <session-id>` selects one explicit session. If `--project` is omitted, `remember` uses the raw current working directory string rather than the canonicalized cwd used by `export`, `sessions`, and `messages`.
+
+For each backend, the memory flow uses a system prompt composed of two parts:
 
 1. **Base instruction** (`MEMORY_AGENT_BASE_INSTRUCTION` in `src/agent/ai.rs`): Always present. Contains only the agent's identity ("You are a Memory Agent") and the input format description. Must **never** contain output-directing language (e.g. "continuity brief", "sole purpose", output quality directives).
 
@@ -84,7 +87,13 @@ This separation ensures `--instructions` has full control over how the agent pro
 
 The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
-Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
+Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — local Codex app-server auth; fixed `gpt-5.4-mini` model. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
+
+- `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` may set the default backend when `--agent` is omitted; an explicit `--agent` flag wins.
+- `--source` filters which history sources contribute transcripts; `--agent` chooses the summarization backend.
+- `--model` applies to Cursor and Gemini only. Codex `remember` requests always use the fixed `gpt-5.4-mini` model.
+- `remember` defaults to markdown on stdout (`-O md`). Use `-O json` when scripts need the `RememberResponse { agent, text }` payload.
+- `remember` emits one-shot summaries only; JSON output intentionally omits thread or interaction IDs.
 
 ## Coding Style & Naming Conventions
 

@@ -12,3 +12,4 @@ When implementing or reviewing behavior:
 ## Index
 
 - [Messages command](messages.md)
+- [Remember command](remember.md)
