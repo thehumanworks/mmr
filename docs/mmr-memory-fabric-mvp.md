@@ -142,27 +142,95 @@ Minimum JSON fields:
 
 ```json
 {
+  "command": "status",
   "store": {
-    "path": "...",
+    "db_path": "...",
     "exists": true,
-    "schema_version": 2
+    "existed_before_command": true,
+    "schema_version": 2,
+    "expected_schema_version": 2,
+    "schema_status": "ok"
   },
   "project": {
     "id": "...",
-    "path": "...",
-    "linked": true
+    "display_name": "...",
+    "path_hash": "..."
   },
-  "sources": [],
-  "redaction": {
-    "policy_id": "...",
-    "blocking_findings": 0
+  "remote": {
+    "descriptor": "github:<user>/mmr-store",
+    "backend": "file-github",
+    "available": true,
+    "auth_status": "ok",
+    "created": false
   },
-  "sync": {
-    "remote": "github:<user>/mmr-store",
-    "state": "clean"
+  "status": {
+    "linked": true,
+    "sync_status": "synced",
+    "events_total": 1,
+    "source_counts": {
+      "note": 1
+    },
+    "sync_status_counts": {
+      "synced": 1
+    },
+    "redaction": {
+      "policy_id": "redaction-policy:v1:default",
+      "redacted_or_synced": 1,
+      "blocked": 0,
+      "pending": 0
+    },
+    "sync": {
+      "remote_events": 1,
+      "local_manifests": 1,
+      "latest_manifest_id": "manifest:v1:...",
+      "blocked_events": 0,
+      "unsynced_events": 0
+    }
+  },
+  "diagnostics": {
+    "schema": {
+      "status": "ok",
+      "current_version": 2,
+      "expected_version": 2,
+      "action": null
+    },
+    "remote": {
+      "status": "available",
+      "descriptor": "github:<user>/mmr-store",
+      "backend": "file-github",
+      "available": true,
+      "auth_status": "ok",
+      "action": null
+    },
+    "sources": [],
+    "privacy_filter": {
+      "status": "degraded",
+      "detector": "openai/privacy-filter",
+      "reason": "...",
+      "action": "..."
+    },
+    "summary_runner": {
+      "agent": "cursor",
+      "status": "missing_api_key",
+      "command": "agent",
+      "api_key_env": ["CURSOR_API_KEY"],
+      "action": "..."
+    },
+    "dream_runner": {
+      "runner": "mock",
+      "status": "available",
+      "command_configured": false,
+      "command_env": "MMR_DREAM_COMMAND",
+      "action": null
+    },
+    "actions": []
   }
 }
 ```
+
+`diagnostics.actions` is the human recovery checklist for common failure modes:
+unlinked cwd, missing source roots, remote auth failure, privacy-filter
+degradation, blocked sync, schema mismatch, or missing dream runner command.
 
 ### `mmr note`
 
@@ -740,27 +808,26 @@ MVP contract tests:
 
 ```bash
 cargo test --test memory_fabric_contract
-cargo test --test memory_fabric_contract -- --ignored
 ```
 
-The ignored contract tests are expected to fail until their owning downstream
-tickets implement the referenced modules. Each downstream ticket should remove
-the relevant `#[ignore]` once it satisfies the contract.
+There should be no ignored MVP contract tests at handoff. If a future ticket
+adds a pending contract, it must remove the relevant `#[ignore]` once it
+satisfies the behavior.
 
 Active contract tests should continue to assert MVP non-goals. In particular,
 `init`, `store`, `learn`, `context`, `candidates`, `knowledge`, `promote`, and
 `reject` must remain outside the public command surface during the MVP.
 
-Pending contract ownership:
+Implemented contract ownership:
 
 - NHL-269: schema validation and migration replay.
 - NHL-270: source adapter normalization.
 - NHL-272: redaction policy application.
 - NHL-273: search document generation and citations.
-- NHL-282: summary command plus `remember` compatibility.
 - NHL-278 and NHL-279: dream output validation and learned-memory writes.
 - NHL-277: sync manifest generation and hydration.
-- NHL-271, NHL-273, NHL-277, NHL-279, and NHL-282: CLI command-surface tests for
+- NHL-280: summary command plus `remember` compatibility, status diagnostics,
+  quickstart/recovery docs, and integrated CLI command-surface tests for
   `note`, `rg`, `search`, `link`, `sync`, `status`, `dream`, and `summary`.
 
 ## Dependency Graph
@@ -769,13 +836,14 @@ Pending contract ownership:
 2. NHL-269 local store and migrations blocks capture, search, redaction, sync,
    summary audit records, and dreaming.
 3. NHL-270 source adapter framework blocks provider importers.
-4. NHL-271 notes, NHL-273 search, NHL-282 summary, and NHL-272 redaction can
-   proceed after the store contract is available.
+4. NHL-271 notes, NHL-273 search, and NHL-272 redaction can proceed after the
+   store contract is available.
 5. NHL-274, NHL-275, and NHL-276 source importers proceed after the adapter
    framework.
 6. NHL-277 link/sync/status and NHL-278 dream runner proceed after redaction.
 7. NHL-279 dream assimilation proceeds after search and dream runner.
-8. NHL-280 integrated CLI/docs follows the command surfaces.
+8. NHL-280 integrated CLI/docs follows the command surfaces and adds the
+   `summary` compatibility path.
 9. NHL-281 final release verification follows all implementation tickets.
 
 ## Resolved Questions

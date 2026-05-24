@@ -13,9 +13,9 @@ use crate::capture::{
 };
 use crate::dream::{
     CommandDreamRunner, DreamConfigOverride, DreamEvidenceMode, DreamObservation, DreamRunner,
-    DreamRunnerConfig, DreamRunnerKind, ENV_DEFAULT_DREAM_RUNNER, ENV_DREAM_MOCK_FAILURE,
-    ENV_DREAM_MOCK_OUTPUT, MockDreamRunner, ValidatedDreamOutput, ValidatedLearnedMemoryStatus,
-    build_evidence_request, validate_dream_output,
+    DreamRunnerConfig, DreamRunnerKind, ENV_DEFAULT_DREAM_RUNNER, ENV_DREAM_COMMAND,
+    ENV_DREAM_MOCK_FAILURE, ENV_DREAM_MOCK_OUTPUT, MockDreamRunner, ValidatedDreamOutput,
+    ValidatedLearnedMemoryStatus, build_evidence_request, validate_dream_output,
 };
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
 use crate::redaction::{
@@ -23,9 +23,9 @@ use crate::redaction::{
     RedactionOutcome, scan_text, scan_text_with_detector,
 };
 use crate::store::{
-    DEFAULT_REDACTION_POLICY_ID, DreamCandidateRecord, EventRecord, LearnedMemoryRecord,
-    NewDreamCandidate, NewEvent, NewLearnedMemory, NewRedactionSpan, ProjectRecord, Store,
-    content_hash,
+    DEFAULT_REDACTION_POLICY_ID, DreamCandidateRecord, EventRecord, LATEST_SCHEMA_VERSION,
+    LearnedMemoryRecord, NewDreamCandidate, NewEvent, NewLearnedMemory, NewRedactionSpan,
+    ProjectRecord, Store, content_hash, default_db_path,
 };
 use crate::sync::{
     HydrationReport, RemoteSummary, SyncReport, hydrate_project, remote_for_operations,
@@ -43,7 +43,8 @@ const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 #[derive(Parser, Debug)]
 #[command(
     name = "mmr",
-    about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi"
+    about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
+    after_help = "Examples:\n  mmr link\n  mmr status --pretty\n  mmr note \"Decision: keep the migration append-only.\"\n  mmr search \"migration append-only\" --pretty\n  mmr rg \"TODO\" --line\n  mmr summary all --project /path/to/project\n  mmr dream --dry-run --pretty\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout. Use --pretty for indented JSON."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -143,6 +144,8 @@ pub enum Commands {
         output_dir: Option<PathBuf>,
     },
     /// Generate a stateless continuity brief from prior sessions
+    Summary(RememberArgs),
+    /// Generate a stateless continuity brief from prior sessions (compatibility alias)
     Remember(RememberArgs),
     /// First-run setup for the current project and default mmr-store remote
     Link,
@@ -238,6 +241,9 @@ pub struct SyncArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(
+    after_help = "Status JSON includes store.db_path, store.schema_version, store.expected_schema_version, store.schema_status, remote state, project link state, and diagnostics for sources, privacy filtering, schema, sync, continuity brief provider setup, and dream runner setup."
+)]
 pub struct StatusArgs {
     /// Project path (omit to use current directory)
     #[arg(long)]
@@ -311,6 +317,9 @@ pub struct SearchTextArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(
+    after_help = "Environment:\n  MMR_DEFAULT_DREAM_RUNNER=mock|command selects the default runner.\n  MMR_DREAM_COMMAND configures the command runner. The command reads a dream request JSON object from stdin and writes dream output JSON to stdout.\n  MMR_DREAM_MOCK_OUTPUT supplies mock runner output for local tests."
+)]
 pub struct DreamArgs {
     /// Project path (omit to use current directory)
     #[arg(long)]
@@ -387,6 +396,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     }
     if let Commands::Sync(args) = &cli.command {
         return serialize(&sync_response(args, source_filter)?, cli.pretty);
+    }
+    if let Commands::Status(args) = &cli.command {
+        return serialize(&status_response(args, source_filter)?, cli.pretty);
     }
     if let Commands::DbInfo {
         project,
@@ -578,26 +590,8 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                 }
             }
         }
-        Commands::Remember(remember) => {
-            let selection = remember.selection();
-            let project = match remember.project {
-                Some(project) => project,
-                None => current_dir_project().context("could not resolve current directory")?,
-            };
-
-            let response = ai::remember(
-                &service,
-                RememberRequest {
-                    agent: effective_remember_agent(remember.agent),
-                    project: project.as_str(),
-                    selection,
-                    source: source_filter,
-                    instructions: remember.instructions.as_deref(),
-                    model: remember.model.as_deref(),
-                },
-            )
-            .await?;
-            format_remember_response(&response, remember.output_format, cli.pretty)?
+        Commands::Summary(remember) | Commands::Remember(remember) => {
+            remember_command_response(&service, remember, source_filter, cli.pretty).await?
         }
         Commands::Link => serialize(&link_response(source_filter)?, cli.pretty)?,
         Commands::Import(args) => serialize(&import_response(&args, source_filter)?, cli.pretty)?,
@@ -612,7 +606,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Dream(args) => serialize(&dream_response(&args)?, cli.pretty)?,
         Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
         Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
-        Commands::Status(args) => serialize(&status_response(&args)?, cli.pretty)?,
+        Commands::Status(args) => serialize(&status_response(&args, source_filter)?, cli.pretty)?,
         Commands::DbInfo {
             project,
             smoke_event,
@@ -620,6 +614,33 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     };
 
     Ok(response)
+}
+
+async fn remember_command_response(
+    service: &QueryService,
+    remember: RememberArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    let selection = remember.selection();
+    let project = match remember.project {
+        Some(project) => project,
+        None => current_dir_project().context("could not resolve current directory")?,
+    };
+
+    let response = ai::remember(
+        service,
+        RememberRequest {
+            agent: effective_remember_agent(remember.agent),
+            project: project.as_str(),
+            selection,
+            source: source_filter,
+            instructions: remember.instructions.as_deref(),
+            model: remember.model.as_deref(),
+        },
+    )
+    .await?;
+    format_remember_response(&response, remember.output_format, pretty)
 }
 
 #[derive(Debug, Serialize)]
@@ -695,15 +716,26 @@ struct LinkResponse {
 #[derive(Debug, Serialize)]
 struct StatusResponse {
     command: String,
-    store: StoreStatus,
+    store: StatusStoreDiagnostics,
     project: Option<ProjectStatus>,
     remote: RemoteSummary,
     status: StatusProjectSnapshot,
+    diagnostics: StatusDiagnostics,
 }
 
 #[derive(Debug, Serialize)]
 struct StoreStatus {
     schema_version: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusStoreDiagnostics {
+    db_path: String,
+    exists: bool,
+    existed_before_command: bool,
+    schema_version: i64,
+    expected_schema_version: i64,
+    schema_status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -748,6 +780,70 @@ struct StatusSyncSnapshot {
     latest_manifest_id: Option<String>,
     blocked_events: usize,
     unsynced_events: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusDiagnostics {
+    schema: StatusSchemaDiagnostic,
+    remote: StatusRemoteDiagnostic,
+    sources: Vec<StatusSourceDiagnostic>,
+    privacy_filter: StatusPrivacyDiagnostic,
+    summary_runner: StatusSummaryRunnerDiagnostic,
+    dream_runner: StatusDreamRunnerDiagnostic,
+    actions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusSchemaDiagnostic {
+    status: String,
+    current_version: i64,
+    expected_version: i64,
+    action: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusRemoteDiagnostic {
+    status: String,
+    descriptor: String,
+    backend: String,
+    available: bool,
+    auth_status: String,
+    action: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusSourceDiagnostic {
+    source: String,
+    status: String,
+    event_count: usize,
+    source_root: Option<String>,
+    action: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusPrivacyDiagnostic {
+    status: PiiCoverageStatus,
+    detector: String,
+    reason: String,
+    action: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusSummaryRunnerDiagnostic {
+    agent: Agent,
+    status: String,
+    command: Option<String>,
+    api_key_env: Vec<String>,
+    action: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusDreamRunnerDiagnostic {
+    runner: String,
+    status: String,
+    command_configured: bool,
+    command_env: String,
+    action: Option<String>,
 }
 
 fn link_response(source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
@@ -828,8 +924,13 @@ fn remote_pending_sync_report(
     })
 }
 
-fn status_response(args: &StatusArgs) -> Result<StatusResponse> {
-    let store = Store::open_default()?;
+fn status_response(
+    args: &StatusArgs,
+    source_filter: Option<SourceFilter>,
+) -> Result<StatusResponse> {
+    let db_path = default_db_path()?;
+    let existed_before_command = db_path.exists();
+    let store = Store::open(db_path)?;
     let info = store.info()?;
     let project_path = match &args.project {
         Some(path) => path.clone(),
@@ -838,15 +939,390 @@ fn status_response(args: &StatusArgs) -> Result<StatusResponse> {
     let project = store.project_by_path(&project_path)?;
     let remote = remote_for_status()?;
     let status = status_snapshot(&store, project.as_ref(), Some(&remote))?;
+    let remote_summary = remote.summary();
+    let diagnostics = status_diagnostics(
+        &project_path,
+        &status,
+        &remote_summary,
+        info.schema_version,
+        source_filter,
+    )?;
     Ok(StatusResponse {
         command: "status".to_string(),
-        store: StoreStatus {
+        store: StatusStoreDiagnostics {
+            exists: Path::new(&info.db_path).exists(),
+            existed_before_command,
+            db_path: info.db_path,
             schema_version: info.schema_version,
+            expected_schema_version: LATEST_SCHEMA_VERSION,
+            schema_status: schema_status(info.schema_version).to_string(),
         },
         project: project.as_ref().map(project_status),
-        remote: remote.summary(),
+        remote: remote_summary,
         status,
+        diagnostics,
     })
+}
+
+fn status_diagnostics(
+    project_path: &Path,
+    status: &StatusProjectSnapshot,
+    remote: &RemoteSummary,
+    schema_version: i64,
+    source_filter: Option<SourceFilter>,
+) -> Result<StatusDiagnostics> {
+    let schema = status_schema_diagnostic(schema_version);
+    let remote = status_remote_diagnostic(remote);
+    let sources = status_source_diagnostics(project_path, status, source_filter)?;
+    let privacy_filter = status_privacy_diagnostic();
+    let summary_runner = status_summary_runner_diagnostic();
+    let dream_runner = status_dream_runner_diagnostic();
+    let mut actions = Vec::new();
+
+    if !status.linked {
+        push_action(&mut actions, &link_action(project_path));
+    }
+    if let Some(action) = &schema.action {
+        push_action(&mut actions, action);
+    }
+    if let Some(action) = &remote.action {
+        push_action(&mut actions, action);
+    }
+    for source in &sources {
+        if let Some(action) = &source.action {
+            push_action(&mut actions, action);
+        }
+    }
+    if let Some(action) = &privacy_filter.action {
+        push_action(&mut actions, action);
+    }
+    if let Some(action) = &summary_runner.action {
+        push_action(&mut actions, action);
+    }
+    if let Some(action) = &dream_runner.action {
+        push_action(&mut actions, action);
+    }
+    if status.redaction.blocked > 0 {
+        push_action(
+            &mut actions,
+            &format!(
+                "Run `mmr redact scan --project {} --pretty`, then `mmr redact explain <event-id> --pretty` for blocked events.",
+                shell_quote_path(project_path)
+            ),
+        );
+    } else if status.sync.unsynced_events > 0 && remote.status == "available" {
+        push_action(
+            &mut actions,
+            &format!(
+                "Run `mmr sync --project {} --pretty` to upload redacted pending events.",
+                shell_quote_path(project_path)
+            ),
+        );
+    }
+
+    Ok(StatusDiagnostics {
+        schema,
+        remote,
+        sources,
+        privacy_filter,
+        summary_runner,
+        dream_runner,
+        actions,
+    })
+}
+
+fn push_action(actions: &mut Vec<String>, action: &str) {
+    if !actions.iter().any(|existing| existing == action) {
+        actions.push(action.to_string());
+    }
+}
+
+fn link_action(project_path: &Path) -> String {
+    format!(
+        "Run `cd {} && mmr link --pretty` to link and reconcile this project.",
+        shell_quote_path(project_path)
+    )
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+fn status_schema_diagnostic(schema_version: i64) -> StatusSchemaDiagnostic {
+    let status = schema_status(schema_version);
+    StatusSchemaDiagnostic {
+        status: status.to_string(),
+        current_version: schema_version,
+        expected_version: LATEST_SCHEMA_VERSION,
+        action: (status != "ok").then(|| {
+            "Back up the mmr database, update mmr, and rerun the command so migrations can complete."
+                .to_string()
+        }),
+    }
+}
+
+fn schema_status(schema_version: i64) -> &'static str {
+    if schema_version == LATEST_SCHEMA_VERSION {
+        "ok"
+    } else {
+        "mismatch"
+    }
+}
+
+fn status_remote_diagnostic(remote: &RemoteSummary) -> StatusRemoteDiagnostic {
+    let (status, action) = if remote.auth_status != "ok" {
+        (
+            "auth_failed",
+            Some(
+                "Set MMR_GITHUB_USER or GITHUB_USER and verify GitHub auth for github:<user>/mmr-store.",
+            ),
+        )
+    } else if remote.available {
+        ("available", None)
+    } else {
+        (
+            "missing_remote",
+            Some(
+                "Run `mmr link` or `mmr sync` to create the default github:<user>/mmr-store remote.",
+            ),
+        )
+    };
+    StatusRemoteDiagnostic {
+        status: status.to_string(),
+        descriptor: remote.descriptor.clone(),
+        backend: remote.backend.clone(),
+        available: remote.available,
+        auth_status: remote.auth_status.clone(),
+        action: action.map(str::to_string),
+    }
+}
+
+fn status_source_diagnostics(
+    project_path: &Path,
+    status: &StatusProjectSnapshot,
+    source_filter: Option<SourceFilter>,
+) -> Result<Vec<StatusSourceDiagnostic>> {
+    let sources = match source_filter {
+        Some(source) => vec![source],
+        None => vec![
+            SourceFilter::Codex,
+            SourceFilter::Claude,
+            SourceFilter::Cursor,
+            SourceFilter::Grok,
+            SourceFilter::Pi,
+        ],
+    };
+    let mut diagnostics = Vec::new();
+    for source in sources {
+        diagnostics.push(status_source_diagnostic(
+            project_path,
+            source,
+            &status.source_counts,
+        )?);
+    }
+    for (source, event_count) in &status.source_counts {
+        if diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.source == *source)
+        {
+            continue;
+        }
+        diagnostics.push(StatusSourceDiagnostic {
+            source: source.clone(),
+            status: "active_local".to_string(),
+            event_count: *event_count,
+            source_root: None,
+            action: None,
+        });
+    }
+    Ok(diagnostics)
+}
+
+fn status_source_diagnostic(
+    project_path: &Path,
+    source: SourceFilter,
+    source_counts: &BTreeMap<String, usize>,
+) -> Result<StatusSourceDiagnostic> {
+    let source_name = source_filter_name(Some(source)).unwrap_or("unknown");
+    let event_count = *source_counts.get(source_name).unwrap_or(&0);
+    if matches!(source, SourceFilter::Grok | SourceFilter::Pi) {
+        return Ok(StatusSourceDiagnostic {
+            source: source_name.to_string(),
+            status: "unsupported_importer".to_string(),
+            event_count,
+            source_root: None,
+            action: None,
+        });
+    }
+
+    let Some(source_root) = default_source_root_for(source)? else {
+        return Ok(StatusSourceDiagnostic {
+            source: source_name.to_string(),
+            status: "home_unset".to_string(),
+            event_count,
+            source_root: None,
+            action: Some(format!(
+                "Set HOME or run `mmr --source {source_name} import --project {} --source-root <source-root>`.",
+                shell_quote_path(project_path)
+            )),
+        });
+    };
+    let source_root_text = source_root.display().to_string();
+    if source_root.exists() {
+        let action = (event_count == 0).then(|| {
+            format!(
+                "Run `mmr --source {source_name} import --project {} --source-root {}` to reconcile matching sessions.",
+                shell_quote_path(project_path),
+                shell_quote_path(&source_root)
+            )
+        });
+        Ok(StatusSourceDiagnostic {
+            source: source_name.to_string(),
+            status: "available".to_string(),
+            event_count,
+            source_root: Some(source_root_text),
+            action,
+        })
+    } else {
+        Ok(StatusSourceDiagnostic {
+            source: source_name.to_string(),
+            status: "missing_source_root".to_string(),
+            event_count,
+            source_root: Some(source_root_text),
+            action: Some(format!(
+                "Run the {source_name} provider once, or run `mmr --source {source_name} import --project {} --source-root <source-root>` with the correct source root.",
+                shell_quote_path(project_path)
+            )),
+        })
+    }
+}
+
+fn status_privacy_diagnostic() -> StatusPrivacyDiagnostic {
+    let coverage = scan_text("").pii_coverage;
+    let action = (coverage.status != PiiCoverageStatus::Available).then(|| {
+        "Optional openai/privacy-filter is not configured; deterministic secret and coarse PII blocking still run before sync."
+            .to_string()
+    });
+    StatusPrivacyDiagnostic {
+        status: coverage.status,
+        detector: coverage.detector,
+        reason: coverage.reason,
+        action,
+    }
+}
+
+fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
+    let agent = effective_remember_agent(None);
+    match agent {
+        Agent::Gemini => {
+            let configured =
+                env_has_non_empty("GOOGLE_API_KEY") || env_has_non_empty("GEMINI_API_KEY");
+            StatusSummaryRunnerDiagnostic {
+                agent,
+                status: if configured {
+                    "configured"
+                } else {
+                    "missing_api_key"
+                }
+                .to_string(),
+                command: None,
+                api_key_env: vec!["GOOGLE_API_KEY".to_string(), "GEMINI_API_KEY".to_string()],
+                action: (!configured).then(|| {
+                    "Set GOOGLE_API_KEY or GEMINI_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|codex, or run one brief with `mmr summary --agent cursor|codex`."
+                        .to_string()
+                }),
+            }
+        }
+        Agent::Cursor => {
+            let api_key_configured = env_has_non_empty("CURSOR_API_KEY");
+            let command_available = command_on_path("agent");
+            let (status, action) = if !api_key_configured {
+                (
+                    "missing_api_key",
+                    Some(
+                        "Set CURSOR_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summary --agent gemini|codex`."
+                            .to_string(),
+                    ),
+                )
+            } else if !command_available {
+                (
+                    "missing_command",
+                    Some("Install the Cursor `agent` CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summary --agent gemini|codex`.".to_string()),
+                )
+            } else {
+                ("configured", None)
+            };
+            StatusSummaryRunnerDiagnostic {
+                agent,
+                status: status.to_string(),
+                command: Some("agent".to_string()),
+                api_key_env: vec!["CURSOR_API_KEY".to_string()],
+                action,
+            }
+        }
+        Agent::Codex => {
+            let command_available = command_on_path("codex");
+            StatusSummaryRunnerDiagnostic {
+                agent,
+                status: if command_available {
+                    "configured"
+                } else {
+                    "missing_command"
+                }
+                .to_string(),
+                command: Some("codex".to_string()),
+                api_key_env: Vec::new(),
+                action: (!command_available).then(|| {
+                    "Install the Codex CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|gemini, or run one brief with `mmr summary --agent cursor|gemini`."
+                        .to_string()
+                }),
+            }
+        }
+    }
+}
+
+fn status_dream_runner_diagnostic() -> StatusDreamRunnerDiagnostic {
+    let config = DreamRunnerConfig::resolve_from_env(None);
+    let command_configured = std::env::var(ENV_DREAM_COMMAND)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let (status, action) = match config.runner_kind() {
+        Ok(DreamRunnerKind::Mock) => ("available", None),
+        Ok(DreamRunnerKind::Command) if command_configured => ("configured", None),
+        Ok(DreamRunnerKind::Command) => (
+            "missing_command",
+            Some(
+                "Set MMR_DREAM_COMMAND to the local command that reads dream request JSON on stdin.",
+            ),
+        ),
+        Err(_) => (
+            "unsupported_runner",
+            Some("Set MMR_DEFAULT_DREAM_RUNNER to mock or command."),
+        ),
+    };
+    StatusDreamRunnerDiagnostic {
+        runner: config.runner,
+        status: status.to_string(),
+        command_configured,
+        command_env: ENV_DREAM_COMMAND.to_string(),
+        action: action.map(str::to_string),
+    }
+}
+
+fn env_has_non_empty(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn command_on_path(command: &str) -> bool {
+    if command.contains(std::path::MAIN_SEPARATOR) {
+        return Path::new(command).is_file();
+    }
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|path| path.join(command).is_file()))
+        .unwrap_or(false)
 }
 
 fn reconcile_default_sources(
@@ -2606,6 +3082,56 @@ mod tests {
         assert_eq!(remember.output_format, RememberOutputFormatArg::Md);
         assert!(matches!(
             remember.selection,
+            Some(RememberSelectorCommand::Session { session_id }) if session_id == "sess-123"
+        ));
+    }
+
+    #[test]
+    fn summary_all_selector_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "summary",
+            "all",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
+            "-O",
+            "json",
+        ]);
+
+        let parsed = parsed.expect("summary all should parse successfully");
+        let Commands::Summary(summary) = parsed.command else {
+            panic!("expected summary command");
+        };
+        assert_eq!(summary.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(summary.agent, Some(Agent::Gemini));
+        assert_eq!(summary.output_format, RememberOutputFormatArg::Json);
+        assert!(matches!(
+            summary.selection,
+            Some(RememberSelectorCommand::All)
+        ));
+    }
+
+    #[test]
+    fn summary_session_selector_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "summary",
+            "session",
+            "sess-123",
+            "--project",
+            "/Users/test/proj",
+        ]);
+
+        let parsed = parsed.expect("summary session <id> should parse successfully");
+        let Commands::Summary(summary) = parsed.command else {
+            panic!("expected summary command");
+        };
+        assert_eq!(summary.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(summary.agent, None);
+        assert!(matches!(
+            summary.selection,
             Some(RememberSelectorCommand::Session { session_id }) if session_id == "sess-123"
         ));
     }

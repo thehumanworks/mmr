@@ -2,13 +2,13 @@
 
 ## Current State
 
-- Branch: `codex/nhl-279-dream-assimilation`
-- Last green commit: `f4f7a11` (`implement dream assimilation workflow`)
-- Last verified state: committed NHL-279 implementation passed the full
-  verification loop.
-- Active Linear ticket: none; next is NHL-280
+- Branch: `codex/nhl-280-cli-ux-docs`
+- Last green commit: current branch head after the NHL-280 delivery commit.
+- Last verified state: NHL-280 working tree passed the full verification loop.
+- Active Linear ticket: NHL-280
 - Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278, NHL-279
-- Current work: prepare NHL-280 integrated CLI UX, diagnostics, and docs.
+- Current work: finalize NHL-280 integrated CLI UX, diagnostics, docs, and
+  handoff.
 
 ## Current Architecture Decisions
 
@@ -118,17 +118,29 @@
   from `learned_memory_updates` or explicit `claims`.
 - Replaying the same learned-memory claim/evidence tuple is idempotent: the
   existing row is preserved rather than overwritten by a later dream run.
+- NHL-280 makes the lean MVP flow discoverable through command help, a
+  quickstart/recovery guide, status diagnostics, and smoke-tested CLI examples.
+- `mmr status` now reports local DB path/existence, schema version and expected
+  version, linked project state, source-root availability, remote/auth status,
+  privacy-filter coverage, continuity-provider readiness, dream-runner
+  readiness, and consolidated recovery actions.
+- `mmr summary` routes through the existing stateless continuity brief runner,
+  while `remember` remains a compatibility alias.
 
 ## Verification Commands And Results
 
 - `cargo fmt`: passed
-- `cargo test`: passed, including 68 unit tests, 65 CLI contract tests, and
-  `memory_fabric_contract` with 29 active tests passed and 2 pending NHL-282
-  tests ignored
+- `cargo test`: passed, including 70 unit tests, 65 CLI contract tests, and
+  `memory_fabric_contract` with 34 active tests passed and 0 ignored MVP
+  contracts
 - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-  (`elapsed_ms=804`)
+  (`elapsed_ms=1017`)
 - `cargo clippy --all-targets --all-features -- -D warnings`: passed
 - `cargo build --release`: passed
+- NHL-280 UX review found summary/docs drift, noisy status actions,
+  copy/paste recovery gaps, fixture-specific auth wording, and non-diagnostic
+  store existence reporting. Fixes are applied and verification was rerun
+  successfully.
 - Adversarial review found issues in `rg` stdout semantics, downstream gate
   specificity, malformed fixture coverage, and schema detail. Fixes are applied
   and verification was rerun successfully.
@@ -332,6 +344,7 @@
 - `src/cli.rs`
 - `src/sync.rs`
 - `docs/mmr-memory-fabric-store.md`
+- `docs/mmr-memory-fabric-quickstart.md`
 - `Cargo.toml`
 - `Cargo.lock`
 - `src/capture.rs`
@@ -348,12 +361,12 @@
 
 ## Open Blockers
 
-- None for NHL-279.
+- None for NHL-280.
 
 ## Known Risks
 
-- The remaining pending contract tests are intentionally ignored until NHL-282
-  implements the referenced summary command/contracts.
+- MVP memory-fabric contract tests are active; NHL-280 removed the pending
+  summary/remember compatibility ignores.
 - NHL-269 locks the initial SQL schema, but future migrations must stay additive
   unless an ADR explicitly approves a breaking change.
 - NHL-277 ships a file-backed GitHub-layout adapter for deterministic local/E2E
@@ -397,8 +410,8 @@
 
 ## Next Exact Action
 
-Create/switch to a `codex/nhl-280-*` branch, fetch NHL-280 acceptance criteria,
-mark it In Progress if needed, and inspect the integrated CLI UX/docs gaps.
+Commit and push `codex/nhl-280-cli-ux-docs`, then update Linear NHL-280 with
+the verification results and mark it Done.
 
 ## Do Not Redo
 

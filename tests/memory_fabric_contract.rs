@@ -1093,6 +1093,275 @@ fn status_cli_contract_is_implemented() {
 }
 
 #[test]
+fn status_diagnostics_contract_is_implemented() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(home.join(".codex")).expect("create codex source root");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["--pretty", "status"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_FAKE_REMOTE_AUTH", "fail")
+        .env("MMR_DEFAULT_REMEMBER_AGENT", "gemini")
+        .env("MMR_DEFAULT_DREAM_RUNNER", "command")
+        .env_remove("GOOGLE_API_KEY")
+        .env_remove("GEMINI_API_KEY")
+        .env_remove("CURSOR_API_KEY")
+        .current_dir(&project)
+        .output()
+        .expect("status diagnostics");
+    assert_success_ref(&output);
+
+    let stdout = String::from_utf8(output.stdout).expect("status stdout UTF-8");
+    assert!(stdout.contains('\n'), "--pretty should emit readable JSON");
+    let status_json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("status diagnostics JSON");
+    assert_eq!(status_json["command"], "status");
+    assert_eq!(status_json["project"], serde_json::Value::Null);
+    assert_eq!(status_json["status"]["linked"], false);
+    assert_eq!(
+        status_json["store"]["db_path"].as_str().unwrap(),
+        data_home.join("mmr").join("mmr.db").to_str().unwrap()
+    );
+    assert_eq!(
+        status_json["store"]["schema_version"].as_i64().unwrap(),
+        LATEST_SCHEMA_VERSION
+    );
+    assert_eq!(
+        status_json["store"]["expected_schema_version"]
+            .as_i64()
+            .unwrap(),
+        LATEST_SCHEMA_VERSION
+    );
+    assert_eq!(status_json["store"]["schema_status"], "ok");
+    assert_eq!(status_json["store"]["existed_before_command"], false);
+    assert_eq!(status_json["diagnostics"]["schema"]["status"], "ok");
+    assert_eq!(
+        status_json["diagnostics"]["remote"]["status"],
+        "auth_failed"
+    );
+    assert_eq!(
+        status_json["diagnostics"]["privacy_filter"]["status"],
+        "degraded"
+    );
+    assert_eq!(
+        status_json["diagnostics"]["dream_runner"]["status"],
+        "missing_command"
+    );
+    assert_eq!(
+        status_json["diagnostics"]["summary_runner"]["status"],
+        "missing_api_key"
+    );
+    assert_eq!(
+        status_json["diagnostics"]["summary_runner"]["agent"],
+        "gemini"
+    );
+    assert_eq!(
+        status_json["diagnostics"]["dream_runner"]["command_env"],
+        "MMR_DREAM_COMMAND"
+    );
+
+    let actions = status_json["diagnostics"]["actions"]
+        .as_array()
+        .expect("actions array");
+    assert!(
+        actions
+            .iter()
+            .any(|action| action.as_str().unwrap_or_default().contains("mmr link")),
+        "unlinked status should tell the user how to link"
+    );
+    assert!(
+        actions.iter().any(|action| action
+            .as_str()
+            .unwrap_or_default()
+            .contains("MMR_DREAM_COMMAND")),
+        "command runner status should name the missing env var"
+    );
+    assert!(
+        actions.iter().all(|action| !action
+            .as_str()
+            .unwrap_or_default()
+            .contains("MMR_FAKE_REMOTE_AUTH")),
+        "product diagnostics should not expose fixture-only auth controls"
+    );
+    assert!(
+        actions.iter().all(|action| !action
+            .as_str()
+            .unwrap_or_default()
+            .contains("unsupported importer")),
+        "top-level actions should stay focused on user-recoverable items"
+    );
+
+    let sources = status_json["diagnostics"]["sources"]
+        .as_array()
+        .expect("sources array");
+    let codex = sources
+        .iter()
+        .find(|source| source["source"] == "codex")
+        .expect("codex source diagnostic");
+    let claude = sources
+        .iter()
+        .find(|source| source["source"] == "claude")
+        .expect("claude source diagnostic");
+    assert_eq!(codex["status"], "available");
+    assert_eq!(codex["event_count"].as_u64().unwrap(), 0);
+    assert_eq!(claude["status"], "missing_source_root");
+    assert!(
+        claude["action"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("mmr --source claude import --project"),
+        "source diagnostics should include copy/paste import recovery"
+    );
+}
+
+#[test]
+fn cli_help_contract_is_lean_and_actionable() {
+    let help = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("--help")
+        .output()
+        .expect("top-level help");
+    assert_success_ref(&help);
+    let help_text = String::from_utf8(help.stdout).expect("help UTF-8");
+    for command in [
+        "link", "sync", "status", "note", "rg", "search", "summary", "remember", "dream",
+    ] {
+        assert!(
+            help_text.contains(command),
+            "top-level help should include public command {command}"
+        );
+    }
+    for command in MVP_NON_GOAL_COMMANDS {
+        assert!(
+            !help_text.contains(&format!("\n  {command} ")),
+            "top-level help should not advertise non-goal command {command}"
+        );
+    }
+    assert!(help_text.contains("mmr link"));
+    assert!(help_text.contains("mmr status --pretty"));
+    assert!(help_text.contains("mmr dream --dry-run"));
+
+    let status_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["status", "--help"])
+        .output()
+        .expect("status help");
+    assert_success_ref(&status_help);
+    let status_help_text = String::from_utf8(status_help.stdout).expect("status help UTF-8");
+    assert!(status_help_text.contains("db_path"));
+    assert!(status_help_text.contains("schema_version"));
+    assert!(status_help_text.contains("diagnostics"));
+
+    let dream_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["dream", "--help"])
+        .output()
+        .expect("dream help");
+    assert_success_ref(&dream_help);
+    let dream_help_text = String::from_utf8(dream_help.stdout).expect("dream help UTF-8");
+    assert!(dream_help_text.contains("--dry-run"));
+    assert!(dream_help_text.contains("--review"));
+    assert!(dream_help_text.contains("MMR_DREAM_COMMAND"));
+}
+
+#[test]
+fn mvp_quickstart_flow_smoke_test() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let base_command = |name: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
+        command
+            .arg(name)
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(&project);
+        command
+    };
+
+    let link = base_command("link").output().expect("quickstart link");
+    assert_success_ref(&link);
+    let link_json: serde_json::Value =
+        serde_json::from_slice(&link.stdout).expect("quickstart link JSON");
+    assert_eq!(link_json["status"]["linked"], true);
+
+    let note = base_command("note")
+        .args(["Decision:", "document", "the", "NHL-280", "CLI", "flow"])
+        .output()
+        .expect("quickstart note");
+    assert_success_ref(&note);
+
+    let search = base_command("search")
+        .arg("NHL-280 CLI flow")
+        .output()
+        .expect("quickstart search");
+    assert_success_ref(&search);
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("quickstart search JSON");
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
+
+    let dream_dry_run = base_command("dream")
+        .args(["--dry-run", "--pretty"])
+        .output()
+        .expect("quickstart dream dry run");
+    assert_success_ref(&dream_dry_run);
+    let dry_run_json: serde_json::Value =
+        serde_json::from_slice(&dream_dry_run.stdout).expect("quickstart dry-run JSON");
+    assert_eq!(dry_run_json["dream_run"]["status"], "dry_run");
+
+    let dream = base_command("dream")
+        .args(["--pretty"])
+        .output()
+        .expect("quickstart dream");
+    assert_success_ref(&dream);
+    let dream_json: serde_json::Value =
+        serde_json::from_slice(&dream.stdout).expect("quickstart dream JSON");
+    assert_eq!(dream_json["command"], "dream");
+
+    let sync = base_command("sync")
+        .args(["--pretty"])
+        .output()
+        .expect("quickstart sync");
+    assert_success_ref(&sync);
+    let sync_json: serde_json::Value =
+        serde_json::from_slice(&sync.stdout).expect("quickstart sync JSON");
+    assert_eq!(sync_json["status"], "synced");
+
+    let status = base_command("status")
+        .args(["--pretty"])
+        .output()
+        .expect("quickstart status");
+    assert_success_ref(&status);
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("quickstart status JSON");
+    assert_eq!(status_json["status"]["sync_status"], "synced");
+    assert_eq!(
+        status_json["diagnostics"]["dream_runner"]["status"],
+        "available"
+    );
+
+    for command in ["projects", "sessions", "messages", "export"] {
+        let output = base_command(command)
+            .output()
+            .unwrap_or_else(|err| panic!("quickstart raw retrieval {command}: {err}"));
+        assert_success_ref(&output);
+        serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            .unwrap_or_else(|err| panic!("{command} stdout JSON: {err}"));
+    }
+}
+
+#[test]
 fn note_cli_contract_is_implemented() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let home = tmp.path().join("home");
@@ -1376,12 +1645,27 @@ fn search_cli_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-282: implement summary command"]
 fn summary_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-282",
-        "mmr summary mirrors remember selection/provider semantics and keeps remember as a compatibility alias",
-    );
+    let summary_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["summary", "--help"])
+        .output()
+        .expect("summary help");
+    assert_success_ref(&summary_help);
+    let summary_help_text = String::from_utf8(summary_help.stdout).expect("summary help UTF-8");
+    assert!(summary_help_text.contains("all"));
+    assert!(summary_help_text.contains("session"));
+    assert!(summary_help_text.contains("--agent"));
+    assert!(summary_help_text.contains("--output-format"));
+
+    let compatibility_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["remember", "--help"])
+        .output()
+        .expect("remember help");
+    assert_success_ref(&compatibility_help);
+    let compatibility_help_text =
+        String::from_utf8(compatibility_help.stdout).expect("remember help UTF-8");
+    assert!(compatibility_help_text.contains("all"));
+    assert!(compatibility_help_text.contains("session"));
 }
 
 #[test]
@@ -2741,11 +3025,129 @@ fn cursor_import_cli_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-282: implement summary command contract"]
 fn summary_generation_contract_is_implemented() {
-    pending_contract(
-        "NHL-282",
-        "route summary through the existing remember runner semantics while keeping remember as a compatibility alias",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(
+        home.join(".claude")
+            .join("projects")
+            .join("-Users-test-proj"),
+    )
+    .expect("create claude fixture dir");
+    std::fs::create_dir_all(home.join(".codex").join("sessions"))
+        .expect("create codex fixture dir");
+    std::fs::write(
+        home.join(".claude")
+            .join("projects")
+            .join("-Users-test-proj")
+            .join("sess-claude-summary.jsonl"),
+        r#"{"type":"user","sessionId":"sess-claude-summary","message":{"role":"user","content":"hello from claude summary"},"timestamp":"2025-01-01T00:00:00","uuid":"u1","cwd":"/Users/test/proj"}
+{"type":"assistant","sessionId":"sess-claude-summary","message":{"role":"assistant","content":"hi from claude summary"},"timestamp":"2025-01-01T00:01:00","uuid":"a1","parentUuid":"u1","cwd":"/Users/test/proj"}"#,
+    )
+    .expect("write claude summary fixture");
+    std::fs::write(
+        home.join(".codex")
+            .join("sessions")
+            .join("sess-codex-summary.jsonl"),
+        r#"{"type":"session_meta","timestamp":"2025-01-02T00:00:00","payload":{"id":"sess-codex-summary","cwd":"/Users/test/proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-02T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-02T00:00:01","payload":{"type":"user_message","message":"hello from codex summary"}}
+{"type":"response_item","timestamp":"2025-01-02T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"hi from codex summary"}]}}"#,
+    )
+    .expect("write codex summary fixture");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let base_url = format!("http://{addr}");
+    let captured: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let captured_for_thread = std::sync::Arc::clone(&captured);
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept request");
+        let mut bytes = Vec::new();
+        let mut header_end = None;
+        let mut content_length = 0usize;
+        loop {
+            let mut chunk = [0_u8; 4096];
+            let read = std::io::Read::read(&mut stream, &mut chunk).expect("read request");
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+            if header_end.is_none()
+                && let Some(idx) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                header_end = Some(idx + 4);
+                let header = String::from_utf8_lossy(&bytes[..idx + 4]);
+                content_length = header
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+            }
+            if let Some(end) = header_end
+                && bytes.len() >= end + content_length
+            {
+                break;
+            }
+        }
+        let request = String::from_utf8(bytes).expect("request UTF-8");
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+        let body_json: serde_json::Value = serde_json::from_str(body).expect("request JSON body");
+        *captured_for_thread.lock().expect("lock captured body") = Some(body_json);
+        let response = r#"{"id":"summary-interaction","outputs":[{"text":"summary output"}]}"#;
+        let http_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        std::io::Write::write_all(&mut stream, http_response.as_bytes()).expect("write response");
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "summary",
+            "all",
+            "--project",
+            "/Users/test/proj",
+            "--agent",
+            "gemini",
+            "-O",
+            "json",
+        ])
+        .env("HOME", &home)
+        .env("GOOGLE_API_KEY", "test-key")
+        .env("GEMINI_API_BASE_URL", base_url.as_str())
+        .output()
+        .expect("summary generation");
+
+    assert_success_ref(&output);
+    handle.join().expect("mock server thread");
+    let stdout_json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("summary stdout JSON");
+    assert_eq!(stdout_json["agent"], "gemini");
+    assert_eq!(stdout_json["text"], "summary output");
+    assert!(stdout_json.get("thread_or_interaction_id").is_none());
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = body["input"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["text"].as_str())
+        .expect("first input text");
+    assert!(input.contains("hello from claude summary"));
+    assert!(input.contains("hello from codex summary"));
+    assert!(
+        body["system_instruction"]
+            .as_str()
+            .unwrap()
+            .contains("Memory Agent")
     );
 }
 
@@ -3054,10 +3456,6 @@ fn sync_manifest_contract_is_implemented() {
         serde_json::from_slice(&search.stdout).expect("search stdout JSON");
     assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
     assert_eq!(remote_event_file_count(&remote), 1);
-}
-
-fn pending_contract(ticket: &str, behavior: &str) -> ! {
-    panic!("{ticket} pending contract: {behavior}. Remove #[ignore] when implemented.");
 }
 
 fn dream_observation_json(evidence_ref: &str, confidence: f64) -> String {
