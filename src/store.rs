@@ -50,6 +50,17 @@ pub struct EventRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchDocumentRecord {
+    pub id: String,
+    pub event_id: String,
+    pub project_id: String,
+    pub session_id: String,
+    pub source: String,
+    pub document_text: String,
+    pub citation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobRecord {
     pub id: String,
     pub kind: String,
@@ -653,6 +664,21 @@ impl Store {
         self.event_by_id(&id)
     }
 
+    pub fn insert_event_with_search_document(
+        &mut self,
+        project_id: &str,
+        event: &NewEvent,
+    ) -> Result<(EventRecord, SearchDocumentRecord)> {
+        let id = event.event_id();
+        let tx = self.conn.transaction()?;
+        Self::insert_event_on_transaction(&tx, project_id, event, None)?;
+        let event_record = Self::event_by_id_on_conn(&tx, &id)?;
+        let search_document = Self::upsert_search_document_on_conn(&tx, &event_record)?;
+        tx.commit()?;
+
+        Ok((event_record, search_document))
+    }
+
     fn insert_event_in_transaction(
         &mut self,
         project_id: &str,
@@ -660,6 +686,17 @@ impl Store {
         fail_after_session: Option<&str>,
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
+        Self::insert_event_on_transaction(&tx, project_id, event, fail_after_session)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn insert_event_on_transaction(
+        tx: &rusqlite::Transaction<'_>,
+        project_id: &str,
+        event: &NewEvent,
+        fail_after_session: Option<&str>,
+    ) -> Result<()> {
         let now = now_rfc3339()?;
         let source_id = format!("source:v1:{}", hash_hex(event.source.as_bytes()));
         tx.execute(
@@ -723,39 +760,24 @@ impl Store {
                 now
             ],
         )?;
-        tx.commit()?;
         Ok(())
     }
 
     pub fn event_by_id(&self, event_id: &str) -> Result<EventRecord> {
-        self.conn
-            .query_row(
-                "SELECT id, project_id, session_id, source, source_event_id, event_type, role,
-                        timestamp, content_text, content_hash, parent_hash, parser_version,
-                        raw_local_ref, sync_status
-                 FROM events WHERE id = ?1",
-                params![event_id],
-                |row| {
-                    Ok(EventRecord {
-                        id: row.get(0)?,
-                        project_id: row.get(1)?,
-                        session_id: row.get(2)?,
-                        source: row.get(3)?,
-                        source_event_id: row.get(4)?,
-                        event_type: row.get(5)?,
-                        role: row.get(6)?,
-                        timestamp: row.get(7)?,
-                        content_text: row.get(8)?,
-                        content_hash: row.get(9)?,
-                        parent_hash: row.get(10)?,
-                        parser_version: row.get(11)?,
-                        raw_local_ref: row.get(12)?,
-                        sync_status: row.get(13)?,
-                    })
-                },
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("event not found: {event_id}"))
+        Self::event_by_id_on_conn(&self.conn, event_id)
+    }
+
+    fn event_by_id_on_conn(conn: &Connection, event_id: &str) -> Result<EventRecord> {
+        conn.query_row(
+            "SELECT id, project_id, session_id, source, source_event_id, event_type, role,
+                    timestamp, content_text, content_hash, parent_hash, parser_version,
+                    raw_local_ref, sync_status
+             FROM events WHERE id = ?1",
+            params![event_id],
+            event_record_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("event not found: {event_id}"))
     }
 
     pub fn event_exists(&self, event_id: &str) -> Result<bool> {
@@ -766,6 +788,57 @@ impl Store {
                 |row| row.get(0),
             )
             .context("check event existence")
+    }
+
+    pub fn upsert_search_document(&self, event: &EventRecord) -> Result<SearchDocumentRecord> {
+        Self::upsert_search_document_on_conn(&self.conn, event)
+    }
+
+    fn upsert_search_document_on_conn(
+        conn: &Connection,
+        event: &EventRecord,
+    ) -> Result<SearchDocumentRecord> {
+        let id = format!("search-doc:v1:{}", hash_hex(event.id.as_bytes()));
+        let citation = format!("mmr://event/{}", event.id);
+        let now = now_rfc3339()?;
+        conn.execute(
+            "INSERT INTO search_documents
+                (id, event_id, project_id, session_id, source, document_text, citation, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(event_id) DO UPDATE SET
+                document_text = excluded.document_text,
+                citation = excluded.citation,
+                updated_at = excluded.updated_at",
+            params![
+                id,
+                event.id,
+                event.project_id,
+                event.session_id,
+                event.source,
+                event.content_text,
+                citation,
+                now
+            ],
+        )?;
+        Self::search_document_by_event_on_conn(conn, &event.id)
+    }
+
+    pub fn search_document_by_event(&self, event_id: &str) -> Result<SearchDocumentRecord> {
+        Self::search_document_by_event_on_conn(&self.conn, event_id)
+    }
+
+    fn search_document_by_event_on_conn(
+        conn: &Connection,
+        event_id: &str,
+    ) -> Result<SearchDocumentRecord> {
+        conn.query_row(
+            "SELECT id, event_id, project_id, session_id, source, document_text, citation
+             FROM search_documents WHERE event_id = ?1",
+            params![event_id],
+            search_document_from_row,
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("search document not found for event: {event_id}"))
     }
 
     pub fn events_for_project(
@@ -901,6 +974,19 @@ impl Store {
     fn insert_event_then_fail(&mut self, project_id: &str, event: &NewEvent) -> Result<()> {
         self.insert_event_in_transaction(project_id, event, Some("intentional rollback"))
     }
+
+    #[cfg(test)]
+    fn insert_event_and_search_document_then_fail(
+        &mut self,
+        project_id: &str,
+        event: &NewEvent,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        Self::insert_event_on_transaction(&tx, project_id, event, None)?;
+        let event_record = Self::event_by_id_on_conn(&tx, &event.event_id())?;
+        Self::upsert_search_document_on_conn(&tx, &event_record)?;
+        bail!("intentional rollback after search document")
+    }
 }
 
 pub fn default_db_path() -> Result<PathBuf> {
@@ -909,6 +995,37 @@ pub fn default_db_path() -> Result<PathBuf> {
         .or_else(dirs::data_dir)
         .ok_or_else(|| anyhow!("could not resolve data directory for mmr store"))?;
     Ok(base.join("mmr").join("mmr.db"))
+}
+
+fn event_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EventRecord> {
+    Ok(EventRecord {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        session_id: row.get(2)?,
+        source: row.get(3)?,
+        source_event_id: row.get(4)?,
+        event_type: row.get(5)?,
+        role: row.get(6)?,
+        timestamp: row.get(7)?,
+        content_text: row.get(8)?,
+        content_hash: row.get(9)?,
+        parent_hash: row.get(10)?,
+        parser_version: row.get(11)?,
+        raw_local_ref: row.get(12)?,
+        sync_status: row.get(13)?,
+    })
+}
+
+fn search_document_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchDocumentRecord> {
+    Ok(SearchDocumentRecord {
+        id: row.get(0)?,
+        event_id: row.get(1)?,
+        project_id: row.get(2)?,
+        session_id: row.get(3)?,
+        source: row.get(4)?,
+        document_text: row.get(5)?,
+        citation: row.get(6)?,
+    })
 }
 
 pub fn content_hash(content: &str) -> String {
@@ -1251,6 +1368,46 @@ mod tests {
                 .contains("intentional rollback")
         );
         assert!(store.event_by_id(&failing_event.event_id()).is_err());
+
+        let note_event = NewEvent::new(
+            "note",
+            "notes",
+            "note",
+            "user",
+            "2026-05-24T09:03:00Z",
+            "transactional note",
+            "note-v1",
+        )
+        .with_source_event_id("note:tx-success");
+        let (note, search_document) = store
+            .insert_event_with_search_document(&project.id, &note_event)
+            .expect("event and search document");
+        assert_eq!(search_document.event_id, note.id);
+        assert_eq!(search_document.document_text, "transactional note");
+
+        let failing_note = NewEvent::new(
+            "note",
+            "notes",
+            "note",
+            "user",
+            "2026-05-24T09:04:00Z",
+            "rollback note search doc",
+            "note-v1",
+        )
+        .with_source_event_id("note:tx-fail");
+        assert!(
+            store
+                .insert_event_and_search_document_then_fail(&project.id, &failing_note)
+                .expect_err("rollback event/search document")
+                .to_string()
+                .contains("intentional rollback after search document")
+        );
+        assert!(store.event_by_id(&failing_note.event_id()).is_err());
+        assert!(
+            store
+                .search_document_by_event(&failing_note.event_id())
+                .is_err()
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use mmr::capture::{EventBoundary, event_hash_set, parse_fixture_jsonl};
 use mmr::store::{LATEST_SCHEMA_VERSION, Store};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 const FIXTURES: &[(&str, &str)] = &[
     (
@@ -262,11 +264,128 @@ fn status_cli_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-271: implement note command"]
 fn note_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-271",
-        "mmr note records argv and stdin text as first-class note events scoped to the current project",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let link = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "__db-info",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("link project");
+    assert!(
+        link.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+
+    let inline = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["note", "decision:", "notes", "are", "memory"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("note inline");
+    assert!(
+        inline.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&inline.stderr)
+    );
+    let inline_json: serde_json::Value =
+        serde_json::from_slice(&inline.stdout).expect("inline note JSON");
+    assert_eq!(inline_json["source"].as_str().unwrap(), "note");
+    assert!(
+        inline_json["citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://event/")
+    );
+
+    let mut stdin_note = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("note")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stdin note");
+    stdin_note
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(b"first line\nsecond line\n")
+        .expect("write stdin note");
+    let stdin_note = stdin_note.wait_with_output().expect("stdin note output");
+    assert!(
+        stdin_note.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&stdin_note.stderr)
+    );
+
+    let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+    let project_record = store
+        .project_by_path(&project)
+        .expect("project lookup")
+        .expect("project");
+    let notes = store
+        .events_for_project(&project_record.id, Some("note"), Some("notes"))
+        .expect("note events");
+    assert_eq!(notes.len(), 2);
+    assert!(notes.iter().all(|event| event.source == "note"));
+    assert!(notes.iter().all(|event| event.sync_status == "local_only"));
+    assert!(notes.iter().all(|event| {
+        !event
+            .source_event_id
+            .as_deref()
+            .unwrap_or_default()
+            .contains(&project_record.id)
+    }));
+    assert!(notes.iter().all(|event| {
+        !event
+            .raw_local_ref
+            .as_deref()
+            .unwrap_or_default()
+            .contains(&project_record.id)
+    }));
+    let search_doc = store
+        .search_document_by_event(&notes[0].id)
+        .expect("search doc");
+    assert_eq!(search_doc.source, "note");
+    assert!(search_doc.document_text.contains("decision: notes"));
+}
+
+#[test]
+fn note_requires_linked_project() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["note", "unlinked"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("note unlinked");
+    assert!(!output.status.success(), "unlinked note should fail");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not linked"),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

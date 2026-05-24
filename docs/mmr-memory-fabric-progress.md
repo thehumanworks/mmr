@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-270-source-adapters`
-- Last green commit: `bb25dbf` (`add local memory fabric store`)
-- Active Linear ticket: NHL-270
-- Completed tickets: NHL-268, NHL-269
-- Current work: source adapter framework, watcher, and reconciler
+- Branch: `codex/nhl-271-note`
+- Last green commit: `b589318` (`add source adapter framework`)
+- Active Linear ticket: NHL-271
+- Completed tickets: NHL-268, NHL-269, NHL-270
+- Current work: human-authored note ingestion
 
 ## Current Architecture Decisions
 
@@ -32,6 +32,8 @@
   retrieval contracts remain storage-free.
 - Watcher emits complete-line byte deltas only; parsing and degraded warnings
   stay adapter-owned.
+- `mmr note` requires the cwd project to be linked, writes source `note` events
+  to the local store, and creates search document citations for later search.
 
 ## Verification Commands And Results
 
@@ -70,6 +72,25 @@
     (`elapsed_ms=647`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
+- NHL-271 targeted checks:
+  - `cargo test --test memory_fabric_contract note_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract note_requires_linked_project -- --nocapture`:
+    passed
+  - `cargo test store_api_covers_query_cursor_blob_and_rollback -- --nocapture`:
+    passed
+- Note source-neutrality/sync-risk review found event/search-document atomicity,
+  eager raw-history loading, and local-project-id provenance risks. Fixes are
+  applied and verification was rerun successfully.
+- Latest NHL-271 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 50 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 9 active tests passed and 12 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=645`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -87,10 +108,11 @@
 - `Cargo.lock`
 - `src/capture.rs`
 - `docs/mmr-source-adapters.md`
+- `docs/mmr-note.md`
 
 ## Open Blockers
 
-- None for NHL-270.
+- None for NHL-271.
 
 ## Known Risks
 
@@ -105,18 +127,21 @@
 - Provider-specific Codex, Claude, and Cursor adapters are deferred to NHL-274,
   NHL-275, and NHL-276. NHL-270 only supplies the provider-neutral framework and
   fixture adapter.
+- `mmr note` creates search documents, but public `mmr search`/`mmr rg` remains
+  deferred to NHL-273.
 
 ## Next Exact Action
 
-Commit and push NHL-270, update Linear with scope/tests/risks, then begin the
-provider importer lane.
+Commit and push NHL-271, update Linear with scope/tests/risks, then begin the
+next unblocked MVP ticket.
 
 ## Do Not Redo
 
 - Linear project and NHL-268 details have already been pulled.
 - NHL-268 is already marked `Done` in Linear.
 - NHL-269 is already marked `Done` in Linear.
-- NHL-270 is already marked `In Progress`.
+- NHL-270 is already marked `Done` in Linear.
+- NHL-271 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 

@@ -1,12 +1,13 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
-use crate::store::{NewEvent, Store};
+use crate::store::{NewEvent, Store, content_hash};
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
@@ -114,6 +115,12 @@ pub enum Commands {
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
+    /// Add a human-authored note to the local memory store
+    Note {
+        /// Note text. Omit to read multiline text from stdin.
+        #[arg(value_name = "TEXT", trailing_var_arg = true)]
+        text: Vec<String>,
+    },
     /// Inspect the local mmr database path and schema version
     #[command(name = "__db-info", hide = true)]
     DbInfo {
@@ -186,6 +193,20 @@ pub enum RememberOutputFormatArg {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
+    if let Commands::Note { text } = &cli.command {
+        return serialize(&note_response(text.clone())?, cli.pretty);
+    }
+    if let Commands::DbInfo {
+        project,
+        smoke_event,
+    } = &cli.command
+    {
+        return serialize(
+            &db_info_response(project.clone(), *smoke_event)?,
+            cli.pretty,
+        );
+    }
+
     let service = QueryService::load()?;
     let source_filter = effective_source(cli.source);
 
@@ -378,6 +399,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             .await?;
             format_remember_response(&response, remember.output_format, cli.pretty)?
         }
+        Commands::Note { text } => serialize(&note_response(text)?, cli.pretty)?,
         Commands::DbInfo {
             project,
             smoke_event,
@@ -385,6 +407,68 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     };
 
     Ok(response)
+}
+
+#[derive(Debug, Serialize)]
+struct NoteResponse {
+    project_id: String,
+    event_id: String,
+    source: String,
+    citation: String,
+}
+
+fn note_response(text: Vec<String>) -> Result<NoteResponse> {
+    let mut store = Store::open_default()?;
+    let cwd = std::env::current_dir().context("current_dir")?;
+    let project = store.project_by_path(&cwd)?.ok_or_else(|| {
+        anyhow::anyhow!("current project is not linked; run `mmr link` before adding notes")
+    })?;
+    let content = read_note_text(text)?;
+    let timestamp = now_rfc3339()?;
+    let note_identity = content_hash(&format!("{timestamp}:{content}"));
+    let source_event_id = format!("note:{note_identity}");
+    let event = NewEvent::new(
+        "note",
+        "notes",
+        "note",
+        "user",
+        timestamp.clone(),
+        content,
+        "note-v1",
+    )
+    .with_source_event_id(source_event_id)
+    .with_raw_local_ref(format!("note://notes/{note_identity}"));
+    let (event, search_document) = store.insert_event_with_search_document(&project.id, &event)?;
+
+    Ok(NoteResponse {
+        project_id: project.id,
+        event_id: event.id,
+        source: event.source,
+        citation: search_document.citation,
+    })
+}
+
+fn read_note_text(text: Vec<String>) -> Result<String> {
+    let note = if text.is_empty() {
+        let mut buffer = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buffer)
+            .context("read note from stdin")?;
+        buffer
+    } else {
+        text.join(" ")
+    };
+    let note = note.trim_matches(['\n', '\r']).trim().to_string();
+    if note.is_empty() {
+        bail!("note text is empty");
+    }
+    Ok(note)
+}
+
+fn now_rfc3339() -> Result<String> {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .context("format timestamp")
 }
 
 #[derive(Debug, Serialize)]
@@ -896,5 +980,15 @@ mod tests {
     #[test]
     fn sync_command_is_rejected() {
         assert!(Cli::try_parse_from(["mmr", "sync", "status"]).is_err());
+    }
+
+    #[test]
+    fn note_command_parses_inline_text() {
+        let parsed = Cli::try_parse_from(["mmr", "note", "decision:", "use", "fixtures"])
+            .expect("note should parse");
+        let Commands::Note { text } = parsed.command else {
+            panic!("expected note command");
+        };
+        assert_eq!(text, vec!["decision:", "use", "fixtures"]);
     }
 }
