@@ -88,6 +88,9 @@ const MVP_NON_GOAL_COMMANDS: &[&str] = &[
     "reject",
 ];
 
+const RELEASE_NOTE_SECRET: &str = "sk-test-000000000000000000000000000000000000000000000000";
+const RELEASE_NOTE_EMAIL: &str = "person@example.com";
+
 fn encode_claude_project_name(path: &std::path::Path) -> String {
     let path = path.to_str().expect("project path UTF-8");
     if path == "/" {
@@ -1359,6 +1362,596 @@ fn mvp_quickstart_flow_smoke_test() {
         serde_json::from_slice::<serde_json::Value>(&output.stdout)
             .unwrap_or_else(|err| panic!("{command} stdout JSON: {err}"));
     }
+}
+
+#[test]
+fn mvp_release_gate_e2e_fixture_scenario() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let fresh_home = tmp.path().join("fresh-home");
+    let data_home = tmp.path().join("data");
+    let fresh_data_home = tmp.path().join("fresh-data");
+    let project = tmp.path().join("release-project");
+    let fresh_project = tmp.path().join("fresh-release-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&fresh_home).expect("create fresh HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::create_dir_all(&fresh_project).expect("create fresh project");
+    let project = std::fs::canonicalize(&project).expect("canonical project");
+    let fresh_project = std::fs::canonicalize(&fresh_project).expect("canonical fresh project");
+    seed_release_gate_sources(&home, &project);
+
+    let command = |name: &str, data_home: &Path, cwd: &Path| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
+        command
+            .arg(name)
+            .env("HOME", &home)
+            .env("SIMPLEMMR_HOME", &home)
+            .env("XDG_DATA_HOME", data_home)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(cwd);
+        command
+    };
+    let fresh_command = |name: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
+        command
+            .arg(name)
+            .env("HOME", &fresh_home)
+            .env("XDG_DATA_HOME", &fresh_data_home)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(&fresh_project);
+        command
+    };
+
+    let link = command("link", &data_home, &project)
+        .output()
+        .expect("release link");
+    assert_success_ref(&link);
+    let link_json: serde_json::Value =
+        serde_json::from_slice(&link.stdout).expect("release link JSON");
+    assert_eq!(link_json["status"]["linked"], true);
+    assert_eq!(
+        link_json["remote"]["descriptor"],
+        "github:fixture-user/mmr-store"
+    );
+    assert_eq!(link_json["sync"]["status"], "synced");
+    assert_eq!(link_json["status"]["sync_status"], "synced");
+    assert!(
+        link_json["rebuilt_search_documents"].as_u64().unwrap() >= 6,
+        "link should rebuild search documents after import"
+    );
+    let link_stdout = String::from_utf8_lossy(&link.stdout);
+    let link_stderr = String::from_utf8_lossy(&link.stderr);
+    for sensitive in [RELEASE_NOTE_SECRET, RELEASE_NOTE_EMAIL] {
+        assert!(!link_stdout.contains(sensitive));
+        assert!(!link_stderr.contains(sensitive));
+    }
+    for source in ["codex", "claude", "cursor"] {
+        let import = link_json["imports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|import| import["source"] == source)
+            .unwrap_or_else(|| panic!("release link import for {source}"));
+        assert_eq!(import["status"], "imported");
+        assert!(import["discovered_sessions"].as_u64().unwrap() >= 1);
+        assert!(import["imported_events"].as_u64().unwrap() >= 2);
+    }
+    let link_remote_text = remote_file_text(&remote);
+    assert!(link_remote_text.contains("Release Codex fixture records adapter setup."));
+    assert!(link_remote_text.contains("Release Claude fixture is normalized safely."));
+    assert!(link_remote_text.contains("Release Cursor fixture is normalized safely."));
+    for sensitive in [RELEASE_NOTE_SECRET, RELEASE_NOTE_EMAIL] {
+        assert!(!link_remote_text.contains(sensitive));
+    }
+    assert!(remote_event_file_count(&remote) > 0);
+    let link_store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store after link");
+    let link_project = link_store
+        .project_by_path(&project)
+        .expect("project after link lookup")
+        .expect("project after link");
+    assert!(
+        link_store
+            .sync_manifests_for_project(&link_project.id)
+            .expect("link sync manifests")
+            .iter()
+            .any(|manifest| {
+                !link_store
+                    .sync_manifest_entries(&manifest.id)
+                    .expect("link sync manifest entries")
+                    .is_empty()
+            }),
+        "link should write at least one sync manifest with entries"
+    );
+    drop(link_store);
+
+    let relink = command("link", &data_home, &project)
+        .output()
+        .expect("release relink");
+    assert_success_ref(&relink);
+    let relink_json: serde_json::Value =
+        serde_json::from_slice(&relink.stdout).expect("release relink JSON");
+    assert_eq!(relink_json["already_linked"], true);
+    assert_eq!(relink_json["sync"]["uploaded_events"].as_u64().unwrap(), 0);
+
+    let note = command("note", &data_home, &project)
+        .args([
+            "Release",
+            "gate",
+            "safe",
+            "note",
+            "prefers",
+            "evidence-linked",
+            "checks.",
+        ])
+        .output()
+        .expect("release safe note");
+    assert_success_ref(&note);
+    let unsafe_note_text = format!("OPENAI_API_KEY={RELEASE_NOTE_SECRET}");
+    let unsafe_note = command("note", &data_home, &project)
+        .args(["Unsafe", "fixture", "secret", unsafe_note_text.as_str()])
+        .output()
+        .expect("release unsafe note");
+    assert_success_ref(&unsafe_note);
+    let pii_note = command("note", &data_home, &project)
+        .args(["Contact", RELEASE_NOTE_EMAIL, "after", "release", "gate."])
+        .output()
+        .expect("release PII note");
+    assert_success_ref(&pii_note);
+
+    let sensitive_codex_root = tmp.path().join("sensitive-codex-root");
+    let sensitive_codex_sessions = sensitive_codex_root.join("sessions");
+    std::fs::create_dir_all(&sensitive_codex_sessions).expect("create sensitive codex root");
+    let sensitive_codex = format!(
+        r#"{{"type":"session_meta","timestamp":"2026-05-24T10:10:00Z","payload":{{"id":"release-codex-sensitive","cwd":"{}","model_provider":"openai"}}}}
+{{"type":"event_msg","timestamp":"2026-05-24T10:10:01Z","payload":{{"type":"user_message","message":"Release Codex imported secret OPENAI_API_KEY={RELEASE_NOTE_SECRET}"}}}}
+{{"type":"event_msg","timestamp":"2026-05-24T10:10:02Z","payload":{{"type":"user_message","message":"Release Codex imported contact {RELEASE_NOTE_EMAIL}."}}}}
+"#,
+        project.to_str().expect("project path UTF-8")
+    );
+    std::fs::write(
+        sensitive_codex_sessions.join("release-codex-sensitive.jsonl"),
+        sensitive_codex,
+    )
+    .expect("write sensitive codex fixture");
+    let sensitive_import = command("import", &data_home, &project)
+        .args([
+            "--source",
+            "codex",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            sensitive_codex_root
+                .to_str()
+                .expect("sensitive codex root UTF-8"),
+        ])
+        .output()
+        .expect("release sensitive codex import");
+    assert_success_ref(&sensitive_import);
+    let sensitive_import_json: serde_json::Value =
+        serde_json::from_slice(&sensitive_import.stdout).expect("sensitive import JSON");
+    assert_eq!(sensitive_import_json["source"], "codex");
+    assert_eq!(sensitive_import_json["imported_events"].as_u64().unwrap(), 3);
+    for output in [&note, &unsafe_note, &pii_note] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(RELEASE_NOTE_SECRET));
+        assert!(!stderr.contains(RELEASE_NOTE_SECRET));
+        assert!(!stdout.contains(RELEASE_NOTE_EMAIL));
+        assert!(!stderr.contains(RELEASE_NOTE_EMAIL));
+    }
+
+    let projects_output = command("projects", &data_home, &project)
+        .output()
+        .expect("release raw projects");
+    assert_success_ref(&projects_output);
+    let projects_json: serde_json::Value =
+        serde_json::from_slice(&projects_output.stdout).expect("projects JSON");
+    let project_sources = projects_json["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|project| project["source"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    for source in ["codex", "claude", "cursor"] {
+        assert!(
+            project_sources.contains(&source),
+            "projects should include {source}"
+        );
+    }
+
+    let sessions_output = command("sessions", &data_home, &project)
+        .arg("--all")
+        .output()
+        .expect("release raw sessions");
+    assert_success_ref(&sessions_output);
+    let sessions_json: serde_json::Value =
+        serde_json::from_slice(&sessions_output.stdout).expect("sessions JSON");
+    let session_ids = sessions_json["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["session_id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    for session_id in ["release-codex", "release-claude", "release-cursor"] {
+        assert!(
+            session_ids.contains(&session_id),
+            "sessions should include {session_id}"
+        );
+    }
+
+    let messages_output = command("messages", &data_home, &project)
+        .arg("--all")
+        .output()
+        .expect("release raw messages");
+    assert_success_ref(&messages_output);
+    let messages_text = String::from_utf8(messages_output.stdout).expect("messages stdout UTF-8");
+    assert!(
+        messages_text.contains("Release Codex fixture")
+            && messages_text.contains("Release Claude fixture")
+            && messages_text.contains("Release Cursor fixture"),
+        "messages should expose fixture-backed raw transcript history from every source"
+    );
+
+    let export_output = command("export", &data_home, &project)
+        .output()
+        .expect("release raw export");
+    assert_success_ref(&export_output);
+    let export_text = String::from_utf8(export_output.stdout).expect("export stdout UTF-8");
+    assert!(
+        export_text.contains("Release Codex fixture")
+            && export_text.contains("Release Claude fixture")
+            && export_text.contains("Release Cursor fixture"),
+        "export should expose fixture-backed raw transcript history from every source"
+    );
+
+    for text in [messages_text.as_str(), export_text.as_str()] {
+        assert!(
+            text.contains("Release Codex fixture")
+                && text.contains("Release Claude fixture")
+                && text.contains("Release Cursor fixture"),
+            "raw retrieval should include all source fixtures"
+        );
+    }
+
+    let search = command("search", &data_home, &project)
+        .arg("Release gate safe note")
+        .output()
+        .expect("release search");
+    assert_success_ref(&search);
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("release search JSON");
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
+    let evidence_event_id = search_json["results"][0]["event_id"]
+        .as_str()
+        .expect("evidence event id")
+        .to_string();
+    assert!(
+        search_json["results"][0]["citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://event/")
+    );
+    let evidence_ref = format!("mmr://event/{evidence_event_id}");
+
+    let rg = command("rg", &data_home, &project)
+        .args(["Release gate safe note", "--line"])
+        .output()
+        .expect("release rg");
+    assert_success_ref(&rg);
+    assert!(
+        String::from_utf8(rg.stdout)
+            .unwrap()
+            .contains("mmr://event/")
+    );
+
+    let structured_search = command("search", &data_home, &project)
+        .args(["Release Claude fixture", "--role", "assistant"])
+        .env("MMR_DEFAULT_SOURCE", "claude")
+        .output()
+        .expect("release structured search");
+    assert_success_ref(&structured_search);
+    let structured_search_json: serde_json::Value =
+        serde_json::from_slice(&structured_search.stdout).expect("structured search JSON");
+    assert_eq!(structured_search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(structured_search_json["results"][0]["source"], "claude");
+
+    let summary_response = format!(
+        r#"{{"id":"release-summary","outputs":[{{"text":"Release summary cites {evidence_ref}"}}]}}"#
+    );
+    let (summary_base_url, summary_request, summary_handle) =
+        start_mock_gemini_server(summary_response);
+    let summary = command("summary", &data_home, &project)
+        .args([
+            "all",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--agent",
+            "gemini",
+            "-O",
+            "json",
+        ])
+        .env("GOOGLE_API_KEY", "test-key")
+        .env("GEMINI_API_BASE_URL", summary_base_url)
+        .output()
+        .expect("release summary");
+    assert_success_ref(&summary);
+    summary_handle.join().expect("summary server thread");
+    let summary_json: serde_json::Value =
+        serde_json::from_slice(&summary.stdout).expect("summary JSON");
+    assert_eq!(summary_json["agent"], "gemini");
+    assert!(
+        summary_json["text"]
+            .as_str()
+            .unwrap()
+            .contains(&evidence_ref)
+    );
+    let summary_body = summary_request
+        .lock()
+        .expect("summary request")
+        .clone()
+        .expect("summary request body");
+    let summary_input = first_input_text(&summary_body);
+    assert!(summary_input.contains("Release Codex fixture"));
+    assert!(summary_input.contains("Release Claude fixture"));
+    assert!(summary_input.contains("Release Cursor fixture"));
+
+    let (remember_base_url, remember_request, remember_handle) = start_mock_gemini_server(
+        r#"{"id":"release-remember","outputs":[{"text":"Remember compatibility alias works"}]}"#
+            .to_string(),
+    );
+    let remember = command("remember", &data_home, &project)
+        .args([
+            "all",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--agent",
+            "gemini",
+            "-O",
+            "json",
+        ])
+        .env("GOOGLE_API_KEY", "test-key")
+        .env("GEMINI_API_BASE_URL", remember_base_url)
+        .output()
+        .expect("release remember alias");
+    assert_success_ref(&remember);
+    remember_handle.join().expect("remember server thread");
+    let remember_json: serde_json::Value =
+        serde_json::from_slice(&remember.stdout).expect("remember JSON");
+    assert_eq!(remember_json["agent"], "gemini");
+    assert_eq!(remember_json["text"], "Remember compatibility alias works");
+    let remember_body = remember_request
+        .lock()
+        .expect("remember request")
+        .clone()
+        .expect("remember request body");
+    let remember_input = first_input_text(&remember_body);
+    assert!(remember_input.contains("Release Codex fixture"));
+    assert!(remember_input.contains("Release Claude fixture"));
+    assert!(remember_input.contains("Release Cursor fixture"));
+
+    let redaction = command("redact", &data_home, &project)
+        .args([
+            "scan",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .output()
+        .expect("release redaction scan");
+    assert_success_ref(&redaction);
+    let redaction_stderr = String::from_utf8_lossy(&redaction.stderr);
+    for sensitive in [RELEASE_NOTE_SECRET, RELEASE_NOTE_EMAIL] {
+        assert!(!redaction_stderr.contains(sensitive));
+    }
+    let redaction_stdout = String::from_utf8(redaction.stdout).expect("redaction stdout UTF-8");
+    for sensitive in [RELEASE_NOTE_SECRET, RELEASE_NOTE_EMAIL] {
+        assert!(!redaction_stdout.contains(sensitive));
+    }
+    let redaction_json: serde_json::Value =
+        serde_json::from_str(&redaction_stdout).expect("redaction JSON");
+    assert!(redaction_json["blocked"].as_u64().unwrap() >= 1);
+
+    let dry_run = command("sync", &data_home, &project)
+        .arg("--dry-run")
+        .output()
+        .expect("release sync dry run");
+    assert_success_ref(&dry_run);
+    let dry_run_stderr = String::from_utf8_lossy(&dry_run.stderr);
+    for sensitive in [RELEASE_NOTE_SECRET, RELEASE_NOTE_EMAIL] {
+        assert!(!dry_run_stderr.contains(sensitive));
+    }
+    let dry_run_text = String::from_utf8(dry_run.stdout).expect("dry-run stdout UTF-8");
+    for sensitive in [RELEASE_NOTE_SECRET, RELEASE_NOTE_EMAIL] {
+        assert!(!dry_run_text.contains(sensitive));
+    }
+    let dry_run_json: serde_json::Value =
+        serde_json::from_str(&dry_run_text).expect("dry-run JSON");
+    assert!(dry_run_json["blocked_events"].as_u64().unwrap() >= 1);
+    assert!(
+        dry_run_json["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| {
+                event["blocked_reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|reason| reason.as_str().unwrap().contains("deterministic secret"))
+            }),
+        "unsafe note secret should be blocked before sync"
+    );
+
+    let dream_output = dream_output_json(
+        &evidence_ref,
+        "Prefer release-gate evidence checks.",
+        0.94,
+        "",
+    );
+    let dream = command("dream", &data_home, &project)
+        .env("MMR_DREAM_MOCK_OUTPUT", dream_output)
+        .output()
+        .expect("release dream");
+    assert_success_ref(&dream);
+    let dream_json: serde_json::Value = serde_json::from_slice(&dream.stdout).expect("dream JSON");
+    assert_eq!(dream_json["applied"].as_u64().unwrap(), 1);
+    assert_eq!(
+        dream_json["learned_memory"][0]["evidence_refs"][0],
+        evidence_ref
+    );
+
+    let learned_search = command("search", &data_home, &project)
+        .arg("release-gate evidence checks")
+        .output()
+        .expect("release learned search");
+    assert_success_ref(&learned_search);
+    let learned_search_json: serde_json::Value =
+        serde_json::from_slice(&learned_search.stdout).expect("learned search JSON");
+    assert_eq!(learned_search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(
+        learned_search_json["results"][0]["source"],
+        "learned_memory"
+    );
+
+    let sync = command("sync", &data_home, &project)
+        .output()
+        .expect("release sync");
+    assert_success_ref(&sync);
+    let sync_json: serde_json::Value = serde_json::from_slice(&sync.stdout).expect("sync JSON");
+    assert!(matches!(
+        sync_json["status"].as_str().unwrap(),
+        "partial" | "synced"
+    ));
+    assert!(sync_json["blocked_events"].as_u64().unwrap() >= 1);
+    assert!(
+        sync_json["blocked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| {
+                event["reasons"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|reason| reason.as_str().unwrap().contains("deterministic secret"))
+            }),
+        "sync should report the unsafe note secret blocker"
+    );
+    let remote_text = remote_file_text(&remote);
+    for sensitive in [RELEASE_NOTE_SECRET, RELEASE_NOTE_EMAIL] {
+        assert!(!remote_text.contains(sensitive));
+    }
+    assert!(!remote_text.contains(&project.to_string_lossy().to_string()));
+    assert!(!remote_text.contains(&fresh_project.to_string_lossy().to_string()));
+    assert!(remote_text.contains("Release gate safe note"));
+    assert!(remote_text.contains("[REDACTED:private_email]"));
+    assert!(remote_text.contains("Release Codex imported contact [REDACTED:private_email]."));
+    assert!(remote_text.contains("Prefer release-gate evidence checks."));
+
+    let hydrate = fresh_command("link").output().expect("release hydrate");
+    assert_success_ref(&hydrate);
+    let hydrate_json: serde_json::Value =
+        serde_json::from_slice(&hydrate.stdout).expect("hydrate JSON");
+    assert!(
+        hydrate_json["hydration"]["inserted_events"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+    assert!(
+        hydrate_json["hydration"]["inserted_learned_memory"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+    assert!(
+        hydrate_json["imports"]
+            .as_array()
+            .expect("hydrate imports array")
+            .iter()
+            .all(|import| import["imported_events"].as_u64().unwrap_or(0) == 0),
+        "fresh host should hydrate from remote instead of local source fixtures: {hydrate_json}"
+    );
+
+    let hydrated_event_search = fresh_command("search")
+        .arg("Release gate safe note")
+        .output()
+        .expect("hydrated event search");
+    assert_success_ref(&hydrated_event_search);
+    let hydrated_event_search_json: serde_json::Value =
+        serde_json::from_slice(&hydrated_event_search.stdout).expect("hydrated event search JSON");
+    assert_eq!(
+        hydrated_event_search_json["total_results"]
+            .as_u64()
+            .unwrap(),
+        1
+    );
+    let fresh_evidence_ref = format!(
+        "mmr://event/{}",
+        hydrated_event_search_json["results"][0]["event_id"]
+            .as_str()
+            .expect("hydrated event id")
+    );
+
+    let hydrated_search = fresh_command("search")
+        .arg("release-gate evidence checks")
+        .output()
+        .expect("hydrated learned search");
+    assert_success_ref(&hydrated_search);
+    let hydrated_search_json: serde_json::Value =
+        serde_json::from_slice(&hydrated_search.stdout).expect("hydrated search JSON");
+    assert_eq!(hydrated_search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(
+        hydrated_search_json["results"][0]["source"],
+        "learned_memory"
+    );
+
+    let fresh_store = Store::open(fresh_data_home.join("mmr").join("mmr.db")).expect("fresh store");
+    let fresh_project_record = fresh_store
+        .project_by_path(&fresh_project)
+        .expect("fresh project lookup")
+        .expect("fresh project");
+    let fresh_events = fresh_store
+        .events_for_project(&fresh_project_record.id, None, None)
+        .expect("fresh events");
+    assert!(
+        fresh_events.iter().any(|event| event.id
+            == hydrated_event_search_json["results"][0]["event_id"]
+                .as_str()
+                .unwrap()),
+        "hydrated search event should exist in the fresh store"
+    );
+    let fresh_memory = fresh_store
+        .learned_memory_for_project(&fresh_project_record.id)
+        .expect("fresh learned memory");
+    let hydrated_memory = fresh_memory
+        .iter()
+        .find(|memory| memory.claim == "Prefer release-gate evidence checks.")
+        .expect("hydrated learned memory claim");
+    assert_eq!(
+        hydrated_memory.evidence_refs,
+        vec![fresh_evidence_ref.clone()]
+    );
+
+    let fresh_dream_output = dream_output_json(
+        &fresh_evidence_ref,
+        "Fresh release hosts keep hydrated evidence refs valid.",
+        0.91,
+        "",
+    );
+    let fresh_dream = fresh_command("dream")
+        .args(["--dry-run"])
+        .env("MMR_DREAM_MOCK_OUTPUT", fresh_dream_output)
+        .output()
+        .expect("fresh release dream");
+    assert_success_ref(&fresh_dream);
+    let fresh_dream_json: serde_json::Value =
+        serde_json::from_slice(&fresh_dream.stdout).expect("fresh dream JSON");
+    assert_eq!(fresh_dream_json["dry_run"], true);
+    assert_eq!(fresh_dream_json["applied"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -3152,6 +3745,118 @@ fn summary_generation_contract_is_implemented() {
 }
 
 #[test]
+fn optional_external_summary_provider_smoke_is_gated() {
+    if std::env::var("MMR_RUN_EXTERNAL_SUMMARY_SMOKE")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
+        return;
+    }
+
+    let has_gemini_key = std::env::var("GOOGLE_API_KEY")
+        .or_else(|_| std::env::var("GEMINI_API_KEY"))
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    assert!(
+        has_gemini_key,
+        "set GOOGLE_API_KEY or GEMINI_API_KEY with MMR_RUN_EXTERNAL_SUMMARY_SMOKE=1"
+    );
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let project = tmp.path().join("external-summary-project");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    let project = std::fs::canonicalize(&project).expect("canonical project");
+    seed_release_gate_sources(&home, &project);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "summary",
+            "all",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--agent",
+            "gemini",
+            "-O",
+            "json",
+        ])
+        .env("HOME", &home)
+        .env("SIMPLEMMR_HOME", &home)
+        .output()
+        .expect("external summary smoke");
+    assert_success_ref(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("external summary JSON");
+    assert_eq!(json["agent"], "gemini");
+    assert!(
+        !json["text"].as_str().unwrap_or_default().trim().is_empty(),
+        "external summary smoke should return non-empty text"
+    );
+}
+
+#[test]
+fn optional_external_dream_command_smoke_is_gated() {
+    if std::env::var("MMR_RUN_EXTERNAL_DREAM_SMOKE")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
+        return;
+    }
+    let command = std::env::var("MMR_DREAM_COMMAND").unwrap_or_default();
+    assert!(
+        !command.trim().is_empty(),
+        "set MMR_DREAM_COMMAND with MMR_RUN_EXTERNAL_DREAM_SMOKE=1"
+    );
+
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("external-dream-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    let project = std::fs::canonicalize(&project).expect("canonical project");
+    seed_release_gate_sources(&home, &project);
+
+    let link = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("SIMPLEMMR_HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("external dream link");
+    assert_success_ref(&link);
+
+    let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["dream", "--dry-run", "--runner", "command"])
+        .env("HOME", &home)
+        .env("SIMPLEMMR_HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("external dream smoke");
+    assert_success_ref(&dream);
+    let json: serde_json::Value =
+        serde_json::from_slice(&dream.stdout).expect("external dream JSON");
+    assert_eq!(json["command"], "dream");
+    assert_eq!(json["dry_run"], true);
+    assert!(json["evidence"]["included_events"].as_u64().unwrap() > 0);
+    let produced = json["applied"].as_u64().unwrap()
+        + json["queued"].as_u64().unwrap()
+        + json["rejected"].as_u64().unwrap();
+    assert!(
+        produced > 0,
+        "external dream command should return at least one validated observation or memory update"
+    );
+}
+
+#[test]
 fn dream_assimilation_contract_is_implemented() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let project_dir = tmp.path().join("dream-assimilation");
@@ -3565,6 +4270,136 @@ fn assert_success_ref(output: &std::process::Output) {
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn first_input_text(body: &serde_json::Value) -> &str {
+    body["input"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["text"].as_str())
+        .expect("first input text")
+}
+
+fn start_mock_gemini_server(
+    response_body: String,
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    std::thread::JoinHandle<()>,
+) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let captured_for_thread = std::sync::Arc::clone(&captured);
+
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept request");
+        let request_bytes = read_http_request(&mut stream);
+        let request = String::from_utf8(request_bytes).expect("request UTF-8");
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+        let body_json: serde_json::Value = serde_json::from_str(body).expect("request JSON body");
+        *captured_for_thread.lock().expect("lock captured body") = Some(body_json);
+
+        let http_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        std::io::Write::write_all(&mut stream, http_response.as_bytes()).expect("write response");
+    });
+
+    (format!("http://{addr}"), captured, handle)
+}
+
+fn read_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut header_end = None;
+    let mut content_length = 0usize;
+
+    loop {
+        let mut chunk = [0_u8; 4096];
+        let read = std::io::Read::read(stream, &mut chunk).expect("read request");
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+
+        if header_end.is_none()
+            && let Some(idx) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+        {
+            header_end = Some(idx + 4);
+            let header = String::from_utf8_lossy(&bytes[..idx + 4]);
+            content_length = header
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+        }
+
+        if let Some(end) = header_end
+            && bytes.len() >= end + content_length
+        {
+            break;
+        }
+    }
+
+    bytes
+}
+
+fn seed_release_gate_sources(home: &Path, project: &Path) {
+    let project_text = project.to_str().expect("project path UTF-8");
+    let codex_sessions = home.join(".codex").join("sessions");
+    std::fs::create_dir_all(&codex_sessions).expect("create codex sessions");
+    let codex_fixture = format!(
+        r#"{{"type":"session_meta","timestamp":"2026-05-24T10:00:00","payload":{{"id":"release-codex","cwd":"{project_text}","cli_version":"1.0.0","model_provider":"openai","timestamp":"2026-05-24T10:00:00","git":{{"branch":"main"}}}}}}
+{{"type":"event_msg","timestamp":"2026-05-24T10:00:01","payload":{{"type":"user_message","message":"Release Codex fixture records adapter setup."}}}}
+{{"type":"response_item","timestamp":"2026-05-24T10:00:02","payload":{{"role":"assistant","content":[{{"type":"output_text","text":"Release Codex fixture is normalized safely."}}]}}}}"#
+    );
+    std::fs::write(codex_sessions.join("release-codex.jsonl"), codex_fixture)
+        .expect("write codex release fixture");
+
+    let claude_sessions = home
+        .join(".claude")
+        .join("projects")
+        .join(encode_claude_project_name(project));
+    std::fs::create_dir_all(&claude_sessions).expect("create claude sessions");
+    let claude_fixture = format!(
+        r#"{{"type":"user","sessionId":"release-claude","message":{{"role":"user","content":"Release Claude fixture records adapter setup."}},"timestamp":"2026-05-24T10:01:00Z","uuid":"release-claude-u","cwd":"{project_text}"}}
+{{"type":"assistant","sessionId":"release-claude","message":{{"role":"assistant","content":"Release Claude fixture is normalized safely."}},"timestamp":"2026-05-24T10:01:01Z","uuid":"release-claude-a","parentUuid":"release-claude-u","cwd":"{project_text}"}}"#
+    );
+    std::fs::write(claude_sessions.join("release-claude.jsonl"), claude_fixture)
+        .expect("write claude release fixture");
+
+    let cursor_fixture = r#"{"role":"user","message":{"content":[{"type":"text","text":"Release Cursor fixture records adapter setup."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Release Cursor fixture is normalized safely."}]}}"#;
+    let cursor_sessions = home
+        .join(".cursor")
+        .join("projects")
+        .join(encode_cursor_project_name(project))
+        .join("agent-transcripts")
+        .join("release-cursor");
+    std::fs::create_dir_all(&cursor_sessions).expect("create cursor sessions");
+    std::fs::write(cursor_sessions.join("release-cursor.jsonl"), cursor_fixture)
+        .expect("write cursor release fixture");
+    let legacy_cursor_sessions = home
+        .join(".cursor")
+        .join("projects")
+        .join(encode_claude_project_name(project))
+        .join("agent-transcripts")
+        .join("release-cursor");
+    std::fs::create_dir_all(&legacy_cursor_sessions).expect("create legacy cursor sessions");
+    std::fs::write(
+        legacy_cursor_sessions.join("release-cursor.jsonl"),
+        cursor_fixture,
+    )
+    .expect("write legacy cursor release fixture");
 }
 
 fn remote_event_file_count(remote: &Path) -> usize {

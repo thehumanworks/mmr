@@ -1,6 +1,7 @@
 # mmr Memory Fabric Quickstart
 
-Status: implemented through NHL-280.
+Status: implemented through NHL-281. See
+`docs/mmr-memory-fabric-release-gate.md` for final release evidence.
 
 This guide covers the lean MVP flow from a blank non-Git directory to linked,
 synced, searchable, and dreamed local memory.

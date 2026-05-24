@@ -829,6 +829,8 @@ Implemented contract ownership:
 - NHL-280: summary command plus `remember` compatibility, status diagnostics,
   quickstart/recovery docs, and integrated CLI command-surface tests for
   `note`, `rg`, `search`, `link`, `sync`, `status`, `dream`, and `summary`.
+- NHL-281: offline end-to-end release gate, optional external summary smoke,
+  adversarial review evidence, and final verification handoff.
 
 ## Dependency Graph
 

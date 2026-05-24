@@ -2,12 +2,12 @@
 
 ## Current State
 
-- Branch: `codex/nhl-280-cli-ux-docs`
-- Last green commit: current branch head after the NHL-280 delivery commit.
-- Last verified state: NHL-280 working tree passed the full verification loop.
-- Active Linear ticket: NHL-280
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278, NHL-279
-- Current work: finalize NHL-280 integrated CLI UX, diagnostics, docs, and
+- Branch: `codex/nhl-281-release-gate`
+- Last green commit: pending current branch commit.
+- Last verified state: NHL-281 working tree passed the full verification loop.
+- Active Linear ticket: NHL-281
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278, NHL-279, NHL-280, NHL-282
+- Current work: finalize NHL-281 release-gate review, commit, push, and
   handoff.
 
 ## Current Architecture Decisions
@@ -126,17 +126,25 @@
   readiness, and consolidated recovery actions.
 - `mmr summary` routes through the existing stateless continuity brief runner,
   while `remember` remains a compatibility alias.
+- NHL-281 adds the final offline release gate:
+  `mvp_release_gate_e2e_fixture_scenario` proves the blank non-Git path through
+  fixture-backed source import, notes, raw retrieval, search, summary/remember,
+  redaction blocking, dream assimilation, sync safety, and fresh HOME/store
+  hydration.
 
 ## Verification Commands And Results
 
 - `cargo fmt`: passed
 - `cargo test`: passed, including 70 unit tests, 65 CLI contract tests, and
-  `memory_fabric_contract` with 34 active tests passed and 0 ignored MVP
+  `memory_fabric_contract` with 37 active tests passed and 0 ignored MVP
   contracts
 - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-  (`elapsed_ms=1017`)
+  (`elapsed_ms=755`)
 - `cargo clippy --all-targets --all-features -- -D warnings`: passed
 - `cargo build --release`: passed
+- NHL-281 adversarial review found fresh-host hydration, `remember`
+  compatibility, leak-check, raw-retrieval, and limitation-doc gaps. Fixes are
+  applied and verification was rerun successfully.
 - NHL-280 UX review found summary/docs drift, noisy status actions,
   copy/paste recovery gaps, fixture-specific auth wording, and non-diagnostic
   store existence reporting. Fixes are applied and verification was rerun
@@ -345,6 +353,7 @@
 - `src/sync.rs`
 - `docs/mmr-memory-fabric-store.md`
 - `docs/mmr-memory-fabric-quickstart.md`
+- `docs/mmr-memory-fabric-release-gate.md`
 - `Cargo.toml`
 - `Cargo.lock`
 - `src/capture.rs`
@@ -361,7 +370,7 @@
 
 ## Open Blockers
 
-- None for NHL-280.
+- None for NHL-281.
 
 ## Known Risks
 
@@ -410,8 +419,9 @@
 
 ## Next Exact Action
 
-Commit and push `codex/nhl-280-cli-ux-docs`, then update Linear NHL-280 with
-the verification results and mark it Done.
+Finish the NHL-281 adversarial review, commit and push
+`codex/nhl-281-release-gate`, then update Linear NHL-281 with the verification
+results and mark it Done.
 
 ## Do Not Redo
 

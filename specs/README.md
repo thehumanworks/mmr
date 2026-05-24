@@ -14,6 +14,7 @@ When implementing or reviewing behavior:
 - [Messages command](messages.md)
 - [Memory Fabric MVP contract](../docs/mmr-memory-fabric-mvp.md)
 - [Memory Fabric quickstart and recovery](../docs/mmr-memory-fabric-quickstart.md)
+- [Memory Fabric release gate](../docs/mmr-memory-fabric-release-gate.md)
 - [Memory Fabric store](../docs/mmr-memory-fabric-store.md)
 - [Source adapter framework](../docs/mmr-source-adapters.md)
 - [Note command](../docs/mmr-note.md)
