@@ -2085,8 +2085,8 @@ fn sync_command_is_rejected() {
     assert!(!output.status.success(), "sync should be rejected");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unrecognized subcommand") || stderr.contains("unknown subcommand"),
-        "stderr should report sync as an unknown subcommand: {stderr}"
+        stderr.contains("unexpected argument") || stderr.contains("unrecognized subcommand"),
+        "stderr should report unsupported sync usage: {stderr}"
     );
 }
 

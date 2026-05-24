@@ -186,6 +186,11 @@ Key fields:
 - `status`: `pending`, `passed`, `blocked`, or `failed`
 - `blocking_findings`
 
+The NHL-272 implementation uses a deterministic run id for each event/policy
+pair. Rerunning redaction updates the run and replaces its spans, which keeps
+scan output idempotent while allowing policy behavior to evolve with a future
+policy version.
+
 ### `redaction_spans`
 
 Concrete redaction spans for event content.
@@ -199,6 +204,11 @@ Key fields:
 - `confidence`
 - `blocks_sync`
 
+Blocking spans are never printed raw in `mmr sync --dry-run`; command responses
+use redacted projections derived from spans when showing payload previews. Under
+the default degraded PII coverage, dry-run omits payload previews entirely and
+reports the degraded policy as the block reason.
+
 ### `search_documents`
 
 Generated exact-search documents and citations.
@@ -209,6 +219,9 @@ Key fields:
 - `project_id`, `session_id`, `source`
 - `document_text`
 - `citation`
+
+These rows are local-only source material until a redacted sync projection is
+explicitly generated. Sync code must not export `document_text` directly.
 
 ### `summaries`
 

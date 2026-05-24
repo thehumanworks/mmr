@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-271-note`
-- Last green commit: `b589318` (`add source adapter framework`)
-- Active Linear ticket: NHL-271
-- Completed tickets: NHL-268, NHL-269, NHL-270
-- Current work: human-authored note ingestion
+- Branch: `codex/nhl-272-redaction`
+- Last green commit: `1cb2a0f` (`add note ingestion command`)
+- Active Linear ticket: NHL-272
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271
+- Current work: redaction-before-sync pipeline
 
 ## Current Architecture Decisions
 
@@ -34,6 +34,9 @@
   stay adapter-owned.
 - `mmr note` requires the cwd project to be linked, writes source `note` events
   to the local store, and creates search document citations for later search.
+- NHL-272 redaction uses deterministic local secret/PII scanners by default,
+  records redaction runs/spans in SQLite, and exposes `mmr sync --dry-run` as a
+  safety view before NHL-277 full remote sync.
 
 ## Verification Commands And Results
 
@@ -91,6 +94,9 @@
     (`elapsed_ms=645`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
+- NHL-272 implementation is in progress; source-filtered and read-only dry-run
+  fixes from adversarial review are applied. Follow-up review found no blockers.
+  Full verification is green.
 
 ## Touched Files And Modules
 
@@ -109,10 +115,12 @@
 - `src/capture.rs`
 - `docs/mmr-source-adapters.md`
 - `docs/mmr-note.md`
+- `src/redaction.rs`
+- `docs/mmr-redaction.md`
 
 ## Open Blockers
 
-- None for NHL-271.
+- None for NHL-272.
 
 ## Known Risks
 
@@ -129,11 +137,20 @@
   fixture adapter.
 - `mmr note` creates search documents, but public `mmr search`/`mmr rg` remains
   deferred to NHL-273.
+- The optional `openai/privacy-filter` model runtime is not bundled; redaction
+  reports degraded PII coverage while deterministic blocking remains active.
+- Under degraded PII coverage, `sync --dry-run` treats every event as blocked
+  and omits payload previews so false negatives cannot leak through dry-run JSON.
+- NHL-277 must not treat `events.sync_status = "redacted"` alone as sufficient
+  upload permission; sync has to evaluate active policy coverage and block
+  degraded-policy events without explicit versioned override.
+- False-positive allowlist and hard-purge flows are documented as explicit
+  future policy surfaces, not silent MVP behavior.
 
 ## Next Exact Action
 
-Commit and push NHL-271, update Linear with scope/tests/risks, then begin the
-next unblocked MVP ticket.
+Finish NHL-272 docs/tests, run adversarial review for secret exfiltration and
+irreversible remote history, then run the full verification loop.
 
 ## Do Not Redo
 
@@ -141,7 +158,8 @@ next unblocked MVP ticket.
 - NHL-268 is already marked `Done` in Linear.
 - NHL-269 is already marked `Done` in Linear.
 - NHL-270 is already marked `Done` in Linear.
-- NHL-271 is already marked `In Progress`.
+- NHL-271 is already marked `Done` in Linear.
+- NHL-272 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 

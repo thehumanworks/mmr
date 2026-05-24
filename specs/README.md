@@ -16,3 +16,4 @@ When implementing or reviewing behavior:
 - [Memory Fabric store](../docs/mmr-memory-fabric-store.md)
 - [Source adapter framework](../docs/mmr-source-adapters.md)
 - [Note command](../docs/mmr-note.md)
+- [Redaction before sync](../docs/mmr-redaction.md)

@@ -7,7 +7,13 @@ use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
-use crate::store::{NewEvent, Store, content_hash};
+use crate::redaction::{
+    PiiCoverage, PiiCoverageStatus, RedactionFinding, RedactionOutcome, scan_text,
+};
+use crate::store::{
+    DEFAULT_REDACTION_POLICY_ID, EventRecord, NewEvent, NewRedactionSpan, ProjectRecord, Store,
+    content_hash,
+};
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
@@ -121,6 +127,10 @@ pub enum Commands {
         #[arg(value_name = "TEXT", trailing_var_arg = true)]
         text: Vec<String>,
     },
+    /// Inspect and apply local redaction policy before sync
+    Redact(RedactArgs),
+    /// Sync safety view; full remote sync lands in NHL-277
+    Sync(SyncArgs),
     /// Inspect the local mmr database path and schema version
     #[command(name = "__db-info", hide = true)]
     DbInfo {
@@ -161,6 +171,37 @@ pub struct RememberArgs {
     selection: Option<RememberSelectorCommand>,
 }
 
+#[derive(Args, Debug)]
+pub struct RedactArgs {
+    #[command(subcommand)]
+    command: RedactCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RedactCommand {
+    /// Scan linked project events and persist redaction runs
+    Scan {
+        /// Project path (omit to use current directory)
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
+    /// Explain the latest redaction run for an event
+    Explain {
+        /// Event ID to inspect
+        event_id: String,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct SyncArgs {
+    /// Show what would sync, without contacting a remote
+    #[arg(long)]
+    dry_run: bool,
+    /// Project path (omit to use current directory)
+    #[arg(long)]
+    project: Option<PathBuf>,
+}
+
 impl RememberArgs {
     fn selection(&self) -> RememberSelection {
         match &self.selection {
@@ -193,8 +234,15 @@ pub enum RememberOutputFormatArg {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
+    let source_filter = effective_source(cli.source);
     if let Commands::Note { text } = &cli.command {
         return serialize(&note_response(text.clone())?, cli.pretty);
+    }
+    if let Commands::Redact(args) = &cli.command {
+        return serialize(&redact_response(args, source_filter)?, cli.pretty);
+    }
+    if let Commands::Sync(args) = &cli.command {
+        return serialize(&sync_response(args, source_filter)?, cli.pretty);
     }
     if let Commands::DbInfo {
         project,
@@ -208,7 +256,6 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     }
 
     let service = QueryService::load()?;
-    let source_filter = effective_source(cli.source);
 
     let response = match cli.command {
         Commands::Projects {
@@ -400,6 +447,8 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             format_remember_response(&response, remember.output_format, cli.pretty)?
         }
         Commands::Note { text } => serialize(&note_response(text)?, cli.pretty)?,
+        Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
+        Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
         Commands::DbInfo {
             project,
             smoke_event,
@@ -469,6 +518,309 @@ fn now_rfc3339() -> Result<String> {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .context("format timestamp")
+}
+
+#[derive(Debug, Serialize)]
+struct RedactScanResponse {
+    project_id: String,
+    policy_id: String,
+    events_scanned: usize,
+    passed: usize,
+    blocked: usize,
+    pii_coverage: PiiCoverage,
+    events: Vec<RedactedEventSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct RedactExplainResponse {
+    event_id: String,
+    policy_id: String,
+    status: String,
+    blocking_findings: i64,
+    spans: Vec<RedactionSpanResponse>,
+    redacted_text: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SyncDryRunResponse {
+    dry_run: bool,
+    project_id: String,
+    remote: String,
+    policy_id: String,
+    total_events: usize,
+    syncable_events: usize,
+    blocked_events: usize,
+    pii_coverage: PiiCoverage,
+    events: Vec<SyncDryRunEvent>,
+}
+
+#[derive(Debug, Serialize)]
+struct RedactedEventSummary {
+    event_id: String,
+    status: String,
+    span_count: usize,
+    blocking_findings: usize,
+    kinds: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RedactionSpanResponse {
+    kind: String,
+    start_byte: usize,
+    end_byte: usize,
+    replacement: String,
+    confidence: f64,
+    blocks_sync: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SyncDryRunEvent {
+    event_id: String,
+    source: String,
+    status: String,
+    would_sync: bool,
+    payload_preview: Option<String>,
+    blocked_reasons: Vec<String>,
+}
+
+fn redact_response(
+    args: &RedactArgs,
+    source_filter: Option<SourceFilter>,
+) -> Result<serde_json::Value> {
+    match &args.command {
+        RedactCommand::Scan { project } => {
+            let mut store = Store::open_default()?;
+            let project = linked_project(&store, project.as_deref())?;
+            let response = scan_project_response(&mut store, &project, source_filter)?;
+            serde_json::to_value(response).context("serialize redact scan response")
+        }
+        RedactCommand::Explain { event_id } => {
+            let store = Store::open_default()?;
+            let event = store.event_by_id(event_id)?;
+            let run = store
+                .latest_redaction_run_for_event(event_id)?
+                .ok_or_else(|| anyhow::anyhow!("no redaction run found for event: {event_id}"))?;
+            let spans = store.redaction_spans_for_run(&run.id)?;
+            let redacted_text = crate::redaction::apply_redactions(
+                &event.content_text,
+                &spans
+                    .iter()
+                    .map(redaction_finding_from_record)
+                    .collect::<Vec<_>>(),
+            );
+            let response = RedactExplainResponse {
+                event_id: event.id,
+                policy_id: run.policy_id,
+                status: run.status,
+                blocking_findings: run.blocking_findings,
+                spans: spans.iter().map(redaction_span_response).collect(),
+                redacted_text,
+            };
+            serde_json::to_value(response).context("serialize redact explain response")
+        }
+    }
+}
+
+fn sync_response(
+    args: &SyncArgs,
+    source_filter: Option<SourceFilter>,
+) -> Result<SyncDryRunResponse> {
+    if !args.dry_run {
+        bail!("only `mmr sync --dry-run` is implemented before NHL-277 full sync");
+    }
+
+    let store = Store::open_default()?;
+    let project = linked_project(&store, args.project.as_deref())?;
+    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+
+    let mut sync_events = Vec::new();
+    let mut syncable_events = 0;
+    let mut blocked_events = 0;
+    let mut pii_coverage = None;
+    for event in events {
+        let outcome = scan_text(&event.content_text);
+        pii_coverage = Some(outcome.pii_coverage.clone());
+        let would_sync = dry_run_allows_sync(&outcome);
+        if would_sync {
+            syncable_events += 1;
+        } else {
+            blocked_events += 1;
+        }
+        let blocked_reasons = dry_run_blocked_reasons(&outcome);
+        let status = if outcome.blocks_sync {
+            "blocked"
+        } else if would_sync {
+            "passed"
+        } else {
+            "degraded_policy"
+        };
+        sync_events.push(SyncDryRunEvent {
+            event_id: event.id,
+            source: event.source,
+            status: status.to_string(),
+            would_sync,
+            payload_preview: if would_sync {
+                Some(outcome.redacted_text)
+            } else {
+                None
+            },
+            blocked_reasons,
+        });
+    }
+
+    Ok(SyncDryRunResponse {
+        dry_run: true,
+        project_id: project.id,
+        remote: "github:<authenticated-user>/mmr-store".to_string(),
+        policy_id: DEFAULT_REDACTION_POLICY_ID.to_string(),
+        total_events: sync_events.len(),
+        syncable_events,
+        blocked_events,
+        pii_coverage: pii_coverage.unwrap_or_else(|| scan_text("").pii_coverage),
+        events: sync_events,
+    })
+}
+
+fn linked_project(store: &Store, project: Option<&Path>) -> Result<ProjectRecord> {
+    let path = match project {
+        Some(path) => path.to_path_buf(),
+        None => std::env::current_dir().context("current_dir")?,
+    };
+    store.project_by_path(&path)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "project is not linked; run `mmr link` before redaction or pass a linked --project"
+        )
+    })
+}
+
+fn scan_project_response(
+    store: &mut Store,
+    project: &ProjectRecord,
+    source_filter: Option<SourceFilter>,
+) -> Result<RedactScanResponse> {
+    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    let mut summaries = Vec::with_capacity(events.len());
+    let mut passed = 0;
+    let mut blocked = 0;
+    let mut pii_coverage = None;
+
+    for event in events {
+        let outcome = scan_text(&event.content_text);
+        pii_coverage = Some(outcome.pii_coverage.clone());
+        let spans = outcome
+            .findings
+            .iter()
+            .map(new_redaction_span_from_finding)
+            .collect::<Vec<_>>();
+        let status = if outcome.blocks_sync {
+            blocked += 1;
+            "blocked"
+        } else {
+            passed += 1;
+            "passed"
+        };
+        store.record_redaction_result(&event.id, DEFAULT_REDACTION_POLICY_ID, status, &spans)?;
+        summaries.push(redacted_event_summary(&event, status, &outcome.findings));
+    }
+
+    Ok(RedactScanResponse {
+        project_id: project.id.clone(),
+        policy_id: DEFAULT_REDACTION_POLICY_ID.to_string(),
+        events_scanned: summaries.len(),
+        passed,
+        blocked,
+        pii_coverage: pii_coverage.unwrap_or_else(|| scan_text("").pii_coverage),
+        events: summaries,
+    })
+}
+
+fn source_filter_name(source_filter: Option<SourceFilter>) -> Option<&'static str> {
+    match source_filter {
+        Some(SourceFilter::Claude) => Some("claude"),
+        Some(SourceFilter::Codex) => Some("codex"),
+        Some(SourceFilter::Cursor) => Some("cursor"),
+        Some(SourceFilter::Grok) => Some("grok"),
+        Some(SourceFilter::Pi) => Some("pi"),
+        None => None,
+    }
+}
+
+fn dry_run_allows_sync(outcome: &RedactionOutcome) -> bool {
+    !outcome.blocks_sync && outcome.pii_coverage.status == PiiCoverageStatus::Available
+}
+
+fn dry_run_blocked_reasons(outcome: &RedactionOutcome) -> Vec<String> {
+    let mut reasons = Vec::new();
+    let blocking_findings = outcome
+        .findings
+        .iter()
+        .filter(|finding| finding.blocks_sync)
+        .count();
+    if blocking_findings > 0 {
+        reasons.push(format!(
+            "{blocking_findings} deterministic secret finding(s) under policy {DEFAULT_REDACTION_POLICY_ID}"
+        ));
+    }
+    if outcome.pii_coverage.status == PiiCoverageStatus::Degraded {
+        reasons.push(outcome.pii_coverage.reason.clone());
+    }
+    reasons
+}
+
+fn redacted_event_summary(
+    event: &EventRecord,
+    status: &str,
+    findings: &[RedactionFinding],
+) -> RedactedEventSummary {
+    let mut kinds = findings
+        .iter()
+        .map(|finding| finding.kind.clone())
+        .collect::<Vec<_>>();
+    kinds.sort();
+    kinds.dedup();
+    RedactedEventSummary {
+        event_id: event.id.clone(),
+        status: status.to_string(),
+        span_count: findings.len(),
+        blocking_findings: findings
+            .iter()
+            .filter(|finding| finding.blocks_sync)
+            .count(),
+        kinds,
+    }
+}
+
+fn new_redaction_span_from_finding(finding: &RedactionFinding) -> NewRedactionSpan {
+    NewRedactionSpan {
+        kind: finding.kind.clone(),
+        start_byte: finding.start_byte,
+        end_byte: finding.end_byte,
+        replacement: finding.replacement.clone(),
+        confidence: finding.confidence,
+        blocks_sync: finding.blocks_sync,
+    }
+}
+
+fn redaction_span_response(span: &crate::store::RedactionSpanRecord) -> RedactionSpanResponse {
+    RedactionSpanResponse {
+        kind: span.kind.clone(),
+        start_byte: span.start_byte,
+        end_byte: span.end_byte,
+        replacement: span.replacement.clone(),
+        confidence: span.confidence,
+        blocks_sync: span.blocks_sync,
+    }
+}
+
+fn redaction_finding_from_record(span: &crate::store::RedactionSpanRecord) -> RedactionFinding {
+    RedactionFinding {
+        kind: span.kind.clone(),
+        start_byte: span.start_byte,
+        end_byte: span.end_byte,
+        replacement: span.replacement.clone(),
+        confidence: span.confidence,
+        blocks_sync: span.blocks_sync,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -990,5 +1342,26 @@ mod tests {
             panic!("expected note command");
         };
         assert_eq!(text, vec!["decision:", "use", "fixtures"]);
+    }
+
+    #[test]
+    fn redact_scan_command_parses() {
+        let parsed = Cli::try_parse_from(["mmr", "redact", "scan"]).expect("redact scan parses");
+        let Commands::Redact(args) = parsed.command else {
+            panic!("expected redact command");
+        };
+        assert!(matches!(
+            args.command,
+            RedactCommand::Scan { project: None }
+        ));
+    }
+
+    #[test]
+    fn sync_dry_run_command_parses() {
+        let parsed = Cli::try_parse_from(["mmr", "sync", "--dry-run"]).expect("sync parses");
+        let Commands::Sync(args) = parsed.command else {
+            panic!("expected sync command");
+        };
+        assert!(args.dry_run);
     }
 }

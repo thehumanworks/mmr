@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const LATEST_SCHEMA_VERSION: i64 = 1;
-const DEFAULT_POLICY_ID: &str = "redaction-policy:v1:default";
+pub const DEFAULT_REDACTION_POLICY_ID: &str = "redaction-policy:v1:default";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StoreInfo {
@@ -58,6 +58,39 @@ pub struct SearchDocumentRecord {
     pub source: String,
     pub document_text: String,
     pub citation: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedactionRunRecord {
+    pub id: String,
+    pub policy_id: String,
+    pub event_id: String,
+    pub status: String,
+    pub blocking_findings: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedactionSpanRecord {
+    pub id: String,
+    pub run_id: String,
+    pub event_id: String,
+    pub kind: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub replacement: String,
+    pub confidence: f64,
+    pub blocks_sync: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewRedactionSpan {
+    pub kind: String,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub replacement: String,
+    pub confidence: f64,
+    pub blocks_sync: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,7 +151,7 @@ impl NewEvent {
             parser_version: parser_version.into(),
             raw_local_ref: None,
             blob_id: None,
-            redaction_policy_id: DEFAULT_POLICY_ID.to_string(),
+            redaction_policy_id: DEFAULT_REDACTION_POLICY_ID.to_string(),
             sync_status: "local_only".to_string(),
         }
     }
@@ -841,6 +874,99 @@ impl Store {
         .ok_or_else(|| anyhow!("search document not found for event: {event_id}"))
     }
 
+    pub fn record_redaction_result(
+        &mut self,
+        event_id: &str,
+        policy_id: &str,
+        status: &str,
+        spans: &[NewRedactionSpan],
+    ) -> Result<RedactionRunRecord> {
+        let tx = self.conn.transaction()?;
+        let run_id = redaction_run_id(event_id, policy_id);
+        let now = now_rfc3339()?;
+        let blocking_findings = spans.iter().filter(|span| span.blocks_sync).count() as i64;
+
+        tx.execute(
+            "INSERT INTO redaction_runs
+                (id, policy_id, event_id, status, blocking_findings, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                blocking_findings = excluded.blocking_findings,
+                created_at = excluded.created_at",
+            params![run_id, policy_id, event_id, status, blocking_findings, now],
+        )?;
+        tx.execute(
+            "DELETE FROM redaction_spans WHERE run_id = ?1",
+            params![run_id],
+        )?;
+
+        for span in spans {
+            let id = redaction_span_id(&run_id, event_id, span);
+            tx.execute(
+                "INSERT INTO redaction_spans
+                    (id, run_id, event_id, kind, start_byte, end_byte, replacement, confidence, blocks_sync)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id,
+                    run_id,
+                    event_id,
+                    span.kind,
+                    i64::try_from(span.start_byte).context("redaction start_byte overflows i64")?,
+                    i64::try_from(span.end_byte).context("redaction end_byte overflows i64")?,
+                    span.replacement,
+                    span.confidence,
+                    if span.blocks_sync { 1 } else { 0 },
+                ],
+            )?;
+        }
+
+        let sync_status = match status {
+            "blocked" => "blocked",
+            "passed" => "redacted",
+            "failed" => "blocked",
+            _ => "pending_redaction",
+        };
+        tx.execute(
+            "UPDATE events SET sync_status = ?1 WHERE id = ?2",
+            params![sync_status, event_id],
+        )?;
+        tx.commit()?;
+
+        self.latest_redaction_run_for_event(event_id)?
+            .ok_or_else(|| anyhow!("redaction run not found after recording: {event_id}"))
+    }
+
+    pub fn latest_redaction_run_for_event(
+        &self,
+        event_id: &str,
+    ) -> Result<Option<RedactionRunRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, policy_id, event_id, status, blocking_findings, created_at
+                 FROM redaction_runs
+                 WHERE event_id = ?1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                params![event_id],
+                redaction_run_from_row,
+            )
+            .optional()
+            .context("read latest redaction run")
+    }
+
+    pub fn redaction_spans_for_run(&self, run_id: &str) -> Result<Vec<RedactionSpanRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, event_id, kind, start_byte, end_byte, replacement, confidence, blocks_sync
+             FROM redaction_spans
+             WHERE run_id = ?1
+             ORDER BY start_byte ASC, end_byte ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id], redaction_span_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read redaction spans")
+    }
+
     pub fn events_for_project(
         &self,
         project_id: &str,
@@ -1028,6 +1154,36 @@ fn search_document_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchD
     })
 }
 
+fn redaction_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RedactionRunRecord> {
+    Ok(RedactionRunRecord {
+        id: row.get(0)?,
+        policy_id: row.get(1)?,
+        event_id: row.get(2)?,
+        status: row.get(3)?,
+        blocking_findings: row.get(4)?,
+        created_at: row.get(5)?,
+    })
+}
+
+fn redaction_span_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RedactionSpanRecord> {
+    let start_byte: i64 = row.get(4)?;
+    let end_byte: i64 = row.get(5)?;
+    let blocks_sync: i64 = row.get(8)?;
+    Ok(RedactionSpanRecord {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        event_id: row.get(2)?,
+        kind: row.get(3)?,
+        start_byte: usize::try_from(start_byte)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(4, start_byte))?,
+        end_byte: usize::try_from(end_byte)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(5, end_byte))?,
+        replacement: row.get(6)?,
+        confidence: row.get(7)?,
+        blocks_sync: blocks_sync == 1,
+    })
+}
+
 pub fn content_hash(content: &str) -> String {
     format!("sha256:{}", hash_hex(content.as_bytes()))
 }
@@ -1112,6 +1268,26 @@ fn session_id(project_id: &str, source: &str, source_session_id: &str) -> String
     format!(
         "session:v1:{}",
         hash_hex(format!("{project_id}:{source}:{source_session_id}").as_bytes())
+    )
+}
+
+fn redaction_run_id(event_id: &str, policy_id: &str) -> String {
+    format!(
+        "redaction-run:v1:{}",
+        hash_hex(format!("{event_id}:{policy_id}").as_bytes())
+    )
+}
+
+fn redaction_span_id(run_id: &str, event_id: &str, span: &NewRedactionSpan) -> String {
+    format!(
+        "redaction-span:v1:{}",
+        hash_hex(
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                run_id, event_id, span.kind, span.start_byte, span.end_byte, span.replacement
+            )
+            .as_bytes()
+        )
     )
 }
 
