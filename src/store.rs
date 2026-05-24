@@ -758,6 +758,16 @@ impl Store {
             .ok_or_else(|| anyhow!("event not found: {event_id}"))
     }
 
+    pub fn event_exists(&self, event_id: &str) -> Result<bool> {
+        self.conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE id = ?1)",
+                params![event_id],
+                |row| row.get(0),
+            )
+            .context("check event existence")
+    }
+
     pub fn events_for_project(
         &self,
         project_id: &str,

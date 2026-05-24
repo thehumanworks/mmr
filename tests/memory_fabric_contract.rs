@@ -1,3 +1,4 @@
+use mmr::capture::{EventBoundary, event_hash_set, parse_fixture_jsonl};
 use mmr::store::{LATEST_SCHEMA_VERSION, Store};
 
 const FIXTURES: &[(&str, &str)] = &[
@@ -171,6 +172,69 @@ fn db_info_smoke_links_non_git_project_and_round_trips_synthetic_event() {
 }
 
 #[test]
+fn source_adapter_normalization_contract_is_implemented() {
+    let path = std::path::Path::new("tests/fixtures/memory_fabric/malformed_mixed_session.jsonl");
+    let batch = parse_fixture_jsonl(
+        "fixture",
+        "fixture-jsonl-v1",
+        "malformed-mixed-session",
+        path,
+        include_str!("fixtures/memory_fabric/malformed_mixed_session.jsonl"),
+    )
+    .expect("parse fixture");
+
+    assert_eq!(batch.events.len(), 2);
+    assert_eq!(batch.warnings.len(), 1);
+    assert_eq!(event_hash_set(&batch.events).len(), 2);
+    assert!(batch.events.iter().all(|event| {
+        event.parser_version == "fixture-jsonl-v1"
+            && event
+                .raw_local_ref
+                .contains("malformed_mixed_session.jsonl")
+    }));
+
+    let codex = parse_fixture_jsonl(
+        "fixture",
+        "fixture-jsonl-v1",
+        "codex_session",
+        std::path::Path::new("tests/fixtures/memory_fabric/codex_session.jsonl"),
+        include_str!("fixtures/memory_fabric/codex_session.jsonl"),
+    )
+    .expect("parse codex fixture");
+    assert_eq!(codex.events.len(), 3);
+    assert!(
+        codex
+            .events
+            .iter()
+            .all(|event| event.source_session_id == "codex-mvp-1")
+    );
+    assert_eq!(codex.events[1].boundary, EventBoundary::UserTurn);
+    assert_eq!(codex.events[2].boundary, EventBoundary::AssistantTurn);
+    assert!(codex.events[2].content_text.contains("store contract"));
+
+    let claude = parse_fixture_jsonl(
+        "fixture",
+        "fixture-jsonl-v1",
+        "claude_like_session",
+        std::path::Path::new("tests/fixtures/memory_fabric/claude_like_session.jsonl"),
+        include_str!("fixtures/memory_fabric/claude_like_session.jsonl"),
+    )
+    .expect("parse claude-like fixture");
+    assert_eq!(claude.events[0].boundary, EventBoundary::UserTurn);
+    assert_eq!(claude.events[1].boundary, EventBoundary::AssistantTurn);
+
+    let tool = parse_fixture_jsonl(
+        "fixture",
+        "fixture-jsonl-v1",
+        "tool_output_fake_secret",
+        std::path::Path::new("tests/fixtures/memory_fabric/tool_output_fake_secret.jsonl"),
+        include_str!("fixtures/memory_fabric/tool_output_fake_secret.jsonl"),
+    )
+    .expect("parse tool fixture");
+    assert_eq!(tool.events[0].boundary, EventBoundary::ToolResult);
+}
+
+#[test]
 #[ignore = "pending NHL-277: implement link command"]
 fn link_cli_contract_is_implemented() {
     pending_contract(
@@ -275,15 +339,6 @@ fn migration_replay_contract_is_implemented() {
     assert_eq!(
         second.schema_version().expect("schema"),
         LATEST_SCHEMA_VERSION
-    );
-}
-
-#[test]
-#[ignore = "pending NHL-270: implement source adapter normalization"]
-fn source_adapter_normalization_contract_is_implemented() {
-    pending_contract(
-        "NHL-270",
-        "normalize Codex, Claude/Cursor-like, human note, tool-output, and malformed mixed fixtures into stable event records",
     );
 }
 

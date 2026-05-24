@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod capture;
 pub mod cli;
 pub mod messages;
 pub mod source;

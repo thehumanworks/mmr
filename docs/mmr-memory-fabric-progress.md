@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-269-local-store`
-- Last green commit: current NHL-269 commit (`add local memory fabric store`)
-- Active Linear ticket: NHL-269
-- Completed tickets: NHL-268
-- Current work: local-first SQLite/libSQL-shaped store and migrations
+- Branch: `codex/nhl-270-source-adapters`
+- Last green commit: `bb25dbf` (`add local memory fabric store`)
+- Active Linear ticket: NHL-270
+- Completed tickets: NHL-268, NHL-269
+- Current work: source adapter framework, watcher, and reconciler
 
 ## Current Architecture Decisions
 
@@ -28,6 +28,10 @@
   hashes; cursor reads expose parser version and last event hash.
 - Hidden dev smoke command `mmr __db-info` inspects DB path/schema version and
   can insert/read a synthetic event for isolated CLI verification.
+- Source adapter framework is separate from existing raw-history loaders so raw
+  retrieval contracts remain storage-free.
+- Watcher emits complete-line byte deltas only; parsing and degraded warnings
+  stay adapter-owned.
 
 ## Verification Commands And Results
 
@@ -49,6 +53,23 @@
 - Storage adversarial review found production transaction safety, blob hash,
   redaction policy FK, cursor metadata, and doc drift issues. Fixes are applied;
   verification was rerun successfully.
+- NHL-270 targeted checks so far:
+  - `cargo test capture:: -- --nocapture`: passed, 5 capture tests
+  - `cargo test --test memory_fabric_contract -- --nocapture`: passed, 7 active
+    tests and 13 pending ignored contracts
+- Source adapter adversarial review found partial-tail replay, same-size rotation,
+  session cohesion, fixture normalization, source version persistence, and
+  reconciler reporting issues. Fixes are applied and verification was rerun
+  successfully.
+- Latest NHL-270 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 49 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 7 active tests passed and 13 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=647`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -64,10 +85,12 @@
 - `docs/mmr-memory-fabric-store.md`
 - `Cargo.toml`
 - `Cargo.lock`
+- `src/capture.rs`
+- `docs/mmr-source-adapters.md`
 
 ## Open Blockers
 
-- None for NHL-269.
+- None for NHL-270.
 
 ## Known Risks
 
@@ -79,17 +102,21 @@
   unless an ADR explicitly approves a breaking change.
 - Public `link`, `sync`, and `status` are still deferred to NHL-277; `__db-info`
   is hidden dev-only smoke plumbing.
+- Provider-specific Codex, Claude, and Cursor adapters are deferred to NHL-274,
+  NHL-275, and NHL-276. NHL-270 only supplies the provider-neutral framework and
+  fixture adapter.
 
 ## Next Exact Action
 
-Commit and push NHL-269, update Linear with scope, tests, commands, risks, and
-the next ticket, then begin NHL-270 source adapter framework.
+Commit and push NHL-270, update Linear with scope/tests/risks, then begin the
+provider importer lane.
 
 ## Do Not Redo
 
 - Linear project and NHL-268 details have already been pulled.
 - NHL-268 is already marked `Done` in Linear.
-- NHL-269 is already marked `In Progress`.
+- NHL-269 is already marked `Done` in Linear.
+- NHL-270 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 
