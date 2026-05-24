@@ -19,3 +19,4 @@ When implementing or reviewing behavior:
 - [Redaction before sync](../docs/mmr-redaction.md)
 - [Search commands](../docs/mmr-search.md)
 - [Codex importer](../docs/mmr-codex-importer.md)
+- [Claude importer](../docs/mmr-claude-importer.md)

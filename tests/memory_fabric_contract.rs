@@ -1,6 +1,6 @@
 use mmr::capture::{
-    CodexAdapter, EventBoundary, FileWatcher, WatchState, event_hash_set, parse_codex_jsonl,
-    parse_fixture_jsonl,
+    ClaudeAdapter, CodexAdapter, EventBoundary, FileWatcher, WatchState, event_hash_set,
+    parse_claude_jsonl, parse_codex_jsonl, parse_fixture_jsonl,
 };
 use mmr::store::{LATEST_SCHEMA_VERSION, Store};
 use std::io::Write;
@@ -18,6 +18,10 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "claude_like_session",
         include_str!("fixtures/memory_fabric/claude_like_session.jsonl"),
+    ),
+    (
+        "claude_code_session",
+        include_str!("fixtures/memory_fabric/claude_code_session.jsonl"),
     ),
     (
         "human_note",
@@ -59,6 +63,8 @@ const MALFORMED_MIXED_FIXTURE: &str =
     include_str!("fixtures/memory_fabric/malformed_mixed_session.jsonl");
 const MALFORMED_CODEX_ROLLOUT: &str =
     include_str!("fixtures/memory_fabric/codex_rollout_malformed_tail.jsonl");
+const MALFORMED_CLAUDE_CODE: &str =
+    include_str!("fixtures/memory_fabric/claude_code_malformed_tail.jsonl");
 
 const MVP_NON_GOAL_COMMANDS: &[&str] = &[
     "init",
@@ -70,6 +76,15 @@ const MVP_NON_GOAL_COMMANDS: &[&str] = &[
     "promote",
     "reject",
 ];
+
+fn encode_claude_project_name(path: &std::path::Path) -> String {
+    let path = path.to_str().expect("project path UTF-8");
+    if path == "/" {
+        "-".to_string()
+    } else {
+        format!("-{}", path.trim_start_matches('/').replace('/', "-"))
+    }
+}
 
 #[test]
 fn memory_fabric_golden_fixtures_are_valid_jsonl() {
@@ -363,6 +378,172 @@ fn codex_active_session_watcher_uses_complete_rows_only() {
         &String::from_utf8(next.bytes).expect("next delta UTF-8"),
     )
     .expect("parse completed assistant row");
+    assert_eq!(next_batch.events.len(), 1);
+    assert_eq!(next_batch.events[0].boundary, EventBoundary::AssistantTurn);
+}
+
+#[test]
+fn claude_importer_contract_is_implemented() {
+    let path = std::path::Path::new("tests/fixtures/memory_fabric/claude_code_session.jsonl");
+    let batch = parse_claude_jsonl(
+        "fallback-claude",
+        path,
+        include_str!("fixtures/memory_fabric/claude_code_session.jsonl"),
+    )
+    .expect("parse claude code rollout");
+
+    assert_eq!(batch.source, "claude");
+    assert_eq!(batch.parser_version, ClaudeAdapter::PARSER_VERSION);
+    assert_eq!(batch.events.len(), 7);
+    assert_eq!(event_hash_set(&batch.events).len(), 7);
+    assert!(batch.warnings.is_empty());
+    assert!(batch.events.iter().all(|event| {
+        event.source_session_id == "claude-code-rollout-1"
+            && event.parser_version == ClaudeAdapter::PARSER_VERSION
+            && event.raw_local_ref.contains("claude_code_session.jsonl")
+            && !event.content_text.contains("/Users/test/memory-fabric")
+    }));
+    assert_eq!(batch.events[0].boundary, EventBoundary::UserTurn);
+    assert_eq!(batch.events[1].boundary, EventBoundary::AssistantTurn);
+    assert_eq!(batch.events[2].boundary, EventBoundary::Compaction);
+    assert_eq!(batch.events[3].boundary, EventBoundary::ToolCall);
+    assert_eq!(batch.events[4].boundary, EventBoundary::ToolResult);
+    assert_eq!(batch.events[5].boundary, EventBoundary::AssistantTurn);
+    assert_eq!(batch.events[6].boundary, EventBoundary::SessionEnd);
+    assert!(batch.events[3].content_text.contains("TodoWrite"));
+    assert!(
+        batch.events[4]
+            .content_text
+            .contains("Todos updated successfully.")
+    );
+    assert!(
+        batch.cursor_updates[0]
+            .cursor_value
+            .starts_with("line:5;bytes:")
+    );
+
+    let malformed = parse_claude_jsonl(
+        "fallback-claude",
+        std::path::Path::new("tests/fixtures/memory_fabric/claude_code_malformed_tail.jsonl"),
+        MALFORMED_CLAUDE_CODE,
+    )
+    .expect("parse malformed claude code rollout");
+    assert_eq!(malformed.events.len(), 2);
+    assert_eq!(malformed.warnings.len(), 1);
+    assert!(
+        malformed.warnings[0]
+            .message
+            .contains("skipped malformed Claude JSONL row")
+    );
+
+    let drift_rows = r#"{"type":"file-history-snapshot","sessionId":"claude-drift","cwd":"/Users/test/memory-fabric","gitBranch":"main","files":[{"path":"/Users/test/memory-fabric/src/main.rs"}],"timestamp":"2026-05-24T13:25:00Z","uuid":"snapshot-1"}
+{"type":"queue-operation","operation":"enqueue","sessionId":"claude-drift","content":"Queued Claude prompt.","timestamp":"2026-05-24T13:25:01Z","uuid":"queue-1","cwd":"/Users/test/memory-fabric"}
+{"type":"attachment","sessionId":"claude-drift","payload":{"path":"/Users/test/memory-fabric/private.txt"},"timestamp":"2026-05-24T13:25:02Z","uuid":"attachment-1","cwd":"/Users/test/memory-fabric"}
+{"type":"weird-row","sessionId":"claude-drift","payload":{"path":"/Users/test/memory-fabric/raw.json"},"timestamp":"2026-05-24T13:25:03Z","uuid":"weird-1","cwd":"/Users/test/memory-fabric"}
+{"type":"user","sessionId":"claude-drift","message":{"role":"user"},"timestamp":"2026-05-24T13:25:04Z","uuid":"missing-content-1","cwd":"/Users/test/memory-fabric"}
+"#;
+    let drift = parse_claude_jsonl(
+        "fallback-claude",
+        std::path::Path::new("tests/fixtures/memory_fabric/claude_code_drift.jsonl"),
+        drift_rows,
+    )
+    .expect("parse claude drift rows");
+    assert_eq!(drift.events.len(), 5);
+    assert_eq!(drift.events[0].boundary, EventBoundary::UnknownRawEvent);
+    assert_eq!(drift.events[1].boundary, EventBoundary::UserTurn);
+    assert_eq!(drift.events[2].boundary, EventBoundary::UnknownRawEvent);
+    assert_eq!(drift.events[3].boundary, EventBoundary::UnknownRawEvent);
+    assert_eq!(drift.events[4].boundary, EventBoundary::UnknownRawEvent);
+    assert!(drift.events.iter().all(|event| {
+        !event.content_text.contains("/Users/test/memory-fabric")
+            && !event.content_text.contains("gitBranch")
+    }));
+    assert_eq!(drift.events[1].content_text, "Queued Claude prompt.");
+    assert!(drift.events[4].content_text.contains("missing content"));
+
+    let partial_tail = "{\"type\":\"user\",\"sessionId\":\"claude-partial\",\"message\":{\"role\":\"user\",\"content\":\"Keep complete Claude rows.\"},\"timestamp\":\"2026-05-24T13:30:00Z\",\"uuid\":\"u-claude-partial\",\"cwd\":\"/Users/test/memory-fabric\"}\n{\"type\":\"assistant\",\"sessionId\":\"claude-partial\",\"message\":";
+    let partial = parse_claude_jsonl(
+        "fallback-claude",
+        std::path::Path::new("tests/fixtures/memory_fabric/claude_code_partial_tail.jsonl"),
+        partial_tail,
+    )
+    .expect("parse partial claude code rollout");
+    assert_eq!(partial.events.len(), 1);
+    assert!(partial.warnings.is_empty());
+    let consumed_bytes = partial_tail.rfind('\n').expect("complete row newline") + 1;
+    assert_eq!(
+        partial.cursor_updates[0].cursor_value,
+        format!("line:1;bytes:{consumed_bytes}")
+    );
+
+    let long_output = "x".repeat(ClaudeAdapter::TOOL_RESULT_MAX_CHARS + 500);
+    let large_line = format!(
+        "{{\"type\":\"user\",\"sessionId\":\"claude-large\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_large\",\"content\":\"{long_output}\"}}]}},\"timestamp\":\"2026-05-24T13:40:00Z\",\"uuid\":\"tool-result-large\",\"cwd\":\"/Users/test/memory-fabric\"}}\n"
+    );
+    let large = parse_claude_jsonl(
+        "fallback-claude",
+        std::path::Path::new("tests/fixtures/memory_fabric/claude_code_large.jsonl"),
+        &large_line,
+    )
+    .expect("parse large claude tool result");
+    assert_eq!(large.events.len(), 1);
+    assert_eq!(large.events[0].boundary, EventBoundary::ToolResult);
+    assert!(large.events[0].content_text.contains("omitted_chars=500"));
+    assert!(
+        large.events[0]
+            .content_text
+            .contains("full_content_hash=sha256:")
+    );
+    assert!(large.events[0].content_text.len() < long_output.len());
+}
+
+#[test]
+fn claude_active_session_watcher_uses_complete_rows_only() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let path = tmp.path().join("active-claude.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"type":"user","sessionId":"active-claude","message":{"role":"user","content":"Watch Claude rows."},"timestamp":"2026-05-24T13:50:00Z","uuid":"u-active-claude","cwd":"/Users/test/memory-fabric"}
+{"type":"assistant","sessionId":"active-claude","message":{"role":"assistant","content":"#,
+    )
+    .expect("write partial active claude");
+
+    let delta = FileWatcher::read_delta(&WatchState {
+        path: path.clone(),
+        offset: 0,
+        fingerprint: None,
+    })
+    .expect("partial delta");
+    assert!(delta.partial_tail);
+    let batch = parse_claude_jsonl(
+        "active-claude",
+        &path,
+        &String::from_utf8(delta.bytes).expect("delta UTF-8"),
+    )
+    .expect("parse complete claude rows");
+    assert_eq!(batch.events.len(), 1);
+    assert_eq!(batch.events[0].boundary, EventBoundary::UserTurn);
+
+    std::fs::write(
+        &path,
+        r#"{"type":"user","sessionId":"active-claude","message":{"role":"user","content":"Watch Claude rows."},"timestamp":"2026-05-24T13:50:00Z","uuid":"u-active-claude","cwd":"/Users/test/memory-fabric"}
+{"type":"assistant","sessionId":"active-claude","message":{"role":"assistant","content":"Assistant row is complete."},"timestamp":"2026-05-24T13:50:05Z","uuid":"a-active-claude","cwd":"/Users/test/memory-fabric"}
+"#,
+    )
+    .expect("complete active claude");
+    let next = FileWatcher::read_delta(&WatchState {
+        path: path.clone(),
+        offset: delta.new_offset,
+        fingerprint: Some(delta.new_fingerprint),
+    })
+    .expect("completed delta");
+    assert!(!next.partial_tail);
+    let next_batch = parse_claude_jsonl(
+        "active-claude",
+        &path,
+        &String::from_utf8(next.bytes).expect("next delta UTF-8"),
+    )
+    .expect("parse completed claude row");
     assert_eq!(next_batch.events.len(), 1);
     assert_eq!(next_batch.events[0].boundary, EventBoundary::AssistantTurn);
 }
@@ -1197,6 +1378,213 @@ fn codex_import_cli_contract_is_implemented() {
         .expect("cursor read")
         .expect("cursor");
     assert_eq!(cursor.parser_version, CodexAdapter::PARSER_VERSION);
+    assert!(cursor.last_event_hash.is_some());
+}
+
+#[test]
+fn claude_import_cli_contract_is_implemented() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-claude-project");
+    let other_project = tmp.path().join("other-claude-project");
+    let claude_root = home.join(".claude");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::create_dir_all(&other_project).expect("create other project");
+    let project = std::fs::canonicalize(&project).expect("canonical project");
+    let other_project = std::fs::canonicalize(&other_project).expect("canonical other project");
+    let sessions_dir = claude_root
+        .join("projects")
+        .join(encode_claude_project_name(&project));
+    let other_sessions_dir = claude_root
+        .join("projects")
+        .join(encode_claude_project_name(&other_project));
+    std::fs::create_dir_all(&sessions_dir).expect("create claude sessions");
+    std::fs::create_dir_all(&other_sessions_dir).expect("create other claude sessions");
+    let matching_rollout = include_str!("fixtures/memory_fabric/claude_code_session.jsonl")
+        .replace(
+            "/Users/test/memory-fabric",
+            project.to_str().expect("project path UTF-8"),
+        );
+    std::fs::write(sessions_dir.join("session.jsonl"), matching_rollout)
+        .expect("write claude rollout");
+    std::fs::write(
+        sessions_dir.join("no-cwd-session.jsonl"),
+        r#"{"type":"user","sessionId":"claude-no-cwd","message":{"role":"user","content":"Hyphen fallback Claude project imported."},"timestamp":"2026-05-24T13:45:00Z","uuid":"u-claude-no-cwd"}
+"#,
+    )
+    .expect("write no-cwd claude rollout");
+    let unrelated_rollout = include_str!("fixtures/memory_fabric/claude_code_session.jsonl")
+        .replace("claude-code-rollout-1", "claude-code-other")
+        .replace(
+            "/Users/test/memory-fabric",
+            other_project.to_str().expect("other project UTF-8"),
+        )
+        .replace(
+            "Summarize the Claude importer plan.",
+            "Unrelated Claude project should not import.",
+        );
+    std::fs::write(
+        other_sessions_dir.join("other-session.jsonl"),
+        unrelated_rollout,
+    )
+    .expect("write unrelated claude rollout");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "import",
+            "--source",
+            "claude",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            claude_root.to_str().expect("claude root UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("claude import");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("import JSON");
+    assert_eq!(json["source"], "claude");
+    assert_eq!(json["discovered_sessions"].as_u64().unwrap(), 2);
+    assert_eq!(json["imported_events"].as_u64().unwrap(), 8);
+    assert!(json["warnings"].as_array().unwrap().is_empty());
+
+    let replay = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "import",
+            "--source",
+            "claude",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            claude_root.to_str().expect("claude root UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("claude import replay");
+    assert!(
+        replay.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let replay_json: serde_json::Value =
+        serde_json::from_slice(&replay.stdout).expect("replay JSON");
+    assert_eq!(replay_json["imported_events"].as_u64().unwrap(), 0);
+
+    let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "claude",
+            "search",
+            "TodoWrite",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search imported claude");
+    assert!(
+        search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&search.stderr)
+    );
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("search JSON");
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(search_json["results"][0]["source"], "claude");
+
+    let fallback_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "claude",
+            "search",
+            "Hyphen fallback Claude project imported.",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search no-cwd claude");
+    assert!(
+        fallback_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&fallback_search.stderr)
+    );
+    let fallback_search_json: serde_json::Value =
+        serde_json::from_slice(&fallback_search.stdout).expect("fallback search JSON");
+    assert_eq!(fallback_search_json["total_results"].as_u64().unwrap(), 1);
+
+    let unrelated_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "claude",
+            "search",
+            "Unrelated Claude project should not import.",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search unrelated claude");
+    assert!(
+        unrelated_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&unrelated_search.stderr)
+    );
+    let unrelated_search_json: serde_json::Value =
+        serde_json::from_slice(&unrelated_search.stdout).expect("unrelated search JSON");
+    assert_eq!(unrelated_search_json["total_results"].as_u64().unwrap(), 0);
+
+    let cwd_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "claude",
+            "search",
+            project.to_str().expect("project path UTF-8"),
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search claude project path leakage");
+    assert!(
+        cwd_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&cwd_search.stderr)
+    );
+    let cwd_search_json: serde_json::Value =
+        serde_json::from_slice(&cwd_search.stdout).expect("cwd search JSON");
+    assert_eq!(cwd_search_json["total_results"].as_u64().unwrap(), 0);
+
+    let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+    let project_record = store
+        .project_by_path(&project)
+        .expect("project lookup")
+        .expect("project");
+    let cursor = store
+        .source_cursor(
+            &project_record.id,
+            "claude",
+            sessions_dir
+                .join("session.jsonl")
+                .to_str()
+                .expect("cursor key UTF-8"),
+        )
+        .expect("cursor read")
+        .expect("cursor");
+    assert_eq!(cursor.parser_version, ClaudeAdapter::PARSER_VERSION);
     assert!(cursor.last_event_hash.is_some());
 }
 

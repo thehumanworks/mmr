@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-274-codex-importer`
-- Last green commit: `71cb877` (`add exact memory search commands`)
-- Active Linear ticket: NHL-274
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273
-- Current work: Codex importer verified; ready to commit and update Linear
+- Branch: `codex/nhl-275-claude-importer`
+- Last green commit: `9fb3342` (`add codex memory importer`)
+- Active Linear ticket: NHL-275
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274
+- Current work: Claude Code source importer and active-session capture
 
 ## Current Architecture Decisions
 
@@ -50,6 +50,10 @@
   content omits absolute project paths.
 - Tool result and unknown raw events require a future dedicated safe projection
   before remote sync eligibility, regardless of redaction status.
+- NHL-275 imports Claude Code JSONL through `ClaudeAdapter`, parser version
+  `claude-code-jsonl-v1`, scopes discovery to the first row cwd or decoded
+  Claude project directory matching the linked project, and truncates large tool
+  results with an explicit marker.
 
 ## Verification Commands And Results
 
@@ -162,6 +166,29 @@
     (`elapsed_ms=727`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
+- NHL-275 focused checks:
+  - `cargo test --test memory_fabric_contract claude_importer_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract claude_import_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract claude_active_session_watcher_uses_complete_rows_only -- --nocapture`:
+    passed
+  - `cargo test import_command_parses_with_global_source_after_subcommand -- --nocapture`:
+    passed
+- Claude importer adversarial review found raw unknown-row metadata leakage,
+  missing handling for `queue-operation`/`attachment`/`file-history-snapshot`,
+  lossy hyphenated project-directory fallback, irreversible large tool-result
+  truncation, and silent missing-content rows. Fixes are applied and
+  verification was rerun successfully.
+- Latest NHL-275 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 59 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 19 active tests passed and 8 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=807`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -184,10 +211,11 @@
 - `docs/mmr-redaction.md`
 - `docs/mmr-search.md`
 - `docs/mmr-codex-importer.md`
+- `docs/mmr-claude-importer.md`
 
 ## Open Blockers
 
-- None for NHL-274.
+- None for NHL-275.
 
 ## Known Risks
 
@@ -199,8 +227,8 @@
   unless an ADR explicitly approves a breaking change.
 - Public `link`, `sync`, and `status` are still deferred to NHL-277; `__db-info`
   is hidden dev-only smoke plumbing.
-- Provider-specific Claude and Cursor adapters are deferred to NHL-275 and
-  NHL-276. NHL-274 supplies the Codex adapter on top of the NHL-270
+- Provider-specific Cursor adapter is deferred to NHL-276. NHL-274 supplies the
+  Codex adapter and NHL-275 supplies the Claude adapter on top of the NHL-270
   provider-neutral framework.
 - The optional `openai/privacy-filter` model runtime is not bundled; redaction
   reports degraded PII coverage while deterministic blocking remains active.
@@ -220,11 +248,14 @@
 - Codex import remains conservative: sessions without a matching cwd are skipped
   instead of imported into the wrong project. Future alias support can broaden
   matching intentionally.
+- Claude import sanitizes unknown/provider-metadata rows instead of indexing raw
+  JSON. Large tool results store bounded projections plus omitted character
+  count and full-content hash.
 
 ## Next Exact Action
 
-Commit and push NHL-274, update Linear with scope/tests/risks, then begin
-NHL-275 Claude Code importer/capture.
+Commit and push NHL-275, update Linear with scope/tests/risks, then begin
+NHL-276 Cursor importer/capture.
 
 ## Do Not Redo
 
@@ -235,10 +266,13 @@ NHL-275 Claude Code importer/capture.
 - NHL-271 is already marked `Done` in Linear.
 - NHL-272 is already marked `Done` in Linear.
 - NHL-273 is already marked `Done` in Linear.
-- NHL-274 is already marked `In Progress`.
+- NHL-274 is already marked `Done` in Linear.
+- NHL-275 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 - The Codex importer adversarial review findings have already been fixed and
+  verified.
+- The Claude importer adversarial review findings have already been fixed and
   verified.
 
 ## Watch-Outs

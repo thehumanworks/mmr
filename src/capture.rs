@@ -592,6 +592,497 @@ fn codex_event_parts(
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeAdapter;
+
+impl ClaudeAdapter {
+    pub const PARSER_VERSION: &'static str = "claude-code-jsonl-v1";
+    pub const TOOL_RESULT_MAX_CHARS: usize = 2000;
+
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl SourceAdapter for ClaudeAdapter {
+    fn source_name(&self) -> &'static str {
+        "claude"
+    }
+
+    fn parser_version(&self) -> &'static str {
+        Self::PARSER_VERSION
+    }
+
+    fn discover(&self, root: &SourceDiscoveryRoot) -> Result<Vec<SourceSessionRef>> {
+        let mut sessions = Vec::new();
+        let project_path = root.project_path.canonicalize().with_context(|| {
+            format!("canonicalize project path {}", root.project_path.display())
+        })?;
+        let search_root = claude_search_root(&root.source_root);
+        if !search_root.exists() {
+            return Ok(sessions);
+        }
+
+        for entry in WalkDir::new(&search_root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file()
+                || entry.path().extension().and_then(|ext| ext.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+            let path = entry.path().to_path_buf();
+            let project_alias = claude_project_alias(&search_root, &path);
+            let metadata = claude_session_metadata(&path, project_alias.as_deref())?;
+            if !claude_metadata_matches_project(&metadata, &project_path) {
+                continue;
+            }
+            let session_id = metadata.session_id.unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("unknown-claude-session")
+                    .to_string()
+            });
+            sessions.push(SourceSessionRef {
+                source: self.source_name().to_string(),
+                session_id,
+                path,
+            });
+        }
+
+        sessions.sort_by(|left, right| left.path.cmp(&right.path));
+        sessions.dedup_by(|left, right| left.path == right.path);
+        Ok(sessions)
+    }
+
+    fn import_session(&self, session: &SourceSessionRef) -> Result<SourceImportBatch> {
+        let content = fs::read_to_string(&session.path)
+            .with_context(|| format!("read Claude session {}", session.path.display()))?;
+        parse_claude_jsonl(&session.session_id, &session.path, &content)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ClaudeSessionMetadata {
+    session_id: Option<String>,
+    cwd: Option<String>,
+    project_alias: Option<String>,
+}
+
+fn claude_search_root(source_root: &Path) -> PathBuf {
+    if source_root.join("projects").exists() {
+        source_root.join("projects")
+    } else {
+        source_root.to_path_buf()
+    }
+}
+
+fn claude_project_alias(search_root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(search_root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .and_then(|component| component.as_os_str().to_str())
+        .map(ToString::to_string)
+}
+
+fn encode_claude_project_path(project_path: &Path) -> String {
+    let path = project_path.to_string_lossy();
+    if path == "/" {
+        "-".to_string()
+    } else {
+        format!("-{}", path.trim_start_matches('/').replace('/', "-"))
+    }
+}
+
+fn claude_session_metadata(
+    path: &Path,
+    project_alias: Option<&str>,
+) -> Result<ClaudeSessionMetadata> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("read Claude session metadata {}", path.display()))?;
+    let mut metadata = ClaudeSessionMetadata {
+        project_alias: project_alias.map(ToString::to_string),
+        ..ClaudeSessionMetadata::default()
+    };
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if metadata.session_id.is_none()
+            && let Some(session_id) = string_field(&value, "sessionId")
+        {
+            metadata.session_id = Some(session_id);
+        }
+        if let Some(cwd) = string_field(&value, "cwd").filter(|cwd| !cwd.is_empty()) {
+            metadata.cwd = Some(cwd);
+            break;
+        }
+    }
+
+    Ok(metadata)
+}
+
+fn claude_metadata_matches_project(metadata: &ClaudeSessionMetadata, project_path: &Path) -> bool {
+    if let Some(cwd) = metadata.cwd.as_deref() {
+        return path_matches_project(cwd, project_path);
+    }
+    metadata
+        .project_alias
+        .as_deref()
+        .map(|alias| alias == encode_claude_project_path(project_path))
+        .unwrap_or(false)
+}
+
+pub fn parse_claude_jsonl(
+    fallback_session_id: &str,
+    path: &Path,
+    content: &str,
+) -> Result<SourceImportBatch> {
+    let mut events = Vec::new();
+    let mut warnings = Vec::new();
+    let mut last_hash = None;
+    let mut current_session_id = fallback_session_id.to_string();
+    let mut emitted_lines = 0usize;
+    let mut consumed_bytes = 0usize;
+
+    let mut line_start = 0usize;
+    for (line_index, line) in content.lines().enumerate() {
+        let (line_has_newline, consumed_line_bytes) =
+            consumed_line_bounds(content, line_start, line);
+        if line.trim().is_empty() {
+            emitted_lines = line_index + 1;
+            consumed_bytes = consumed_line_bytes;
+            line_start = consumed_line_bytes;
+            continue;
+        }
+
+        let raw_local_ref = format!("{}:{}", path.display(), line_index + 1);
+        let value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(err) => {
+                if !line_has_newline && consumed_line_bytes == content.len() {
+                    break;
+                }
+                warnings.push(SourceWarning {
+                    raw_local_ref: Some(raw_local_ref),
+                    message: format!("skipped malformed Claude JSONL row: {err}"),
+                });
+                emitted_lines = line_index + 1;
+                consumed_bytes = consumed_line_bytes;
+                line_start = consumed_line_bytes;
+                continue;
+            }
+        };
+
+        if let Some(session_id) = string_field(&value, "sessionId").filter(|id| !id.is_empty()) {
+            current_session_id = session_id;
+        }
+        let timestamp =
+            string_field(&value, "timestamp").unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+        let row_event_id = string_field(&value, "uuid")
+            .or_else(|| string_field(&value, "id"))
+            .or_else(|| Some(format!("line:{}:{}", line_index + 1, content_hash(line))));
+
+        for part in claude_event_parts(&value) {
+            if part.content_text.trim().is_empty() {
+                continue;
+            }
+            let source_event_id = row_event_id.as_ref().map(|id| match &part.source_suffix {
+                Some(suffix) => format!("{id}:{suffix}"),
+                None => id.clone(),
+            });
+            let parent_hash = last_hash.clone();
+            let normalized = NormalizedEvent {
+                source: "claude".to_string(),
+                source_session_id: current_session_id.clone(),
+                source_event_id,
+                boundary: part.boundary,
+                role: Some(part.role),
+                timestamp: timestamp.clone(),
+                content_text: part.content_text,
+                parser_version: ClaudeAdapter::PARSER_VERSION.to_string(),
+                raw_local_ref: raw_local_ref.clone(),
+                parent_hash,
+            };
+            last_hash = Some(content_hash(&normalized.content_text));
+            events.push(normalized);
+        }
+
+        emitted_lines = line_index + 1;
+        consumed_bytes = consumed_line_bytes;
+        line_start = consumed_line_bytes;
+    }
+
+    Ok(SourceImportBatch {
+        source: "claude".to_string(),
+        parser_version: ClaudeAdapter::PARSER_VERSION.to_string(),
+        events,
+        cursor_updates: vec![SourceCursorUpdate {
+            cursor_key: path.display().to_string(),
+            cursor_value: format!("line:{emitted_lines};bytes:{consumed_bytes}"),
+            parser_version: ClaudeAdapter::PARSER_VERSION.to_string(),
+            last_event_hash: last_hash,
+        }],
+        warnings,
+    })
+}
+
+#[derive(Debug)]
+struct ClaudeEventPart {
+    boundary: EventBoundary,
+    role: String,
+    content_text: String,
+    source_suffix: Option<String>,
+}
+
+fn claude_event_parts(value: &Value) -> Vec<ClaudeEventPart> {
+    let row_type = string_field(value, "type").unwrap_or_else(|| "unknown".to_string());
+    match row_type.as_str() {
+        "user" | "assistant" => claude_message_parts(value, &row_type),
+        "system" | "summary" | "session" => vec![claude_lifecycle_part(value, &row_type)],
+        "queue-operation" => vec![claude_queue_operation_part(value)],
+        "attachment" => vec![claude_attachment_part(value)],
+        "file-history-snapshot" => vec![claude_metadata_only_part(value, &row_type)],
+        _ => vec![ClaudeEventPart {
+            boundary: EventBoundary::UnknownRawEvent,
+            role: "system".to_string(),
+            content_text: claude_unknown_projection(value, &row_type),
+            source_suffix: None,
+        }],
+    }
+}
+
+fn claude_message_parts(value: &Value, row_type: &str) -> Vec<ClaudeEventPart> {
+    let Some(message) = value.get("message") else {
+        return vec![ClaudeEventPart {
+            boundary: EventBoundary::UnknownRawEvent,
+            role: "system".to_string(),
+            content_text: format!("Claude {row_type} row missing message payload"),
+            source_suffix: None,
+        }];
+    };
+    let role = string_field(message, "role").unwrap_or_else(|| row_type.to_string());
+    let Some(content) = message.get("content") else {
+        return vec![ClaudeEventPart {
+            boundary: EventBoundary::UnknownRawEvent,
+            role: "system".to_string(),
+            content_text: format!("Claude {row_type} message missing content for role {role}"),
+            source_suffix: None,
+        }];
+    };
+
+    match content {
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| claude_content_part(item, &role, Some(index)))
+            .collect(),
+        _ => claude_text_from_value(content).map_or_else(Vec::new, |text| {
+            vec![ClaudeEventPart {
+                boundary: claude_role_boundary(&role),
+                role,
+                content_text: text,
+                source_suffix: None,
+            }]
+        }),
+    }
+}
+
+fn claude_content_part(
+    item: &Value,
+    row_role: &str,
+    index: Option<usize>,
+) -> Option<ClaudeEventPart> {
+    let block_type = string_field(item, "type").unwrap_or_else(|| "text".to_string());
+    let suffix = claude_block_suffix(item, index);
+    match block_type.as_str() {
+        "tool_use" => {
+            let name = string_field(item, "name").unwrap_or_else(|| "tool".to_string());
+            let input = item
+                .get("input")
+                .map(Value::to_string)
+                .unwrap_or_else(|| item.to_string());
+            Some(ClaudeEventPart {
+                boundary: EventBoundary::ToolCall,
+                role: "assistant".to_string(),
+                content_text: format!("{name} {input}"),
+                source_suffix: suffix,
+            })
+        }
+        "tool_result" => {
+            let output = item
+                .get("content")
+                .and_then(claude_text_from_value)
+                .unwrap_or_else(|| item.to_string());
+            Some(ClaudeEventPart {
+                boundary: EventBoundary::ToolResult,
+                role: "tool".to_string(),
+                content_text: truncate_chars(output, ClaudeAdapter::TOOL_RESULT_MAX_CHARS),
+                source_suffix: suffix,
+            })
+        }
+        "thinking" => {
+            let text = claude_text_from_value(item).unwrap_or_else(|| item.to_string());
+            Some(ClaudeEventPart {
+                boundary: EventBoundary::Compaction,
+                role: "assistant".to_string(),
+                content_text: text,
+                source_suffix: suffix,
+            })
+        }
+        _ => {
+            let text = claude_text_from_value(item).unwrap_or_else(|| item.to_string());
+            Some(ClaudeEventPart {
+                boundary: claude_role_boundary(row_role),
+                role: row_role.to_string(),
+                content_text: text,
+                source_suffix: suffix,
+            })
+        }
+    }
+}
+
+fn claude_lifecycle_part(value: &Value, row_type: &str) -> ClaudeEventPart {
+    let lifecycle_type = string_field(value, "event")
+        .or_else(|| string_field(value, "event_type"))
+        .or_else(|| string_field(value, "kind"))
+        .unwrap_or_else(|| row_type.to_string());
+    let boundary = match lifecycle_type.as_str() {
+        "session_start" | "started" | "session" => EventBoundary::SessionStart,
+        "session_end" | "ended" => EventBoundary::SessionEnd,
+        "summary" | "compaction" => EventBoundary::Compaction,
+        _ => EventBoundary::UnknownRawEvent,
+    };
+    let content_text = string_field(value, "content")
+        .or_else(|| text_from_field(value.get("message")))
+        .unwrap_or_else(|| format!("Claude lifecycle event: {lifecycle_type}"));
+    ClaudeEventPart {
+        boundary,
+        role: "system".to_string(),
+        content_text,
+        source_suffix: None,
+    }
+}
+
+fn claude_queue_operation_part(value: &Value) -> ClaudeEventPart {
+    let operation = string_field(value, "operation")
+        .or_else(|| string_field(value, "action"))
+        .or_else(|| string_field(value, "kind"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let content_text = string_field(value, "content")
+        .or_else(|| text_from_field(value.get("message")))
+        .or_else(|| text_from_field(value.get("payload")))
+        .unwrap_or_else(|| format!("Claude queue operation: {operation}"));
+    let boundary = if operation == "enqueue" {
+        EventBoundary::UserTurn
+    } else {
+        EventBoundary::UnknownRawEvent
+    };
+    let role = if boundary == EventBoundary::UserTurn {
+        "user"
+    } else {
+        "system"
+    };
+    ClaudeEventPart {
+        boundary,
+        role: role.to_string(),
+        content_text,
+        source_suffix: None,
+    }
+}
+
+fn claude_attachment_part(value: &Value) -> ClaudeEventPart {
+    let content_text = string_field(value, "content")
+        .or_else(|| text_from_field(value.get("message")))
+        .or_else(|| text_from_field(value.get("payload")))
+        .unwrap_or_else(|| "Claude attachment metadata omitted; see local raw ref".to_string());
+    ClaudeEventPart {
+        boundary: EventBoundary::UnknownRawEvent,
+        role: "system".to_string(),
+        content_text,
+        source_suffix: None,
+    }
+}
+
+fn claude_metadata_only_part(value: &Value, row_type: &str) -> ClaudeEventPart {
+    let content_text = string_field(value, "content")
+        .or_else(|| text_from_field(value.get("message")))
+        .unwrap_or_else(|| format!("Claude {row_type} metadata omitted; see local raw ref"));
+    ClaudeEventPart {
+        boundary: EventBoundary::UnknownRawEvent,
+        role: "system".to_string(),
+        content_text,
+        source_suffix: None,
+    }
+}
+
+fn claude_unknown_projection(value: &Value, row_type: &str) -> String {
+    string_field(value, "content")
+        .or_else(|| text_from_field(value.get("message")))
+        .or_else(|| text_from_field(value.get("payload")))
+        .unwrap_or_else(|| format!("Claude unknown event type: {row_type}"))
+}
+
+fn claude_role_boundary(role: &str) -> EventBoundary {
+    match role {
+        "assistant" => EventBoundary::AssistantTurn,
+        "tool" => EventBoundary::ToolResult,
+        "user" => EventBoundary::UserTurn,
+        _ => EventBoundary::UnknownRawEvent,
+    }
+}
+
+fn claude_block_suffix(item: &Value, index: Option<usize>) -> Option<String> {
+    string_field(item, "id")
+        .or_else(|| string_field(item, "tool_use_id"))
+        .or_else(|| index.map(|index| format!("part-{index}")))
+}
+
+fn claude_text_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) => {
+            let text = items
+                .iter()
+                .filter_map(claude_text_from_value)
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.is_empty() { None } else { Some(text) }
+        }
+        Value::Object(map) => map
+            .get("text")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| map.get("content").and_then(claude_text_from_value))
+            .or_else(|| map.get("parts").and_then(claude_text_from_value)),
+        _ => None,
+    }
+}
+
+fn truncate_chars(value: String, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value;
+    }
+    let full_hash = content_hash(&value);
+    let total_chars = value.chars().count();
+    let omitted_chars = total_chars.saturating_sub(max_chars);
+    let end = value
+        .char_indices()
+        .nth(max_chars)
+        .map(|(index, _)| index)
+        .unwrap_or(value.len());
+    format!(
+        "{}\n... [truncated; omitted_chars={omitted_chars}; full_content_hash={full_hash}]",
+        &value[..end]
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct FixtureAdapter {
     source_name: &'static str,

@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
-use crate::capture::{CodexAdapter, Reconciler, SourceDiscoveryRoot};
+use crate::capture::{ClaudeAdapter, CodexAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot};
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
 use crate::redaction::{
     PiiCoverage, PiiCoverageStatus, RedactionFinding, RedactionOutcome, scan_text,
@@ -287,7 +287,7 @@ pub struct ImportArgs {
     /// Project path to link/import into
     #[arg(long)]
     project: PathBuf,
-    /// Source root (defaults to $HOME/.codex for --source codex)
+    /// Source root (defaults to $HOME/.codex or $HOME/.claude based on --source)
     #[arg(long = "source-root")]
     source_root: Option<PathBuf>,
 }
@@ -622,22 +622,25 @@ fn import_response(
     args: &ImportArgs,
     source_filter: Option<SourceFilter>,
 ) -> Result<ImportResponse> {
-    if source_filter != Some(SourceFilter::Codex) {
-        bail!("`mmr import` currently requires `--source codex`");
-    }
-
     let mut store = Store::open_default()?;
     let project = store.ensure_project_link(&args.project)?;
     let source_root = match &args.source_root {
         Some(source_root) => source_root.clone(),
-        None => default_codex_source_root()?,
+        None => default_import_source_root(source_filter)?,
     };
     let root = SourceDiscoveryRoot {
         project_path: args.project.clone(),
         source_root,
     };
-    let adapter = CodexAdapter::new();
-    let report = Reconciler::new(&adapter).reconcile(&mut store, &project.id, &root)?;
+    let report = match source_filter {
+        Some(SourceFilter::Codex) => {
+            import_with_adapter(&CodexAdapter::new(), &mut store, &project.id, &root)?
+        }
+        Some(SourceFilter::Claude) => {
+            import_with_adapter(&ClaudeAdapter::new(), &mut store, &project.id, &root)?
+        }
+        _ => bail!("`mmr import` currently requires `--source codex` or `--source claude`"),
+    };
 
     Ok(ImportResponse {
         project_id: project.id,
@@ -649,11 +652,24 @@ fn import_response(
     })
 }
 
-fn default_codex_source_root() -> Result<PathBuf> {
+fn import_with_adapter<A: SourceAdapter>(
+    adapter: &A,
+    store: &mut Store,
+    project_id: &str,
+    root: &SourceDiscoveryRoot,
+) -> Result<crate::capture::ReconcileReport> {
+    Reconciler::new(adapter).reconcile(store, project_id, root)
+}
+
+fn default_import_source_root(source_filter: Option<SourceFilter>) -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("HOME is not set; pass --source-root"))?;
-    Ok(home.join(".codex"))
+    match source_filter {
+        Some(SourceFilter::Codex) => Ok(home.join(".codex")),
+        Some(SourceFilter::Claude) => Ok(home.join(".claude")),
+        _ => bail!("`mmr import` currently requires `--source codex` or `--source claude`"),
+    }
 }
 
 #[derive(Debug, Serialize)]
