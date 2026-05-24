@@ -1,0 +1,3 @@
+{"type":"session_meta","timestamp":"2026-05-24T09:50:00Z","payload":{"id":"malformed-mvp-1","cwd":"/Users/test/memory-fabric","cli_version":"1.0.0","model_provider":"openai","timestamp":"2026-05-24T09:50:00Z"}}
+not-json-but-should-be-skipped
+{"type":"event_msg","timestamp":"2026-05-24T09:50:05Z","payload":{"type":"user_message","message":"This valid row must survive a bad neighbor."}}

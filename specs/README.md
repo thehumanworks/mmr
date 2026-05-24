@@ -12,3 +12,4 @@ When implementing or reviewing behavior:
 ## Index
 
 - [Messages command](messages.md)
+- [Memory Fabric MVP contract](../docs/mmr-memory-fabric-mvp.md)

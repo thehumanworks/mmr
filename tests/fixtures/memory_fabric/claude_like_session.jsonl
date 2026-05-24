@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"claude-like-mvp-1","message":{"role":"user","content":"Summarize the architecture decisions."},"timestamp":"2026-05-24T09:10:00Z","uuid":"u-claude-like-1","cwd":"/Users/test/memory-fabric"}
+{"type":"assistant","sessionId":"claude-like-mvp-1","message":{"role":"assistant","content":"Use local SQLite as canonical storage and sync redacted records.","model":"claude-like","usage":{"input_tokens":40,"output_tokens":20}},"timestamp":"2026-05-24T09:10:30Z","uuid":"a-claude-like-1","parentUuid":"u-claude-like-1","cwd":"/Users/test/memory-fabric"}
