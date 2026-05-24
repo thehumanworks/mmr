@@ -584,6 +584,20 @@ part of the contract and must be preserved.
 
 Dreaming is stateful assimilation, not summarization.
 
+NHL-278 implements the provider-neutral runner layer in `src/dream.rs`.
+NHL-279 owns the public `mmr dream` command and durable learned-memory writes.
+
+Runner selection resolves from an explicit runner override, project default,
+user default (`MMR_DEFAULT_DREAM_RUNNER`), then the built-in `mock` runner. The
+`command` runner is a local command adapter configured by `MMR_DREAM_COMMAND`;
+it reads a JSON evidence request on stdin and emits structured dream output JSON
+on stdout. `MMR_DREAM_COMMAND` is parsed as a program plus arguments, for
+example `MMR_DREAM_COMMAND="python runner.py"`.
+
+Shared-safe evidence bundles redact deterministic local PII, omit events blocked
+by deterministic secret findings, and preserve normalized metadata plus
+`mmr://event/<id>` refs.
+
 Provider output must be structured before it can update learned memory:
 
 ```json
@@ -601,8 +615,13 @@ Provider output must be structured before it can update learned memory:
 
 Validation rules:
 
-- Every evidence ref must resolve to an event in the local store.
+- Every evidence ref must resolve to an event in the submitted dream evidence
+  bundle.
 - Claims without evidence are rejected.
+- Output with unknown schema fields is rejected.
+- Runner requests use shared-safe redacted evidence by default; raw local
+  evidence requires explicit local-only opt-in and is blocked for command/API
+  style runners.
 - Low-confidence claims may be stored as pending only if a downstream ticket adds
   an internal status, but no public candidate-review command ships in the MVP.
 - A dream run may not silently overwrite learned memory. Supersession must be

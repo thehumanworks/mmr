@@ -2,6 +2,10 @@ use mmr::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, EventBoundary, FileWatcher, WatchState,
     event_hash_set, parse_claude_jsonl, parse_codex_jsonl, parse_cursor_jsonl, parse_fixture_jsonl,
 };
+use mmr::dream::{
+    DreamEvidenceMode, DreamObservationStatus, DreamRunner, DreamRunnerConfig, EvidenceAccess,
+    MockDreamRunner, build_evidence_bundle, build_evidence_request,
+};
 use mmr::store::{LATEST_SCHEMA_VERSION, Store};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1378,6 +1382,90 @@ fn summary_cli_contract_is_implemented() {
 }
 
 #[test]
+fn dream_runner_contract_is_implemented() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let project_dir = tmp.path().join("dream-project");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+    let mut store = Store::open_in_memory().expect("store");
+    let project = store.ensure_project_link(&project_dir).expect("project");
+    let event = store
+        .insert_event(
+            &project.id,
+            &mmr::store::NewEvent::new(
+                "note",
+                "notes",
+                "message",
+                "user",
+                "2026-05-24T15:00:00Z",
+                "Email person@example.com and prefer fixture-driven tests.",
+                "note-v1",
+            ),
+        )
+        .expect("dream evidence event");
+    store
+        .insert_event(
+            &project.id,
+            &mmr::store::NewEvent::new(
+                "note",
+                "notes",
+                "message",
+                "user",
+                "2026-05-24T15:01:00Z",
+                "API_KEY=sk-test-secret",
+                "note-v1",
+            ),
+        )
+        .expect("blocked dream evidence event");
+
+    let config = DreamRunnerConfig {
+        runner: "mock".to_string(),
+        model: Some("mock-v1".to_string()),
+        evidence_access: EvidenceAccess::SharedSafe,
+        allow_raw_evidence: false,
+        best_of: 1,
+        retries: 0,
+    };
+    let request = build_evidence_request(&store, &project, &config).expect("dream request");
+    assert_eq!(request.evidence.len(), 1);
+    assert!(
+        !request.evidence[0]
+            .content_text
+            .contains("person@example.com")
+    );
+    let bundle =
+        build_evidence_bundle(&store, &project, DreamEvidenceMode::SharedSafe).expect("bundle");
+    assert_eq!(
+        bundle.omitted_events.len(),
+        1,
+        "secret-bearing evidence is not sent to shared-safe runners"
+    );
+
+    let event_ref = format!("mmr://event/{}", event.id);
+    let runner = MockDreamRunner::returning_json(dream_observation_json(&event_ref, 0.91));
+    let output = runner.run(&request).expect("valid dream output");
+    assert_eq!(
+        output.observations[0].status,
+        DreamObservationStatus::Active
+    );
+
+    let invalid_runner = MockDreamRunner::returning_json(dream_observation_json(
+        &bundle.omitted_events[0].evidence_ref,
+        0.91,
+    ));
+    let err = invalid_runner
+        .run(&request)
+        .expect_err("omitted evidence ref should fail");
+    assert!(err.to_string().contains("missing evidence"));
+
+    let pending_runner = MockDreamRunner::returning_json(dream_observation_json(&event_ref, 0.42));
+    let pending = pending_runner.run(&request).expect("pending dream");
+    assert_eq!(
+        pending.observations[0].status,
+        DreamObservationStatus::Pending
+    );
+}
+
+#[test]
 #[ignore = "pending NHL-279: implement dream command"]
 fn dream_cli_contract_is_implemented() {
     pending_contract(
@@ -2368,10 +2456,10 @@ fn summary_generation_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-278/NHL-279: implement dream assimilation validation"]
+#[ignore = "pending NHL-279: implement dream assimilation validation"]
 fn dream_assimilation_contract_is_implemented() {
     pending_contract(
-        "NHL-278/NHL-279",
+        "NHL-279",
         "validate structured dream output and write learned memory only when every evidence ref resolves",
     );
 }
@@ -2496,6 +2584,26 @@ fn sync_manifest_contract_is_implemented() {
 
 fn pending_contract(ticket: &str, behavior: &str) -> ! {
     panic!("{ticket} pending contract: {behavior}. Remove #[ignore] when implemented.");
+}
+
+fn dream_observation_json(evidence_ref: &str, confidence: f64) -> String {
+    format!(
+        r#"{{
+  "observations": [
+    {{
+      "kind": "preference",
+      "claim": "Prefer fixture-driven tests.",
+      "confidence": {confidence},
+      "scope": "project",
+      "recommended_action": "Keep evidence refs attached.",
+      "patterns": ["evidence-linked memory"],
+      "open_loops": [],
+      "counterevidence_refs": [],
+      "evidence_refs": ["{evidence_ref}"]
+    }}
+  ]
+}}"#
+    )
 }
 
 fn assert_success(output: std::process::Output) {

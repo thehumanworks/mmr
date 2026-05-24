@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-277-link-sync-status`
-- Last green commit: `664731c` (`add link sync status workflows`)
-- Active Linear ticket: none; next is NHL-278
+- Branch: `codex/nhl-278-dream-runner`
+- Last green commit: `9745dea` (`sanitize import warnings in link status`)
+- Active Linear ticket: NHL-278
 - Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277
-- Current work: prepare NHL-278 dream runner/provider abstraction
+- Current work: NHL-278 dream runner/provider abstraction
 
 ## Current Architecture Decisions
 
@@ -83,6 +83,17 @@
 - `mmr status` reports remote-unavailable or remote-missing states when local
   rows are marked synced but the remote backing store is unavailable or missing
   expected event payloads.
+- NHL-278 introduces `src/dream.rs` as the provider-neutral dream runner
+  boundary. It defines strict structured output parsing, evidence-ref
+  validation, runner config precedence, a deterministic mock runner, and a
+  command runner adapter configured by `MMR_DREAM_COMMAND`.
+- Dream evidence bundles are shared-safe by default: deterministic local PII is
+  redacted and events with deterministic secret findings are omitted before any
+  remote/API-style runner can see them. Raw evidence requires explicit local-only
+  opt-in and is rejected for command/API runner kinds.
+- Dream output evidence refs are validated against the submitted evidence bundle,
+  not all project events. Command runners reject raw evidence requests even if a
+  caller manually constructs one.
 
 ## Verification Commands And Results
 
@@ -264,6 +275,25 @@
     (`elapsed_ms=726`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
+- NHL-278 focused checks so far:
+  - `cargo test dream:: -- --nocapture`: passed, 9 dream runner unit tests
+  - `cargo test --test memory_fabric_contract dream_runner_contract_is_implemented -- --nocapture`:
+    passed
+- NHL-278 adversarial review found output validation against all project events
+  instead of the submitted evidence bundle, possible raw evidence leakage if a
+  command runner received a manually built raw request, ambiguous command-env
+  argv semantics, reserved best-of/retry knobs without behavior, and silent
+  `claims` discard.
+  Fixes are applied and verification was rerun successfully.
+- Latest NHL-278 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 65 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 27 active tests passed and 4 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=829`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -289,10 +319,12 @@
 - `docs/mmr-codex-importer.md`
 - `docs/mmr-claude-importer.md`
 - `docs/mmr-cursor-importer.md`
+- `src/dream.rs`
+- `docs/mmr-dream-runner.md`
 
 ## Open Blockers
 
-- None for NHL-277.
+- None for NHL-278.
 
 ## Known Risks
 
@@ -331,11 +363,14 @@
 - Cursor import accepts current no-leading-dash Cursor project aliases, legacy
   dash aliases, and direct custom flat roots. Cursor tool-call path-like content
   is sanitized in normalized/search text.
+- NHL-278 does not write `dream_runs`, `dream_candidates`, or `learned_memory`;
+  NHL-279 must apply validated output transactionally and leave no partial
+  learned memory on provider failure.
 
 ## Next Exact Action
 
-Create a branch for NHL-278, mark the Linear ticket In Progress, read the
-acceptance criteria, then implement the dream runner/provider abstraction.
+Commit and push NHL-278, update Linear with scope/tests/risks, then begin
+NHL-279 `mmr dream` assimilation workflow.
 
 ## Do Not Redo
 
@@ -350,6 +385,8 @@ acceptance criteria, then implement the dream runner/provider abstraction.
 - NHL-275 is already marked `Done` in Linear.
 - NHL-276 is already marked `Done` in Linear.
 - NHL-277 is committed, pushed, commented in Linear, and marked `Done`.
+- NHL-278 has passed full local verification; only commit/push and Linear
+  closure remain.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 - The Codex importer adversarial review findings have already been fixed and
@@ -359,6 +396,8 @@ acceptance criteria, then implement the dream runner/provider abstraction.
 - The Cursor importer adversarial review findings have already been fixed and
   verified.
 - The link/sync/status adversarial review findings have already been fixed and
+  verified.
+- The dream runner adversarial review findings have already been fixed and
   verified.
 
 ## Watch-Outs
