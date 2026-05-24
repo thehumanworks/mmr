@@ -3,10 +3,10 @@
 ## Current State
 
 - Branch: `codex/nhl-278-dream-runner`
-- Last green commit: `9745dea` (`sanitize import warnings in link status`)
-- Active Linear ticket: NHL-278
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277
-- Current work: NHL-278 dream runner/provider abstraction
+- Last green commit: `5201842` (`add dream runner abstraction`)
+- Active Linear ticket: none; next is NHL-279
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278
+- Current work: prepare NHL-279 `mmr dream` assimilation workflow
 
 ## Current Architecture Decisions
 
@@ -369,8 +369,9 @@
 
 ## Next Exact Action
 
-Commit and push NHL-278, update Linear with scope/tests/risks, then begin
-NHL-279 `mmr dream` assimilation workflow.
+Create a branch for NHL-279, mark the Linear ticket In Progress, read the
+acceptance criteria, then implement `mmr dream` assimilation on top of the
+validated runner output.
 
 ## Do Not Redo
 
@@ -385,8 +386,7 @@ NHL-279 `mmr dream` assimilation workflow.
 - NHL-275 is already marked `Done` in Linear.
 - NHL-276 is already marked `Done` in Linear.
 - NHL-277 is committed, pushed, commented in Linear, and marked `Done`.
-- NHL-278 has passed full local verification; only commit/push and Linear
-  closure remain.
+- NHL-278 is committed, pushed, commented in Linear, and marked `Done`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 - The Codex importer adversarial review findings have already been fixed and
