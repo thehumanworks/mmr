@@ -1,4 +1,7 @@
-use mmr::capture::{EventBoundary, event_hash_set, parse_fixture_jsonl};
+use mmr::capture::{
+    CodexAdapter, EventBoundary, FileWatcher, WatchState, event_hash_set, parse_codex_jsonl,
+    parse_fixture_jsonl,
+};
 use mmr::store::{LATEST_SCHEMA_VERSION, Store};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -7,6 +10,10 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "codex_session",
         include_str!("fixtures/memory_fabric/codex_session.jsonl"),
+    ),
+    (
+        "codex_rollout_session",
+        include_str!("fixtures/memory_fabric/codex_rollout_session.jsonl"),
     ),
     (
         "claude_like_session",
@@ -50,6 +57,8 @@ const NHL_269_REQUIRED_TABLES: &[&str] = &[
 
 const MALFORMED_MIXED_FIXTURE: &str =
     include_str!("fixtures/memory_fabric/malformed_mixed_session.jsonl");
+const MALFORMED_CODEX_ROLLOUT: &str =
+    include_str!("fixtures/memory_fabric/codex_rollout_malformed_tail.jsonl");
 
 const MVP_NON_GOAL_COMMANDS: &[&str] = &[
     "init",
@@ -234,6 +243,128 @@ fn source_adapter_normalization_contract_is_implemented() {
     )
     .expect("parse tool fixture");
     assert_eq!(tool.events[0].boundary, EventBoundary::ToolResult);
+}
+
+#[test]
+fn codex_importer_contract_is_implemented() {
+    let path = std::path::Path::new("tests/fixtures/memory_fabric/codex_rollout_session.jsonl");
+    let batch = parse_codex_jsonl(
+        "fallback-codex",
+        path,
+        include_str!("fixtures/memory_fabric/codex_rollout_session.jsonl"),
+    )
+    .expect("parse codex rollout");
+
+    assert_eq!(batch.source, "codex");
+    assert_eq!(batch.parser_version, CodexAdapter::PARSER_VERSION);
+    assert_eq!(batch.events.len(), 6);
+    assert_eq!(event_hash_set(&batch.events).len(), 6);
+    assert!(batch.warnings.is_empty());
+    assert!(batch.events.iter().all(|event| {
+        event.source_session_id == "codex-rollout-1"
+            && event.parser_version == CodexAdapter::PARSER_VERSION
+            && event.raw_local_ref.contains("codex_rollout_session.jsonl")
+    }));
+    assert_eq!(batch.events[0].boundary, EventBoundary::SessionStart);
+    assert_eq!(batch.events[1].boundary, EventBoundary::UserTurn);
+    assert_eq!(batch.events[2].boundary, EventBoundary::AssistantTurn);
+    assert_eq!(batch.events[3].boundary, EventBoundary::ToolCall);
+    assert_eq!(batch.events[4].boundary, EventBoundary::ToolResult);
+    assert_eq!(batch.events[5].boundary, EventBoundary::Compaction);
+    assert!(batch.events[4].content_text.contains("CodexAdapter"));
+    assert!(
+        !batch.events[0]
+            .content_text
+            .contains("/Users/test/memory-fabric")
+    );
+    assert!(
+        batch.cursor_updates[0]
+            .cursor_value
+            .starts_with("line:6;bytes:")
+    );
+
+    let malformed = parse_codex_jsonl(
+        "fallback-codex",
+        std::path::Path::new("tests/fixtures/memory_fabric/codex_rollout_malformed_tail.jsonl"),
+        MALFORMED_CODEX_ROLLOUT,
+    )
+    .expect("parse malformed codex rollout");
+    assert_eq!(malformed.events.len(), 3);
+    assert_eq!(malformed.warnings.len(), 1);
+    assert!(
+        malformed.warnings[0]
+            .message
+            .contains("skipped malformed Codex JSONL row")
+    );
+
+    let partial_tail = "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-24T12:00:00Z\",\"payload\":{\"id\":\"codex-partial\",\"cwd\":\"/Users/test/memory-fabric\",\"model_provider\":\"openai\"}}\n{\"type\":\"event_msg\",\"timestamp\":\"2026-05-24T12:00:05Z\",\"payload\":{\"type\":\"user_message\",\"message\":\"Keep complete rows only.\"}}\n{\"type\":\"response_item\",\"timestamp\":\"2026-05-24T12:00:10Z\",\"payload\":";
+    let partial = parse_codex_jsonl(
+        "fallback-codex",
+        std::path::Path::new("tests/fixtures/memory_fabric/codex_rollout_partial_tail.jsonl"),
+        partial_tail,
+    )
+    .expect("parse partial codex rollout");
+    assert_eq!(partial.events.len(), 2);
+    assert!(partial.warnings.is_empty());
+    let consumed_bytes = partial_tail.rfind('\n').expect("complete row newline") + 1;
+    assert_eq!(
+        partial.cursor_updates[0].cursor_value,
+        format!("line:2;bytes:{consumed_bytes}")
+    );
+}
+
+#[test]
+fn codex_active_session_watcher_uses_complete_rows_only() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let path = tmp.path().join("active-codex.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"type":"session_meta","timestamp":"2026-05-24T12:00:00Z","payload":{"id":"active-codex","cwd":"/Users/test/memory-fabric","model_provider":"openai"}}
+{"type":"event_msg","timestamp":"2026-05-24T12:00:05Z","payload":{"type":"user_message","message":"Watch complete rows."}}
+{"type":"response_item","timestamp":"2026-05-24T12:00:10Z","payload":{"role":"assistant","content":[{"type":"output_text","text":"#,
+    )
+    .expect("write partial active codex");
+
+    let delta = FileWatcher::read_delta(&WatchState {
+        path: path.clone(),
+        offset: 0,
+        fingerprint: None,
+    })
+    .expect("partial delta");
+    assert!(delta.partial_tail);
+    let batch = parse_codex_jsonl(
+        "active-codex",
+        &path,
+        &String::from_utf8(delta.bytes).expect("delta UTF-8"),
+    )
+    .expect("parse complete codex rows");
+    assert_eq!(batch.events.len(), 2);
+    assert_eq!(batch.events[0].boundary, EventBoundary::SessionStart);
+    assert_eq!(batch.events[1].boundary, EventBoundary::UserTurn);
+
+    std::fs::write(
+        &path,
+        r#"{"type":"session_meta","timestamp":"2026-05-24T12:00:00Z","payload":{"id":"active-codex","cwd":"/Users/test/memory-fabric","model_provider":"openai"}}
+{"type":"event_msg","timestamp":"2026-05-24T12:00:05Z","payload":{"type":"user_message","message":"Watch complete rows."}}
+{"type":"response_item","timestamp":"2026-05-24T12:00:10Z","payload":{"role":"assistant","content":[{"type":"output_text","text":"Assistant row is complete."}]}}
+"#,
+    )
+    .expect("complete active codex");
+    let next = FileWatcher::read_delta(&WatchState {
+        path: path.clone(),
+        offset: delta.new_offset,
+        fingerprint: Some(delta.new_fingerprint),
+    })
+    .expect("completed delta");
+    assert!(!next.partial_tail);
+    let next_batch = parse_codex_jsonl(
+        "active-codex",
+        &path,
+        &String::from_utf8(next.bytes).expect("next delta UTF-8"),
+    )
+    .expect("parse completed assistant row");
+    assert_eq!(next_batch.events.len(), 1);
+    assert_eq!(next_batch.events[0].boundary, EventBoundary::AssistantTurn);
 }
 
 #[test]
@@ -899,6 +1030,174 @@ fn search_document_contract_is_implemented() {
         .search_document_by_event(&codex_event_id)
         .expect("generated search document");
     assert!(search_doc.document_text.contains("panic at src/main.rs:42"));
+}
+
+#[test]
+fn codex_import_cli_contract_is_implemented() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    let other_project = tmp.path().join("other-project");
+    let codex_root = home.join(".codex");
+    let sessions_dir = codex_root.join("sessions/2026/05/24");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::create_dir_all(&other_project).expect("create other project");
+    std::fs::create_dir_all(&sessions_dir).expect("create codex sessions");
+    let matching_rollout = include_str!("fixtures/memory_fabric/codex_rollout_session.jsonl")
+        .replace(
+            "/Users/test/memory-fabric",
+            project.to_str().expect("project path UTF-8"),
+        );
+    std::fs::write(sessions_dir.join("rollout.jsonl"), matching_rollout)
+        .expect("write codex rollout");
+    let unrelated_rollout = include_str!("fixtures/memory_fabric/codex_rollout_session.jsonl")
+        .replace("codex-rollout-1", "codex-rollout-other")
+        .replace(
+            "/Users/test/memory-fabric",
+            other_project.to_str().expect("other project UTF-8"),
+        )
+        .replace(
+            "Investigate importer drift.",
+            "Unrelated project should not import.",
+        );
+    std::fs::write(sessions_dir.join("other-rollout.jsonl"), unrelated_rollout)
+        .expect("write unrelated codex rollout");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "import",
+            "--source",
+            "codex",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            codex_root.to_str().expect("codex root UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("codex import");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("import JSON");
+    assert_eq!(json["source"], "codex");
+    assert_eq!(json["discovered_sessions"].as_u64().unwrap(), 1);
+    assert_eq!(json["imported_events"].as_u64().unwrap(), 6);
+    assert!(json["warnings"].as_array().unwrap().is_empty());
+
+    let replay = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "import",
+            "--source",
+            "codex",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            codex_root.to_str().expect("codex root UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("codex import replay");
+    assert!(
+        replay.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let replay_json: serde_json::Value =
+        serde_json::from_slice(&replay.stdout).expect("replay JSON");
+    assert_eq!(replay_json["imported_events"].as_u64().unwrap(), 0);
+
+    let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "codex",
+            "search",
+            "CodexAdapter",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search imported codex");
+    assert!(
+        search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&search.stderr)
+    );
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("search JSON");
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(search_json["results"][0]["source"], "codex");
+
+    let unrelated_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "codex",
+            "search",
+            "Unrelated project should not import.",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search unrelated codex");
+    assert!(
+        unrelated_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&unrelated_search.stderr)
+    );
+    let unrelated_search_json: serde_json::Value =
+        serde_json::from_slice(&unrelated_search.stdout).expect("unrelated search JSON");
+    assert_eq!(unrelated_search_json["total_results"].as_u64().unwrap(), 0);
+
+    let cwd_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "codex",
+            "search",
+            project.to_str().expect("project path UTF-8"),
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search project path leakage");
+    assert!(
+        cwd_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&cwd_search.stderr)
+    );
+    let cwd_search_json: serde_json::Value =
+        serde_json::from_slice(&cwd_search.stdout).expect("cwd search JSON");
+    assert_eq!(cwd_search_json["total_results"].as_u64().unwrap(), 0);
+
+    let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+    let project_record = store
+        .project_by_path(&project)
+        .expect("project lookup")
+        .expect("project");
+    let cursor = store
+        .source_cursor(
+            &project_record.id,
+            "codex",
+            sessions_dir
+                .join("rollout.jsonl")
+                .to_str()
+                .expect("cursor key UTF-8"),
+        )
+        .expect("cursor read")
+        .expect("cursor");
+    assert_eq!(cursor.parser_version, CodexAdapter::PARSER_VERSION);
+    assert!(cursor.last_event_hash.is_some());
 }
 
 #[test]

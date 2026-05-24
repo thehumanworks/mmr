@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use walkdir::WalkDir;
 
 use crate::store::{NewEvent, Store, content_hash};
 
@@ -260,6 +261,334 @@ impl<'a, A: SourceAdapter> Reconciler<'a, A> {
             warnings,
             event_ids,
         })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CodexAdapter;
+
+impl CodexAdapter {
+    pub const PARSER_VERSION: &'static str = "codex-rollout-v1";
+
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl SourceAdapter for CodexAdapter {
+    fn source_name(&self) -> &'static str {
+        "codex"
+    }
+
+    fn parser_version(&self) -> &'static str {
+        Self::PARSER_VERSION
+    }
+
+    fn discover(&self, root: &SourceDiscoveryRoot) -> Result<Vec<SourceSessionRef>> {
+        let mut sessions = Vec::new();
+        let project_path = root.project_path.canonicalize().with_context(|| {
+            format!("canonicalize project path {}", root.project_path.display())
+        })?;
+        for search_root in codex_search_roots(&root.source_root) {
+            if !search_root.exists() {
+                continue;
+            }
+            for entry in WalkDir::new(&search_root)
+                .into_iter()
+                .filter_map(Result::ok)
+            {
+                if !entry.file_type().is_file()
+                    || entry.path().extension().and_then(|ext| ext.to_str()) != Some("jsonl")
+                {
+                    continue;
+                }
+                let path = entry.path().to_path_buf();
+                let session_id = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("unknown-codex-session")
+                    .to_string();
+                let Some(cwd) = codex_session_cwd(&path)? else {
+                    continue;
+                };
+                if !path_matches_project(&cwd, &project_path) {
+                    continue;
+                }
+                sessions.push(SourceSessionRef {
+                    source: self.source_name().to_string(),
+                    session_id,
+                    path,
+                });
+            }
+        }
+        sessions.sort_by(|left, right| left.path.cmp(&right.path));
+        sessions.dedup_by(|left, right| left.path == right.path);
+        Ok(sessions)
+    }
+
+    fn import_session(&self, session: &SourceSessionRef) -> Result<SourceImportBatch> {
+        let content = fs::read_to_string(&session.path)
+            .with_context(|| format!("read Codex session {}", session.path.display()))?;
+        parse_codex_jsonl(&session.session_id, &session.path, &content)
+    }
+}
+
+fn codex_session_cwd(path: &Path) -> Result<Option<String>> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("read Codex session metadata {}", path.display()))?;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if string_field(&value, "type").as_deref() != Some("session_meta") {
+            continue;
+        }
+        if let Some(cwd) = value
+            .get("payload")
+            .and_then(|payload| string_field(payload, "cwd"))
+            .or_else(|| string_field(&value, "cwd"))
+        {
+            return Ok(Some(cwd));
+        }
+    }
+    Ok(None)
+}
+
+fn path_matches_project(cwd: &str, project_path: &Path) -> bool {
+    let cwd_path = PathBuf::from(cwd);
+    cwd_path
+        .canonicalize()
+        .map(|canonical_cwd| canonical_cwd == project_path)
+        .unwrap_or_else(|_| cwd_path == project_path)
+}
+
+fn codex_search_roots(source_root: &Path) -> Vec<PathBuf> {
+    if source_root.join("sessions").exists() || source_root.join("archived_sessions").exists() {
+        vec![
+            source_root.join("sessions"),
+            source_root.join("archived_sessions"),
+        ]
+    } else {
+        vec![source_root.to_path_buf()]
+    }
+}
+
+pub fn parse_codex_jsonl(
+    fallback_session_id: &str,
+    path: &Path,
+    content: &str,
+) -> Result<SourceImportBatch> {
+    let mut events = Vec::new();
+    let mut warnings = Vec::new();
+    let mut last_hash = None;
+    let mut current_session_id = fallback_session_id.to_string();
+    let mut model_provider = String::new();
+    let mut emitted_lines = 0usize;
+    let mut consumed_bytes = 0usize;
+
+    let mut line_start = 0usize;
+    for (line_index, line) in content.lines().enumerate() {
+        let (line_has_newline, consumed_line_bytes) =
+            consumed_line_bounds(content, line_start, line);
+        if line.trim().is_empty() {
+            emitted_lines = line_index + 1;
+            consumed_bytes = consumed_line_bytes;
+            line_start = consumed_line_bytes;
+            continue;
+        }
+        let raw_local_ref = format!("{}:{}", path.display(), line_index + 1);
+        let value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(err) => {
+                if !line_has_newline && consumed_line_bytes == content.len() {
+                    break;
+                }
+                warnings.push(SourceWarning {
+                    raw_local_ref: Some(raw_local_ref),
+                    message: format!("skipped malformed Codex JSONL row: {err}"),
+                });
+                emitted_lines = line_index + 1;
+                consumed_bytes = consumed_line_bytes;
+                line_start = consumed_line_bytes;
+                continue;
+            }
+        };
+
+        if let Some(session_id) = string_field(&value, "session_id") {
+            current_session_id = session_id;
+        } else if string_field(&value, "type").as_deref() == Some("session_meta")
+            && let Some(payload_id) = value
+                .get("payload")
+                .and_then(|payload| string_field(payload, "id"))
+        {
+            current_session_id = payload_id;
+        }
+        if let Some(provider) = value
+            .get("payload")
+            .and_then(|payload| string_field(payload, "model_provider"))
+        {
+            model_provider = provider;
+        }
+
+        let Some((boundary, role, content_text)) = codex_event_parts(&value, &model_provider)
+            .or_else(|| {
+                Some((
+                    EventBoundary::UnknownRawEvent,
+                    "system".to_string(),
+                    value.to_string(),
+                ))
+            })
+        else {
+            continue;
+        };
+        if content_text.trim().is_empty() {
+            emitted_lines = line_index + 1;
+            consumed_bytes = consumed_line_bytes;
+            line_start = consumed_line_bytes;
+            continue;
+        }
+        let timestamp =
+            string_field(&value, "timestamp").unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+        let source_event_id = string_field(&value, "id")
+            .or_else(|| {
+                value
+                    .get("payload")
+                    .and_then(|payload| string_field(payload, "id"))
+            })
+            .or_else(|| Some(format!("line:{}:{}", line_index + 1, content_hash(line))));
+        let parent_hash = last_hash.clone();
+        let normalized = NormalizedEvent {
+            source: "codex".to_string(),
+            source_session_id: current_session_id.clone(),
+            source_event_id,
+            boundary,
+            role: Some(role),
+            timestamp,
+            content_text,
+            parser_version: CodexAdapter::PARSER_VERSION.to_string(),
+            raw_local_ref: raw_local_ref.clone(),
+            parent_hash,
+        };
+        last_hash = Some(content_hash(&normalized.content_text));
+        events.push(normalized);
+        emitted_lines = line_index + 1;
+        consumed_bytes = consumed_line_bytes;
+        line_start = consumed_line_bytes;
+    }
+
+    Ok(SourceImportBatch {
+        source: "codex".to_string(),
+        parser_version: CodexAdapter::PARSER_VERSION.to_string(),
+        events,
+        cursor_updates: vec![SourceCursorUpdate {
+            cursor_key: path.display().to_string(),
+            cursor_value: format!("line:{emitted_lines};bytes:{consumed_bytes}"),
+            parser_version: CodexAdapter::PARSER_VERSION.to_string(),
+            last_event_hash: last_hash,
+        }],
+        warnings,
+    })
+}
+
+fn consumed_line_bounds(content: &str, line_start: usize, line: &str) -> (bool, usize) {
+    if let Some(relative_newline) = content.as_bytes()[line_start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+    {
+        (true, line_start + relative_newline + 1)
+    } else {
+        (false, line_start + line.len())
+    }
+}
+
+fn codex_event_parts(
+    value: &Value,
+    model_provider: &str,
+) -> Option<(EventBoundary, String, String)> {
+    let entry_type = string_field(value, "type")?;
+    match entry_type.as_str() {
+        "session_meta" => {
+            let payload = value.get("payload")?;
+            let id = string_field(payload, "id").unwrap_or_else(|| "unknown".to_string());
+            let provider = string_field(payload, "model_provider")
+                .filter(|provider| !provider.is_empty())
+                .unwrap_or_else(|| model_provider.to_string());
+            Some((
+                EventBoundary::SessionStart,
+                "system".to_string(),
+                format!("Codex session {id}\nproject: linked\nmodel_provider: {provider}"),
+            ))
+        }
+        "event_msg" => {
+            let payload = value.get("payload")?;
+            match string_field(payload, "type").as_deref() {
+                Some("user_message") => string_field(payload, "message")
+                    .map(|text| (EventBoundary::UserTurn, "user".to_string(), text)),
+                Some("agent_reasoning" | "context_compaction") => {
+                    let text = string_field(payload, "message")
+                        .or_else(|| text_from_field(payload.get("content")))
+                        .unwrap_or_else(|| payload.to_string());
+                    Some((EventBoundary::Compaction, "system".to_string(), text))
+                }
+                _ => Some((
+                    EventBoundary::UnknownRawEvent,
+                    "system".to_string(),
+                    payload.to_string(),
+                )),
+            }
+        }
+        "response_item" => {
+            let payload = value.get("payload")?;
+            if let Some(role) = string_field(payload, "role") {
+                let text =
+                    text_from_field(payload.get("content")).unwrap_or_else(|| payload.to_string());
+                let boundary = match role.as_str() {
+                    "assistant" => EventBoundary::AssistantTurn,
+                    "tool" => EventBoundary::ToolResult,
+                    _ => EventBoundary::UnknownRawEvent,
+                };
+                return Some((boundary, role, text));
+            }
+            match string_field(payload, "type").as_deref() {
+                Some("function_call" | "tool_call") => {
+                    let name = string_field(payload, "name").unwrap_or_else(|| "tool".to_string());
+                    let args = payload
+                        .get("arguments")
+                        .map(Value::to_string)
+                        .unwrap_or_else(|| payload.to_string());
+                    Some((
+                        EventBoundary::ToolCall,
+                        "assistant".to_string(),
+                        format!("{name} {args}"),
+                    ))
+                }
+                Some("function_call_output" | "tool_result") => {
+                    let output = string_field(payload, "output")
+                        .or_else(|| text_from_field(payload.get("content")))
+                        .unwrap_or_else(|| payload.to_string());
+                    Some((EventBoundary::ToolResult, "tool".to_string(), output))
+                }
+                Some("reasoning") => {
+                    let text = text_from_field(payload.get("summary"))
+                        .or_else(|| text_from_field(payload.get("content")))
+                        .unwrap_or_else(|| payload.to_string());
+                    Some((EventBoundary::Compaction, "assistant".to_string(), text))
+                }
+                _ => Some((
+                    EventBoundary::UnknownRawEvent,
+                    "system".to_string(),
+                    payload.to_string(),
+                )),
+            }
+        }
+        _ => Some((
+            EventBoundary::UnknownRawEvent,
+            "system".to_string(),
+            value.to_string(),
+        )),
     }
 }
 

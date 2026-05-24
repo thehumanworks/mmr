@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-05-24T12:00:00Z","payload":{"id":"codex-rollout-1","cwd":"/Users/test/memory-fabric","cli_version":"1.0.0","model_provider":"openai"}}
+{"type":"event_msg","timestamp":"2026-05-24T12:00:05Z","payload":{"type":"user_message","message":"Investigate importer drift."}}
+{"type":"response_item","timestamp":"2026-05-24T12:00:10Z","payload":{"id":"msg-assistant-1","role":"assistant","content":[{"type":"output_text","text":"I will inspect the rollout format."}]}}
+{"type":"response_item","timestamp":"2026-05-24T12:00:12Z","payload":{"id":"call-shell-1","type":"function_call","name":"shell","arguments":{"cmd":"rg importer src"}}}
+{"type":"response_item","timestamp":"2026-05-24T12:00:13Z","payload":{"id":"out-shell-1","type":"function_call_output","call_id":"call-shell-1","output":"src/capture.rs: CodexAdapter"}}
+{"type":"event_msg","timestamp":"2026-05-24T12:00:20Z","payload":{"type":"context_compaction","message":"Compacted prior importer investigation."}}

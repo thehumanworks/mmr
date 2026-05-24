@@ -18,3 +18,4 @@ When implementing or reviewing behavior:
 - [Note command](../docs/mmr-note.md)
 - [Redaction before sync](../docs/mmr-redaction.md)
 - [Search commands](../docs/mmr-search.md)
+- [Codex importer](../docs/mmr-codex-importer.md)

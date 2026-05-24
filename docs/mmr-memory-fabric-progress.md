@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-273-search`
-- Last green commit: `ba8bb0a` (`add redaction safety pipeline`)
-- Active Linear ticket: NHL-273
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272
-- Current work: exact and structured lexical search
+- Branch: `codex/nhl-274-codex-importer`
+- Last green commit: `71cb877` (`add exact memory search commands`)
+- Active Linear ticket: NHL-274
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273
+- Current work: Codex importer verified; ready to commit and update Linear
 
 ## Current Architecture Decisions
 
@@ -42,6 +42,14 @@
   stdout except for explicit `mmr rg --line`.
 - `mmr export --format tree` writes each run into a fresh `mmr-tree-*`
   subdirectory and omits local raw refs from exported files.
+- NHL-274 imports Codex rollout JSONL through `CodexAdapter`, parser version
+  `codex-rollout-v1`, scopes discovery to `session_meta.payload.cwd` matching
+  the linked project, and keeps raw refs local-only while writing normalized
+  events/cursors to the store.
+- Codex `session_meta` uses cwd only for discovery; normalized event/search
+  content omits absolute project paths.
+- Tool result and unknown raw events require a future dedicated safe projection
+  before remote sync eligibility, regardless of redaction status.
 
 ## Verification Commands And Results
 
@@ -130,6 +138,30 @@
     (`elapsed_ms=819`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
+- NHL-274 focused checks:
+  - `cargo test --test memory_fabric_contract codex_importer_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract codex_import_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract codex_active_session_watcher_uses_complete_rows_only -- --nocapture`:
+    passed
+  - `cargo test import_command_parses_with_global_source_after_subcommand -- --nocapture`:
+    passed
+  - `cargo test tool_results_need_safe_projection_even_after_passing_redaction -- --nocapture`:
+    passed
+- Codex importer adversarial review found project-scope leakage, session-id
+  drift from response/tool payload IDs, absolute cwd content leakage,
+  partial-tail cursor consumption, and raw tool-output sync risk. Fixes are
+  applied and verification was rerun successfully.
+- Latest NHL-274 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 59 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 16 active tests passed and 8 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=727`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -151,10 +183,11 @@
 - `src/redaction.rs`
 - `docs/mmr-redaction.md`
 - `docs/mmr-search.md`
+- `docs/mmr-codex-importer.md`
 
 ## Open Blockers
 
-- None for NHL-273.
+- None for NHL-274.
 
 ## Known Risks
 
@@ -166,9 +199,9 @@
   unless an ADR explicitly approves a breaking change.
 - Public `link`, `sync`, and `status` are still deferred to NHL-277; `__db-info`
   is hidden dev-only smoke plumbing.
-- Provider-specific Codex, Claude, and Cursor adapters are deferred to NHL-274,
-  NHL-275, and NHL-276. NHL-270 only supplies the provider-neutral framework and
-  fixture adapter.
+- Provider-specific Claude and Cursor adapters are deferred to NHL-275 and
+  NHL-276. NHL-274 supplies the Codex adapter on top of the NHL-270
+  provider-neutral framework.
 - The optional `openai/privacy-filter` model runtime is not bundled; redaction
   reports degraded PII coverage while deterministic blocking remains active.
 - Under degraded PII coverage, `sync --dry-run` treats every event as blocked
@@ -181,11 +214,17 @@
 - `mmr export --format tree` writes local raw search material for external
   tools into a fresh run directory and requires explicit `--output-dir`; it is
   not a remote sync path.
+- Codex parser drift is handled by preserving unknown rows as local
+  `unknown_raw_event` records where possible and emitting warnings for malformed
+  JSONL rows.
+- Codex import remains conservative: sessions without a matching cwd are skipped
+  instead of imported into the wrong project. Future alias support can broaden
+  matching intentionally.
 
 ## Next Exact Action
 
-Commit and push NHL-273, update Linear with scope/tests/risks, then begin the
-next unblocked MVP ticket.
+Commit and push NHL-274, update Linear with scope/tests/risks, then begin
+NHL-275 Claude Code importer/capture.
 
 ## Do Not Redo
 
@@ -195,9 +234,12 @@ next unblocked MVP ticket.
 - NHL-270 is already marked `Done` in Linear.
 - NHL-271 is already marked `Done` in Linear.
 - NHL-272 is already marked `Done` in Linear.
-- NHL-273 is already marked `In Progress`.
+- NHL-273 is already marked `Done` in Linear.
+- NHL-274 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
+- The Codex importer adversarial review findings have already been fixed and
+  verified.
 
 ## Watch-Outs
 

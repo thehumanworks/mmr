@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
+use crate::capture::{CodexAdapter, Reconciler, SourceDiscoveryRoot};
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
 use crate::redaction::{
     PiiCoverage, PiiCoverageStatus, RedactionFinding, RedactionOutcome, scan_text,
@@ -128,6 +129,8 @@ pub enum Commands {
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
+    /// Import normalized events into the local memory store
+    Import(ImportArgs),
     /// Add a human-authored note to the local memory store
     Note {
         /// Note text. Omit to read multiline text from stdin.
@@ -279,6 +282,16 @@ pub struct SearchTextArgs {
     line: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct ImportArgs {
+    /// Project path to link/import into
+    #[arg(long)]
+    project: PathBuf,
+    /// Source root (defaults to $HOME/.codex for --source codex)
+    #[arg(long = "source-root")]
+    source_root: Option<PathBuf>,
+}
+
 pub async fn run_cli(cli: Cli) -> Result<String> {
     let source_filter = effective_source(cli.source);
     if let Commands::Note { text } = &cli.command {
@@ -292,6 +305,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             bail!("--line is only supported for `mmr rg`");
         }
         return serialize(&search_response(args, source_filter)?, cli.pretty);
+    }
+    if let Commands::Import(args) = &cli.command {
+        return serialize(&import_response(args, source_filter)?, cli.pretty);
     }
     if let Commands::Redact(args) = &cli.command {
         return serialize(&redact_response(args, source_filter)?, cli.pretty);
@@ -510,6 +526,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             .await?;
             format_remember_response(&response, remember.output_format, cli.pretty)?
         }
+        Commands::Import(args) => serialize(&import_response(&args, source_filter)?, cli.pretty)?,
         Commands::Note { text } => serialize(&note_response(text)?, cli.pretty)?,
         Commands::Rg(args) => rg_output(&args, source_filter, cli.pretty)?,
         Commands::Search(args) => {
@@ -589,6 +606,54 @@ fn now_rfc3339() -> Result<String> {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .context("format timestamp")
+}
+
+#[derive(Debug, Serialize)]
+struct ImportResponse {
+    project_id: String,
+    source: String,
+    discovered_sessions: usize,
+    imported_events: usize,
+    warnings: Vec<String>,
+    event_ids: Vec<String>,
+}
+
+fn import_response(
+    args: &ImportArgs,
+    source_filter: Option<SourceFilter>,
+) -> Result<ImportResponse> {
+    if source_filter != Some(SourceFilter::Codex) {
+        bail!("`mmr import` currently requires `--source codex`");
+    }
+
+    let mut store = Store::open_default()?;
+    let project = store.ensure_project_link(&args.project)?;
+    let source_root = match &args.source_root {
+        Some(source_root) => source_root.clone(),
+        None => default_codex_source_root()?,
+    };
+    let root = SourceDiscoveryRoot {
+        project_path: args.project.clone(),
+        source_root,
+    };
+    let adapter = CodexAdapter::new();
+    let report = Reconciler::new(&adapter).reconcile(&mut store, &project.id, &root)?;
+
+    Ok(ImportResponse {
+        project_id: project.id,
+        source: report.source,
+        discovered_sessions: report.discovered_sessions,
+        imported_events: report.imported_events,
+        warnings: report.warnings,
+        event_ids: report.event_ids,
+    })
+}
+
+fn default_codex_source_root() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("HOME is not set; pass --source-root"))?;
+    Ok(home.join(".codex"))
 }
 
 #[derive(Debug, Serialize)]
@@ -992,14 +1057,16 @@ fn sync_response(
     for event in events {
         let outcome = scan_text(&event.content_text);
         pii_coverage = Some(outcome.pii_coverage.clone());
-        let would_sync = dry_run_allows_sync(&outcome);
+        let would_sync = dry_run_allows_sync(&event, &outcome);
         if would_sync {
             syncable_events += 1;
         } else {
             blocked_events += 1;
         }
-        let blocked_reasons = dry_run_blocked_reasons(&outcome);
-        let status = if outcome.blocks_sync {
+        let blocked_reasons = dry_run_blocked_reasons(&event, &outcome);
+        let status = if safe_projection_blocker(&event).is_some() {
+            "requires_safe_projection"
+        } else if outcome.blocks_sync {
             "blocked"
         } else if would_sync {
             "passed"
@@ -1097,12 +1164,17 @@ fn source_filter_name(source_filter: Option<SourceFilter>) -> Option<&'static st
     }
 }
 
-fn dry_run_allows_sync(outcome: &RedactionOutcome) -> bool {
-    !outcome.blocks_sync && outcome.pii_coverage.status == PiiCoverageStatus::Available
+fn dry_run_allows_sync(event: &EventRecord, outcome: &RedactionOutcome) -> bool {
+    safe_projection_blocker(event).is_none()
+        && !outcome.blocks_sync
+        && outcome.pii_coverage.status == PiiCoverageStatus::Available
 }
 
-fn dry_run_blocked_reasons(outcome: &RedactionOutcome) -> Vec<String> {
+fn dry_run_blocked_reasons(event: &EventRecord, outcome: &RedactionOutcome) -> Vec<String> {
     let mut reasons = Vec::new();
+    if let Some(reason) = safe_projection_blocker(event) {
+        reasons.push(reason.to_string());
+    }
     let blocking_findings = outcome
         .findings
         .iter()
@@ -1117,6 +1189,16 @@ fn dry_run_blocked_reasons(outcome: &RedactionOutcome) -> Vec<String> {
         reasons.push(outcome.pii_coverage.reason.clone());
     }
     reasons
+}
+
+fn safe_projection_blocker(event: &EventRecord) -> Option<&'static str> {
+    match event.event_type.as_str() {
+        "tool_result" => Some("tool_result events require a dedicated safe sync projection"),
+        "unknown_raw_event" => {
+            Some("unknown_raw_event events require a dedicated safe sync projection")
+        }
+        _ => None,
+    }
 }
 
 fn redacted_event_summary(
@@ -1714,6 +1796,64 @@ mod tests {
         };
         assert_eq!(args.query, "decision");
         assert_eq!(args.session.as_deref(), Some("notes"));
+    }
+
+    #[test]
+    fn import_command_parses_with_global_source_after_subcommand() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "import",
+            "--source",
+            "codex",
+            "--project",
+            "/tmp/project",
+            "--source-root",
+            "/tmp/.codex",
+        ])
+        .expect("import should parse");
+        assert_eq!(parsed.source, Some(SourceFilter::Codex));
+        let Commands::Import(args) = parsed.command else {
+            panic!("expected import command");
+        };
+        assert_eq!(args.project, PathBuf::from("/tmp/project"));
+        assert_eq!(args.source_root, Some(PathBuf::from("/tmp/.codex")));
+    }
+
+    #[test]
+    fn tool_results_need_safe_projection_even_after_passing_redaction() {
+        let event = EventRecord {
+            id: "evt:v1:tool-result".to_string(),
+            project_id: "proj:v1:test".to_string(),
+            session_id: "session:v1:test".to_string(),
+            source: "codex".to_string(),
+            source_event_id: Some("out-1".to_string()),
+            event_type: "tool_result".to_string(),
+            role: "tool".to_string(),
+            timestamp: "2026-05-24T12:00:00Z".to_string(),
+            content_text: "benign output".to_string(),
+            content_hash: "hash".to_string(),
+            parent_hash: None,
+            parser_version: "codex-rollout-v1".to_string(),
+            raw_local_ref: Some("/tmp/codex.jsonl:1".to_string()),
+            sync_status: "redacted".to_string(),
+        };
+        let outcome = RedactionOutcome {
+            findings: Vec::new(),
+            redacted_text: event.content_text.clone(),
+            blocks_sync: false,
+            pii_coverage: PiiCoverage {
+                status: PiiCoverageStatus::Available,
+                detector: "deterministic-pii-rules".to_string(),
+                reason: "test detector".to_string(),
+            },
+        };
+
+        assert!(!dry_run_allows_sync(&event, &outcome));
+        assert!(
+            dry_run_blocked_reasons(&event, &outcome)
+                .iter()
+                .any(|reason| reason.contains("dedicated safe sync projection"))
+        );
     }
 
     #[test]
