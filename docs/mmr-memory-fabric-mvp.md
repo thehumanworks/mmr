@@ -307,6 +307,14 @@ NHL-269 must lock SQL details without changing the product contract:
 - `alias_kind`
 - `created_at`
 
+### `project_links`
+
+- `id`
+- `project_id`
+- `canonical_path`
+- `created_at`
+- `updated_at`
+
 ### `sources`
 
 - `id`
@@ -432,6 +440,18 @@ NHL-269 must lock SQL details without changing the product contract:
 - `output_hash`
 - `created_at`
 - `completed_at`
+
+### `dream_candidates`
+
+- `id`
+- `dream_run_id`
+- `project_id`
+- `kind`
+- `claim`
+- `confidence`
+- `evidence_refs_json`
+- `status`
+- `created_at`
 
 ### `learned_memory`
 

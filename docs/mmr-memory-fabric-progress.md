@@ -2,12 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-268-mmr-mvp-contract`
-- Last green commit: `7dbcab4` baseline, not yet verified in this session
-- Active Linear ticket: NHL-268
-- Completed tickets: none
-- Current work: architecture/schema/verification contract for the Memory Fabric
-  MVP
+- Branch: `codex/nhl-269-local-store`
+- Last green commit: current NHL-269 commit (`add local memory fabric store`)
+- Active Linear ticket: NHL-269
+- Completed tickets: NHL-268
+- Current work: local-first SQLite/libSQL-shaped store and migrations
 
 ## Current Architecture Decisions
 
@@ -23,20 +22,33 @@
 - Learned memory must carry resolvable evidence refs.
 - `mmr rg` preserves JSON stdout by default; any line-oriented POSIX mode must be
   explicit opt-in.
+- Store implementation uses `rusqlite` with bundled SQLite and deterministic
+  hash-derived ids.
+- Event insertion is transaction-scoped; blob refs require explicit content
+  hashes; cursor reads expose parser version and last event hash.
+- Hidden dev smoke command `mmr __db-info` inspects DB path/schema version and
+  can insert/read a synthetic event for isolated CLI verification.
 
 ## Verification Commands And Results
 
 - `cargo fmt`: passed
-- `cargo test`: passed, including `memory_fabric_contract` with 2 active tests
-  passed and 16 pending tests ignored before adversarial fixes; after fixes, 3
-  active tests passed and 16 pending tests ignored
+- `cargo test`: passed, including 44 unit tests, 65 CLI contract tests, and
+  `memory_fabric_contract` with 6 active tests passed and 14 pending tests
+  ignored
 - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-  (`elapsed_ms=644` after adversarial fixes)
+  (`elapsed_ms=633` after NHL-269 fixes)
 - `cargo clippy --all-targets --all-features -- -D warnings`: passed
 - `cargo build --release`: passed
 - Adversarial review found issues in `rg` stdout semantics, downstream gate
   specificity, malformed fixture coverage, and schema detail. Fixes are applied
   and verification was rerun successfully.
+- NHL-269 targeted checks so far:
+  - `cargo test store:: -- --nocapture`: passed, 7 store tests
+  - `cargo test --test memory_fabric_contract -- --nocapture`: passed, 6 active
+    tests and 14 pending ignored contracts
+- Storage adversarial review found production transaction safety, blob hash,
+  redaction policy FK, cursor metadata, and doc drift issues. Fixes are applied;
+  verification was rerun successfully.
 
 ## Touched Files And Modules
 
@@ -46,30 +58,38 @@
 - `tests/memory_fabric_contract.rs`
 - `tests/fixtures/memory_fabric/*.jsonl`
 - `docs/mmr-memory-fabric-progress.md`
+- `src/store.rs`
+- `src/lib.rs`
+- `src/cli.rs`
+- `docs/mmr-memory-fabric-store.md`
+- `Cargo.toml`
+- `Cargo.lock`
 
 ## Open Blockers
 
-- None for NHL-268.
+- None for NHL-269.
 
 ## Known Risks
 
-- The pending contract tests are intentionally ignored until downstream tickets
-  implement the referenced store, adapter, redaction, search, summary, dream,
+- The remaining pending contract tests are intentionally ignored until downstream
+  tickets implement the referenced adapter, redaction, search, summary, dream,
   and sync modules.
-- The exact SQLite/libSQL crate and GitHub transport are deferred to NHL-269 and
-  NHL-277.
-- NHL-269 still owns exact SQL types, constraints, indexes, and migration
-  implementation.
+- GitHub transport is still deferred to NHL-277.
+- NHL-269 locks the initial SQL schema, but future migrations must stay additive
+  unless an ADR explicitly approves a breaking change.
+- Public `link`, `sync`, and `status` are still deferred to NHL-277; `__db-info`
+  is hidden dev-only smoke plumbing.
 
 ## Next Exact Action
 
-Update NHL-268 in Linear with scope, tests, commands, risks, and the next ticket;
-then begin NHL-269 storage and migrations.
+Commit and push NHL-269, update Linear with scope, tests, commands, risks, and
+the next ticket, then begin NHL-270 source adapter framework.
 
 ## Do Not Redo
 
 - Linear project and NHL-268 details have already been pulled.
-- NHL-268 is already marked `In Progress`.
+- NHL-268 is already marked `Done` in Linear.
+- NHL-269 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 

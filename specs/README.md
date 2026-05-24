@@ -13,3 +13,4 @@ When implementing or reviewing behavior:
 
 - [Messages command](messages.md)
 - [Memory Fabric MVP contract](../docs/mmr-memory-fabric-mvp.md)
+- [Memory Fabric store](../docs/mmr-memory-fabric-store.md)

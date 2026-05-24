@@ -2,10 +2,11 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
+use crate::store::{NewEvent, Store};
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
@@ -113,6 +114,16 @@ pub enum Commands {
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
+    /// Inspect the local mmr database path and schema version
+    #[command(name = "__db-info", hide = true)]
+    DbInfo {
+        /// Link this project path before reporting store info
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Insert and read one synthetic event for CLI smoke testing
+        #[arg(long)]
+        smoke_event: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -367,7 +378,62 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             .await?;
             format_remember_response(&response, remember.output_format, cli.pretty)?
         }
+        Commands::DbInfo {
+            project,
+            smoke_event,
+        } => serialize(&db_info_response(project, smoke_event)?, cli.pretty)?,
     };
+
+    Ok(response)
+}
+
+#[derive(Debug, Serialize)]
+struct DbInfoResponse {
+    db_path: String,
+    schema_version: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_count: Option<i64>,
+}
+
+fn db_info_response(project: Option<PathBuf>, smoke_event: bool) -> Result<DbInfoResponse> {
+    let mut store = Store::open_default()?;
+    let info = store.info()?;
+    let mut response = DbInfoResponse {
+        db_path: info.db_path,
+        schema_version: info.schema_version,
+        project_id: None,
+        event_count: None,
+    };
+
+    if project.is_some() || smoke_event {
+        let project_path = match project {
+            Some(project) => project,
+            None => std::env::current_dir().context("current_dir")?,
+        };
+        let project = store.ensure_project_link(&project_path)?;
+        response.project_id = Some(project.id.clone());
+
+        if smoke_event {
+            let event = NewEvent::new(
+                "dev",
+                "__db-info-smoke",
+                "smoke",
+                "user",
+                "2026-05-24T00:00:00Z",
+                "synthetic store smoke event",
+                "dev-smoke-v1",
+            )
+            .with_source_event_id("synthetic-event-1");
+            store.insert_event(&project.id, &event)?;
+            response.event_count = Some(
+                store
+                    .events_for_project(&project.id, Some("dev"), Some("__db-info-smoke"))?
+                    .len() as i64,
+            );
+        }
+    }
 
     Ok(response)
 }

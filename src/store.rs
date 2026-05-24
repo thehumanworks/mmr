@@ -1,0 +1,1258 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, anyhow, bail};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+pub const LATEST_SCHEMA_VERSION: i64 = 1;
+const DEFAULT_POLICY_ID: &str = "redaction-policy:v1:default";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StoreInfo {
+    pub db_path: String,
+    pub schema_version: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRecord {
+    pub id: String,
+    pub canonical_path: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRecord {
+    pub id: String,
+    pub project_id: String,
+    pub source: String,
+    pub source_session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRecord {
+    pub id: String,
+    pub project_id: String,
+    pub session_id: String,
+    pub source: String,
+    pub source_event_id: Option<String>,
+    pub event_type: String,
+    pub role: String,
+    pub timestamp: String,
+    pub content_text: String,
+    pub content_hash: String,
+    pub parent_hash: Option<String>,
+    pub parser_version: String,
+    pub raw_local_ref: Option<String>,
+    pub sync_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobRecord {
+    pub id: String,
+    pub kind: String,
+    pub media_type: String,
+    pub content_hash: String,
+    pub storage_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceCursorRecord {
+    pub source: String,
+    pub project_id: String,
+    pub cursor_key: String,
+    pub cursor_value: String,
+    pub parser_version: String,
+    pub last_event_hash: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewEvent {
+    pub source: String,
+    pub source_session_id: String,
+    pub source_event_id: Option<String>,
+    pub event_type: String,
+    pub role: String,
+    pub timestamp: String,
+    pub content_text: String,
+    pub parent_hash: Option<String>,
+    pub parser_version: String,
+    pub raw_local_ref: Option<String>,
+    pub blob_id: Option<String>,
+    pub redaction_policy_id: String,
+    pub sync_status: String,
+}
+
+impl NewEvent {
+    pub fn new(
+        source: impl Into<String>,
+        source_session_id: impl Into<String>,
+        event_type: impl Into<String>,
+        role: impl Into<String>,
+        timestamp: impl Into<String>,
+        content_text: impl Into<String>,
+        parser_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            source_session_id: source_session_id.into(),
+            source_event_id: None,
+            event_type: event_type.into(),
+            role: role.into(),
+            timestamp: timestamp.into(),
+            content_text: content_text.into(),
+            parent_hash: None,
+            parser_version: parser_version.into(),
+            raw_local_ref: None,
+            blob_id: None,
+            redaction_policy_id: DEFAULT_POLICY_ID.to_string(),
+            sync_status: "local_only".to_string(),
+        }
+    }
+
+    pub fn with_source_event_id(mut self, source_event_id: impl Into<String>) -> Self {
+        self.source_event_id = Some(source_event_id.into());
+        self
+    }
+
+    pub fn with_parent_hash(mut self, parent_hash: impl Into<String>) -> Self {
+        self.parent_hash = Some(parent_hash.into());
+        self
+    }
+
+    pub fn with_raw_local_ref(mut self, raw_local_ref: impl Into<String>) -> Self {
+        self.raw_local_ref = Some(raw_local_ref.into());
+        self
+    }
+
+    pub fn with_blob_id(mut self, blob_id: impl Into<String>) -> Self {
+        self.blob_id = Some(blob_id.into());
+        self
+    }
+
+    pub fn content_hash(&self) -> String {
+        content_hash(&self.content_text)
+    }
+
+    pub fn event_id(&self) -> String {
+        event_id(self)
+    }
+}
+
+#[derive(Debug)]
+struct Migration {
+    version: i64,
+    name: &'static str,
+    sql: &'static str,
+}
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: LATEST_SCHEMA_VERSION,
+    name: "initial_memory_fabric_schema",
+    sql: INITIAL_SCHEMA,
+}];
+
+const INITIAL_SCHEMA: &str = r#"
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE projects (
+    id TEXT PRIMARY KEY NOT NULL,
+    canonical_path TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE project_aliases (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    alias_kind TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    UNIQUE(source, alias)
+);
+
+CREATE TABLE project_links (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    canonical_path TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE sources (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    adapter_version TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK(enabled IN (0, 1))
+);
+
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    title TEXT,
+    raw_local_ref TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    UNIQUE(project_id, source, source_session_id)
+);
+
+CREATE TABLE blobs (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    storage_ref TEXT NOT NULL,
+    byte_len INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(content_hash, storage_ref)
+);
+
+CREATE TABLE events (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    source_event_id TEXT,
+    event_type TEXT NOT NULL,
+    role TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    content_text TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    parent_hash TEXT,
+    parser_version TEXT NOT NULL,
+    raw_local_ref TEXT,
+    blob_id TEXT,
+    redaction_policy_id TEXT NOT NULL,
+    sync_status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY(blob_id) REFERENCES blobs(id) ON DELETE SET NULL,
+    FOREIGN KEY(redaction_policy_id) REFERENCES redaction_policies(id),
+    UNIQUE(id),
+    CHECK(sync_status IN ('local_only', 'pending_redaction', 'redacted', 'synced', 'blocked'))
+);
+
+CREATE TABLE source_cursors (
+    id TEXT PRIMARY KEY NOT NULL,
+    source TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    cursor_key TEXT NOT NULL,
+    cursor_value TEXT NOT NULL,
+    parser_version TEXT NOT NULL,
+    last_event_hash TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    UNIQUE(source, project_id, cursor_key)
+);
+
+CREATE TABLE redaction_policies (
+    id TEXT PRIMARY KEY NOT NULL,
+    version TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(version)
+);
+
+CREATE TABLE redaction_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    policy_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    blocking_findings INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(policy_id) REFERENCES redaction_policies(id),
+    FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
+    CHECK(status IN ('pending', 'passed', 'blocked', 'failed'))
+);
+
+CREATE TABLE redaction_spans (
+    id TEXT PRIMARY KEY NOT NULL,
+    run_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    replacement TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    blocks_sync INTEGER NOT NULL,
+    FOREIGN KEY(run_id) REFERENCES redaction_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
+    CHECK(start_byte <= end_byte),
+    CHECK(blocks_sync IN (0, 1))
+);
+
+CREATE TABLE search_documents (
+    id TEXT PRIMARY KEY NOT NULL,
+    event_id TEXT NOT NULL UNIQUE,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    document_text TEXT NOT NULL,
+    citation TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE summaries (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    selection_kind TEXT NOT NULL,
+    selection_ref TEXT,
+    agent TEXT NOT NULL,
+    model TEXT,
+    instructions_hash TEXT NOT NULL,
+    output_text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CHECK(selection_kind IN ('latest', 'all', 'session'))
+);
+
+CREATE TABLE dream_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL,
+    input_evidence_hash TEXT NOT NULL,
+    output_hash TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CHECK(status IN ('running', 'completed', 'failed'))
+);
+
+CREATE TABLE dream_candidates (
+    id TEXT PRIMARY KEY NOT NULL,
+    dream_run_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    claim TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(dream_run_id) REFERENCES dream_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    CHECK(status IN ('pending', 'accepted', 'rejected'))
+);
+
+CREATE TABLE learned_memory (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    claim TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    status TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    dream_run_id TEXT,
+    created_at TEXT NOT NULL,
+    superseded_by TEXT,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY(dream_run_id) REFERENCES dream_runs(id) ON DELETE SET NULL,
+    FOREIGN KEY(superseded_by) REFERENCES learned_memory(id) ON DELETE SET NULL,
+    CHECK(status IN ('active', 'pending', 'superseded', 'rejected'))
+);
+
+CREATE TABLE sync_manifests (
+    id TEXT PRIMARY KEY NOT NULL,
+    remote TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    manifest_version INTEGER NOT NULL,
+    root_hash TEXT NOT NULL,
+    redaction_policy_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY(redaction_policy_id) REFERENCES redaction_policies(id)
+);
+
+CREATE TABLE sync_manifest_entries (
+    id TEXT PRIMARY KEY NOT NULL,
+    manifest_id TEXT NOT NULL,
+    entry_kind TEXT NOT NULL,
+    entry_ref TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    sync_path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(manifest_id) REFERENCES sync_manifests(id) ON DELETE CASCADE,
+    UNIQUE(manifest_id, entry_kind, entry_ref)
+);
+
+CREATE INDEX idx_project_aliases_project_id ON project_aliases(project_id);
+CREATE INDEX idx_sessions_project_source ON sessions(project_id, source, started_at);
+CREATE INDEX idx_events_project_session_time ON events(project_id, session_id, timestamp);
+CREATE INDEX idx_events_source_session ON events(source, source_session_id, timestamp);
+CREATE INDEX idx_events_content_hash ON events(content_hash);
+CREATE INDEX idx_source_cursors_project ON source_cursors(project_id, source);
+CREATE INDEX idx_redaction_runs_blocking ON redaction_runs(status, blocking_findings);
+CREATE INDEX idx_search_documents_project_source ON search_documents(project_id, source);
+CREATE INDEX idx_learned_memory_project_status ON learned_memory(project_id, status);
+CREATE INDEX idx_sync_manifest_entries_manifest ON sync_manifest_entries(manifest_id);
+
+INSERT INTO redaction_policies (id, version, description, created_at)
+VALUES ('redaction-policy:v1:default', 'v1', 'Default deterministic redaction policy placeholder', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+PRAGMA user_version = 1;
+"#;
+
+#[derive(Debug)]
+pub struct Store {
+    conn: Connection,
+    db_path: PathBuf,
+}
+
+impl Store {
+    pub fn open_default() -> Result<Self> {
+        Self::open(default_db_path()?)
+    }
+
+    pub fn open(db_path: impl Into<PathBuf>) -> Result<Self> {
+        let db_path = db_path.into();
+        if let Some(parent) = db_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create store directory {}", parent.display()))?;
+        }
+        let mut conn = Connection::open(&db_path)
+            .with_context(|| format!("open mmr store {}", db_path.display()))?;
+        run_migrations(&mut conn)?;
+        Ok(Self { conn, db_path })
+    }
+
+    pub fn open_in_memory() -> Result<Self> {
+        let mut conn = Connection::open_in_memory().context("open in-memory mmr store")?;
+        run_migrations(&mut conn)?;
+        Ok(Self {
+            conn,
+            db_path: PathBuf::from(":memory:"),
+        })
+    }
+
+    pub fn info(&self) -> Result<StoreInfo> {
+        Ok(StoreInfo {
+            db_path: self.db_path.display().to_string(),
+            schema_version: self.schema_version()?,
+        })
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    pub fn schema_version(&self) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .context("read schema version")
+    }
+
+    pub fn ensure_project_link(&self, path: &Path) -> Result<ProjectRecord> {
+        let canonical_path = canonical_project_path(path)?;
+        let display_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(canonical_path.as_str())
+            .to_string();
+        let project_id = project_id(&canonical_path);
+        let now = now_rfc3339()?;
+
+        self.conn.execute(
+            "INSERT INTO projects (id, canonical_path, display_name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(canonical_path) DO UPDATE SET
+                display_name = excluded.display_name,
+                updated_at = excluded.updated_at",
+            params![project_id, canonical_path, display_name, now],
+        )?;
+
+        let link_id = format!("link:v1:{}", hash_hex(canonical_path.as_bytes()));
+        self.conn.execute(
+            "INSERT INTO project_links (id, project_id, canonical_path, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(canonical_path) DO UPDATE SET
+                project_id = excluded.project_id,
+                updated_at = excluded.updated_at",
+            params![link_id, project_id, canonical_path, now],
+        )?;
+
+        self.conn.execute(
+            "INSERT INTO project_aliases (id, project_id, source, alias, alias_kind, created_at)
+             VALUES (?1, ?2, 'local', ?3, 'canonical_path', ?4)
+             ON CONFLICT(source, alias) DO NOTHING",
+            params![
+                format!(
+                    "alias:v1:{}",
+                    hash_hex(format!("local:{canonical_path}").as_bytes())
+                ),
+                project_id,
+                canonical_path,
+                now
+            ],
+        )?;
+
+        self.project_by_id(&project_id)
+    }
+
+    pub fn project_by_id(&self, project_id: &str) -> Result<ProjectRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, canonical_path, display_name FROM projects WHERE id = ?1",
+                params![project_id],
+                |row| {
+                    Ok(ProjectRecord {
+                        id: row.get(0)?,
+                        canonical_path: row.get(1)?,
+                        display_name: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("project not found: {project_id}"))
+    }
+
+    pub fn project_by_path(&self, path: &Path) -> Result<Option<ProjectRecord>> {
+        let canonical_path = canonical_project_path(path)?;
+        self.conn
+            .query_row(
+                "SELECT id, canonical_path, display_name FROM projects WHERE canonical_path = ?1",
+                params![canonical_path],
+                |row| {
+                    Ok(ProjectRecord {
+                        id: row.get(0)?,
+                        canonical_path: row.get(1)?,
+                        display_name: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .context("lookup project by path")
+    }
+
+    pub fn upsert_source(&self, name: &str, adapter_version: &str) -> Result<String> {
+        let id = format!("source:v1:{}", hash_hex(name.as_bytes()));
+        let now = now_rfc3339()?;
+        self.conn.execute(
+            "INSERT INTO sources (id, name, adapter_version, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 1, ?4, ?4)
+             ON CONFLICT(name) DO UPDATE SET
+                adapter_version = excluded.adapter_version,
+                enabled = 1,
+                updated_at = excluded.updated_at",
+            params![id, name, adapter_version, now],
+        )?;
+        Ok(id)
+    }
+
+    pub fn upsert_session(
+        &self,
+        project_id: &str,
+        source: &str,
+        source_session_id: &str,
+        started_at: &str,
+        raw_local_ref: Option<&str>,
+    ) -> Result<SessionRecord> {
+        self.upsert_source(source, "manual")?;
+        let id = session_id(project_id, source, source_session_id);
+        let now = now_rfc3339()?;
+        self.conn.execute(
+            "INSERT INTO sessions
+                (id, project_id, source, source_session_id, started_at, raw_local_ref, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+             ON CONFLICT(project_id, source, source_session_id) DO UPDATE SET
+                started_at = excluded.started_at,
+                raw_local_ref = COALESCE(excluded.raw_local_ref, sessions.raw_local_ref),
+                updated_at = excluded.updated_at",
+            params![id, project_id, source, source_session_id, started_at, raw_local_ref, now],
+        )?;
+        self.session_by_id(&id)
+    }
+
+    pub fn session_by_id(&self, session_id: &str) -> Result<SessionRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, project_id, source, source_session_id FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| {
+                    Ok(SessionRecord {
+                        id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        source: row.get(2)?,
+                        source_session_id: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("session not found: {session_id}"))
+    }
+
+    pub fn insert_blob_ref(
+        &self,
+        kind: &str,
+        media_type: &str,
+        storage_ref: &str,
+        content_hash: &str,
+        byte_len: i64,
+    ) -> Result<BlobRecord> {
+        let id = format!(
+            "blob:v1:{}",
+            hash_hex(format!("{content_hash}:{storage_ref}").as_bytes())
+        );
+        let now = now_rfc3339()?;
+        self.conn.execute(
+            "INSERT INTO blobs (id, kind, media_type, content_hash, storage_ref, byte_len, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(content_hash, storage_ref) DO NOTHING",
+            params![id, kind, media_type, content_hash, storage_ref, byte_len, now],
+        )?;
+        self.blob_by_id(&id)
+    }
+
+    pub fn blob_by_id(&self, blob_id: &str) -> Result<BlobRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, kind, media_type, content_hash, storage_ref FROM blobs WHERE id = ?1",
+                params![blob_id],
+                |row| {
+                    Ok(BlobRecord {
+                        id: row.get(0)?,
+                        kind: row.get(1)?,
+                        media_type: row.get(2)?,
+                        content_hash: row.get(3)?,
+                        storage_ref: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("blob not found: {blob_id}"))
+    }
+
+    pub fn insert_event(&mut self, project_id: &str, event: &NewEvent) -> Result<EventRecord> {
+        let id = event.event_id();
+        self.insert_event_in_transaction(project_id, event, None)?;
+
+        self.event_by_id(&id)
+    }
+
+    fn insert_event_in_transaction(
+        &mut self,
+        project_id: &str,
+        event: &NewEvent,
+        fail_after_session: Option<&str>,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let now = now_rfc3339()?;
+        let source_id = format!("source:v1:{}", hash_hex(event.source.as_bytes()));
+        tx.execute(
+            "INSERT INTO sources (id, name, adapter_version, enabled, created_at, updated_at)
+             VALUES (?1, ?2, 'manual', 1, ?3, ?3)
+             ON CONFLICT(name) DO UPDATE SET
+                enabled = 1,
+                updated_at = excluded.updated_at",
+            params![source_id, event.source, now],
+        )?;
+
+        let session_id = session_id(project_id, &event.source, &event.source_session_id);
+        tx.execute(
+            "INSERT INTO sessions
+                (id, project_id, source, source_session_id, started_at, raw_local_ref, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+             ON CONFLICT(project_id, source, source_session_id) DO UPDATE SET
+                started_at = excluded.started_at,
+                raw_local_ref = COALESCE(excluded.raw_local_ref, sessions.raw_local_ref),
+                updated_at = excluded.updated_at",
+            params![
+                session_id,
+                project_id,
+                event.source,
+                event.source_session_id,
+                event.timestamp,
+                event.raw_local_ref,
+                now
+            ],
+        )?;
+
+        if let Some(message) = fail_after_session {
+            bail!("{message}");
+        }
+
+        tx.execute(
+            "INSERT INTO events
+                (id, project_id, session_id, source, source_session_id, source_event_id,
+                 event_type, role, timestamp, content_text, content_hash, parent_hash,
+                 parser_version, raw_local_ref, blob_id, redaction_policy_id, sync_status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ON CONFLICT(id) DO NOTHING",
+            params![
+                event.event_id(),
+                project_id,
+                session_id,
+                event.source,
+                event.source_session_id,
+                event.source_event_id,
+                event.event_type,
+                event.role,
+                event.timestamp,
+                event.content_text,
+                event.content_hash(),
+                event.parent_hash,
+                event.parser_version,
+                event.raw_local_ref,
+                event.blob_id,
+                event.redaction_policy_id,
+                event.sync_status,
+                now
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn event_by_id(&self, event_id: &str) -> Result<EventRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, project_id, session_id, source, source_event_id, event_type, role,
+                        timestamp, content_text, content_hash, parent_hash, parser_version,
+                        raw_local_ref, sync_status
+                 FROM events WHERE id = ?1",
+                params![event_id],
+                |row| {
+                    Ok(EventRecord {
+                        id: row.get(0)?,
+                        project_id: row.get(1)?,
+                        session_id: row.get(2)?,
+                        source: row.get(3)?,
+                        source_event_id: row.get(4)?,
+                        event_type: row.get(5)?,
+                        role: row.get(6)?,
+                        timestamp: row.get(7)?,
+                        content_text: row.get(8)?,
+                        content_hash: row.get(9)?,
+                        parent_hash: row.get(10)?,
+                        parser_version: row.get(11)?,
+                        raw_local_ref: row.get(12)?,
+                        sync_status: row.get(13)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("event not found: {event_id}"))
+    }
+
+    pub fn events_for_project(
+        &self,
+        project_id: &str,
+        source: Option<&str>,
+        source_session_id: Option<&str>,
+    ) -> Result<Vec<EventRecord>> {
+        let mut sql = String::from(
+            "SELECT id, project_id, session_id, source, source_event_id, event_type, role,
+                    timestamp, content_text, content_hash, parent_hash, parser_version,
+                    raw_local_ref, sync_status
+             FROM events
+             WHERE project_id = ?1",
+        );
+        if source.is_some() {
+            sql.push_str(" AND source = ?2");
+        }
+        if source_session_id.is_some() {
+            sql.push_str(if source.is_some() {
+                " AND source_session_id = ?3"
+            } else {
+                " AND source_session_id = ?2"
+            });
+        }
+        sql.push_str(" ORDER BY timestamp ASC, id ASC");
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = match (source, source_session_id) {
+            (Some(source), Some(source_session_id)) => {
+                stmt.query(params![project_id, source, source_session_id])?
+            }
+            (Some(source), None) => stmt.query(params![project_id, source])?,
+            (None, Some(source_session_id)) => {
+                stmt.query(params![project_id, source_session_id])?
+            }
+            (None, None) => stmt.query(params![project_id])?,
+        };
+
+        let mut events = Vec::new();
+        while let Some(row) = rows.next()? {
+            events.push(EventRecord {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                session_id: row.get(2)?,
+                source: row.get(3)?,
+                source_event_id: row.get(4)?,
+                event_type: row.get(5)?,
+                role: row.get(6)?,
+                timestamp: row.get(7)?,
+                content_text: row.get(8)?,
+                content_hash: row.get(9)?,
+                parent_hash: row.get(10)?,
+                parser_version: row.get(11)?,
+                raw_local_ref: row.get(12)?,
+                sync_status: row.get(13)?,
+            });
+        }
+        Ok(events)
+    }
+
+    pub fn set_source_cursor(
+        &self,
+        project_id: &str,
+        source: &str,
+        cursor_key: &str,
+        cursor_value: &str,
+        parser_version: &str,
+        last_event_hash: Option<&str>,
+    ) -> Result<()> {
+        let id = format!(
+            "cursor:v1:{}",
+            hash_hex(format!("{source}:{project_id}:{cursor_key}").as_bytes())
+        );
+        let now = now_rfc3339()?;
+        self.conn.execute(
+            "INSERT INTO source_cursors
+                (id, source, project_id, cursor_key, cursor_value, parser_version, last_event_hash, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(source, project_id, cursor_key) DO UPDATE SET
+                cursor_value = excluded.cursor_value,
+                parser_version = excluded.parser_version,
+                last_event_hash = excluded.last_event_hash,
+                updated_at = excluded.updated_at",
+            params![id, source, project_id, cursor_key, cursor_value, parser_version, last_event_hash, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn source_cursor(
+        &self,
+        project_id: &str,
+        source: &str,
+        cursor_key: &str,
+    ) -> Result<Option<SourceCursorRecord>> {
+        self.conn
+            .query_row(
+                "SELECT source, project_id, cursor_key, cursor_value, parser_version, last_event_hash
+                 FROM source_cursors
+                 WHERE project_id = ?1 AND source = ?2 AND cursor_key = ?3",
+                params![project_id, source, cursor_key],
+                |row| {
+                    Ok(SourceCursorRecord {
+                        source: row.get(0)?,
+                        project_id: row.get(1)?,
+                        cursor_key: row.get(2)?,
+                        cursor_value: row.get(3)?,
+                        parser_version: row.get(4)?,
+                        last_event_hash: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .context("read source cursor")
+    }
+
+    pub fn event_count(&self) -> Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .context("count events")
+    }
+
+    pub fn schema_table_names(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .context("list table names")
+    }
+
+    #[cfg(test)]
+    fn insert_event_then_fail(&mut self, project_id: &str, event: &NewEvent) -> Result<()> {
+        self.insert_event_in_transaction(project_id, event, Some("intentional rollback"))
+    }
+}
+
+pub fn default_db_path() -> Result<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::data_dir)
+        .ok_or_else(|| anyhow!("could not resolve data directory for mmr store"))?;
+    Ok(base.join("mmr").join("mmr.db"))
+}
+
+pub fn content_hash(content: &str) -> String {
+    format!("sha256:{}", hash_hex(content.as_bytes()))
+}
+
+pub fn event_id(event: &NewEvent) -> String {
+    let source_event_id = event.source_event_id.as_deref().unwrap_or("");
+    let parent_hash = event.parent_hash.as_deref().unwrap_or("");
+    let identity = format!(
+        "{{\"source\":\"{}\",\"source_session_id\":\"{}\",\"source_event_id\":\"{}\",\"event_type\":\"{}\",\"role\":\"{}\",\"timestamp\":\"{}\",\"content_hash\":\"{}\",\"parent_hash\":\"{}\",\"parser_version\":\"{}\"}}",
+        escape_json_fragment(&event.source),
+        escape_json_fragment(&event.source_session_id),
+        escape_json_fragment(source_event_id),
+        escape_json_fragment(&event.event_type),
+        escape_json_fragment(&event.role),
+        escape_json_fragment(&event.timestamp),
+        escape_json_fragment(&event.content_hash()),
+        escape_json_fragment(parent_hash),
+        escape_json_fragment(&event.parser_version),
+    );
+    format!("evt:v1:{}", hash_hex(identity.as_bytes()))
+}
+
+fn run_migrations(conn: &mut Connection) -> Result<()> {
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            checksum TEXT NOT NULL
+         );",
+    )?;
+
+    for migration in MIGRATIONS {
+        let checksum = content_hash(migration.sql);
+        let existing_checksum = conn
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE version = ?1",
+                params![migration.version],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        if let Some(existing_checksum) = existing_checksum {
+            if existing_checksum != checksum {
+                bail!(
+                    "migration checksum drift for version {}: expected {}, found {}",
+                    migration.version,
+                    existing_checksum,
+                    checksum
+                );
+            }
+            continue;
+        }
+
+        let tx = conn.transaction()?;
+        tx.execute_batch(migration.sql)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at, checksum)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![migration.version, migration.name, now_rfc3339()?, checksum],
+        )?;
+        tx.commit()?;
+    }
+
+    Ok(())
+}
+
+fn canonical_project_path(path: &Path) -> Result<String> {
+    Ok(path
+        .canonicalize()
+        .with_context(|| format!("canonicalize project path {}", path.display()))?
+        .to_string_lossy()
+        .into_owned())
+}
+
+fn project_id(canonical_path: &str) -> String {
+    format!("proj:v1:{}", hash_hex(canonical_path.as_bytes()))
+}
+
+fn session_id(project_id: &str, source: &str, source_session_id: &str) -> String {
+    format!(
+        "session:v1:{}",
+        hash_hex(format!("{project_id}:{source}:{source_session_id}").as_bytes())
+    )
+}
+
+fn now_rfc3339() -> Result<String> {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .context("format timestamp")
+}
+
+fn hash_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn escape_json_fragment(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REQUIRED_TABLES: &[&str] = &[
+        "blobs",
+        "dream_candidates",
+        "dream_runs",
+        "events",
+        "learned_memory",
+        "project_aliases",
+        "project_links",
+        "projects",
+        "redaction_policies",
+        "redaction_runs",
+        "redaction_spans",
+        "schema_migrations",
+        "search_documents",
+        "sessions",
+        "source_cursors",
+        "sources",
+        "summaries",
+        "sync_manifest_entries",
+        "sync_manifests",
+    ];
+
+    #[test]
+    fn migrations_replay_from_empty_database() {
+        let store = Store::open_in_memory().expect("store");
+
+        assert_eq!(
+            store.schema_version().expect("schema"),
+            LATEST_SCHEMA_VERSION
+        );
+        let tables = store.schema_table_names().expect("tables");
+        for table in REQUIRED_TABLES {
+            assert!(
+                tables.iter().any(|name| name == table),
+                "missing table {table}"
+            );
+        }
+    }
+
+    #[test]
+    fn migrations_are_idempotent_and_detect_checksum_drift() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let db_path = tmp.path().join("mmr.db");
+        let store = Store::open(&db_path).expect("first open");
+        assert_eq!(
+            store.schema_version().expect("schema"),
+            LATEST_SCHEMA_VERSION
+        );
+        drop(store);
+
+        let reopened = Store::open(&db_path).expect("second open");
+        assert_eq!(
+            reopened.schema_version().expect("schema"),
+            LATEST_SCHEMA_VERSION
+        );
+        reopened
+            .conn
+            .execute(
+                "UPDATE schema_migrations SET checksum = 'sha256:bad' WHERE version = 1",
+                [],
+            )
+            .expect("drift checksum");
+        drop(reopened);
+
+        let err = Store::open(&db_path).expect_err("checksum drift should fail");
+        assert!(err.to_string().contains("migration checksum drift"));
+    }
+
+    #[test]
+    fn project_links_work_for_non_git_directories_and_lookup_by_id_or_path() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_dir = tmp.path().join("plain-project");
+        fs::create_dir_all(&project_dir).expect("project dir");
+        let store = Store::open_in_memory().expect("store");
+
+        let linked = store.ensure_project_link(&project_dir).expect("link");
+        assert!(linked.id.starts_with("proj:v1:"));
+        assert_eq!(store.project_by_id(&linked.id).expect("by id"), linked);
+        assert_eq!(
+            store
+                .project_by_path(&project_dir)
+                .expect("by path")
+                .expect("project"),
+            linked
+        );
+    }
+
+    #[test]
+    fn event_ids_use_content_parent_and_parser_version() {
+        let base = NewEvent::new(
+            "codex",
+            "sess-1",
+            "message",
+            "assistant",
+            "2026-05-24T09:00:00Z",
+            "same content",
+            "codex-v1",
+        )
+        .with_source_event_id("event-1");
+        let same = base.clone();
+        let different_parent = base.clone().with_parent_hash("sha256:parent");
+        let different_parser = NewEvent {
+            parser_version: "codex-v2".to_string(),
+            ..base.clone()
+        };
+
+        assert_eq!(base.content_hash(), same.content_hash());
+        assert_eq!(base.event_id(), same.event_id());
+        assert_ne!(base.event_id(), different_parent.event_id());
+        assert_ne!(base.event_id(), different_parser.event_id());
+    }
+
+    #[test]
+    fn replaying_same_events_is_idempotent() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_dir = tmp.path().join("memory-fabric");
+        fs::create_dir_all(&project_dir).expect("project dir");
+        let mut store = Store::open_in_memory().expect("store");
+        let project = store.ensure_project_link(&project_dir).expect("project");
+        let event = NewEvent::new(
+            "codex",
+            "codex-mvp-1",
+            "message",
+            "user",
+            "2026-05-24T09:00:05Z",
+            "Add a source-neutral memory store.",
+            "codex-jsonl-v1",
+        )
+        .with_source_event_id("line-2")
+        .with_raw_local_ref("tests/fixtures/memory_fabric/codex_session.jsonl:2");
+
+        let first = store
+            .insert_event(&project.id, &event)
+            .expect("first insert");
+        let second = store
+            .insert_event(&project.id, &event)
+            .expect("second insert");
+        assert_eq!(first.id, second.id);
+        assert_eq!(store.event_count().expect("count"), 1);
+
+        let events = store
+            .events_for_project(&project.id, Some("codex"), Some("codex-mvp-1"))
+            .expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].raw_local_ref.as_deref(),
+            event.raw_local_ref.as_deref()
+        );
+    }
+
+    #[test]
+    fn store_api_covers_query_cursor_blob_and_rollback() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_dir = tmp.path().join("memory-fabric");
+        fs::create_dir_all(&project_dir).expect("project dir");
+        let mut store = Store::open_in_memory().expect("store");
+        let project = store.ensure_project_link(&project_dir).expect("project");
+        let blob = store
+            .insert_blob_ref(
+                "raw_local_ref",
+                "application/jsonl",
+                "/private/raw/codex_session.jsonl",
+                &content_hash("redacted fixture bytes"),
+                1024,
+            )
+            .expect("blob");
+        let event = NewEvent::new(
+            "codex",
+            "codex-mvp-1",
+            "message",
+            "assistant",
+            "2026-05-24T09:01:00Z",
+            "I will define the store contract before wiring importers.",
+            "codex-jsonl-v1",
+        )
+        .with_source_event_id("line-3")
+        .with_blob_id(blob.id.clone());
+
+        let inserted = store.insert_event(&project.id, &event).expect("event");
+        assert_eq!(inserted.source, "codex");
+        assert_eq!(inserted.content_hash, event.content_hash());
+
+        store
+            .set_source_cursor(
+                &project.id,
+                "codex",
+                "tests/fixtures/memory_fabric/codex_session.jsonl",
+                "offset:3",
+                "codex-jsonl-v1",
+                Some(inserted.content_hash.as_str()),
+            )
+            .expect("cursor");
+        let cursor = store
+            .source_cursor(
+                &project.id,
+                "codex",
+                "tests/fixtures/memory_fabric/codex_session.jsonl",
+            )
+            .expect("cursor")
+            .expect("cursor record");
+        assert_eq!(cursor.cursor_value, "offset:3");
+        assert_eq!(cursor.parser_version, "codex-jsonl-v1");
+        assert_eq!(
+            cursor.last_event_hash.as_deref(),
+            Some(inserted.content_hash.as_str())
+        );
+
+        let failing_event = NewEvent::new(
+            "codex",
+            "codex-mvp-rollback",
+            "message",
+            "user",
+            "2026-05-24T09:02:00Z",
+            "rollback me",
+            "codex-jsonl-v1",
+        )
+        .with_source_event_id("line-4");
+        assert!(
+            store
+                .insert_event_then_fail(&project.id, &failing_event)
+                .expect_err("rollback")
+                .to_string()
+                .contains("intentional rollback")
+        );
+        assert!(store.event_by_id(&failing_event.event_id()).is_err());
+    }
+
+    #[test]
+    fn default_db_path_respects_xdg_data_home() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", tmp.path());
+        }
+        let path = default_db_path().expect("path");
+        assert_eq!(path, tmp.path().join("mmr").join("mmr.db"));
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+    }
+}

@@ -1,3 +1,5 @@
+use mmr::store::{LATEST_SCHEMA_VERSION, Store};
+
 const FIXTURES: &[(&str, &str)] = &[
     (
         "codex_session",
@@ -19,6 +21,28 @@ const FIXTURES: &[(&str, &str)] = &[
         "pii_heavy_sample",
         include_str!("fixtures/memory_fabric/pii_heavy_sample.jsonl"),
     ),
+];
+
+const NHL_269_REQUIRED_TABLES: &[&str] = &[
+    "blobs",
+    "dream_candidates",
+    "dream_runs",
+    "events",
+    "learned_memory",
+    "project_aliases",
+    "project_links",
+    "projects",
+    "redaction_policies",
+    "redaction_runs",
+    "redaction_spans",
+    "schema_migrations",
+    "search_documents",
+    "sessions",
+    "source_cursors",
+    "sources",
+    "summaries",
+    "sync_manifest_entries",
+    "sync_manifests",
 ];
 
 const MALFORMED_MIXED_FIXTURE: &str =
@@ -110,6 +134,43 @@ fn memory_fabric_non_goal_commands_are_not_public() {
 }
 
 #[test]
+fn db_info_smoke_links_non_git_project_and_round_trips_synthetic_event() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "__db-info",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--smoke-event",
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("run mmr");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("stdout JSON");
+    assert_eq!(json["schema_version"].as_i64().unwrap(), 1);
+    assert_eq!(json["event_count"].as_i64().unwrap(), 1);
+    assert!(json["project_id"].as_str().unwrap().starts_with("proj:v1:"));
+    assert_eq!(
+        json["db_path"].as_str().unwrap(),
+        data_home.join("mmr").join("mmr.db").to_str().unwrap()
+    );
+}
+
+#[test]
 #[ignore = "pending NHL-277: implement link command"]
 fn link_cli_contract_is_implemented() {
     pending_contract(
@@ -182,20 +243,38 @@ fn dream_cli_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-269: implement src/store schema validation"]
 fn schema_validation_contract_is_implemented() {
-    pending_contract(
-        "NHL-269",
-        "validate projects, aliases, sources, sessions, events, blobs, cursors, redactions, search documents, summaries, dream runs, learned memory, and sync manifests",
+    let store = Store::open_in_memory().expect("store");
+    assert_eq!(
+        store.schema_version().expect("schema"),
+        LATEST_SCHEMA_VERSION
     );
+
+    let tables = store.schema_table_names().expect("tables");
+    for table in NHL_269_REQUIRED_TABLES {
+        assert!(
+            tables.iter().any(|name| name == table),
+            "missing NHL-269 table {table}"
+        );
+    }
 }
 
 #[test]
-#[ignore = "pending NHL-269: implement migration replay tests"]
 fn migration_replay_contract_is_implemented() {
-    pending_contract(
-        "NHL-269",
-        "apply every migration from an empty database and reject checksum drift",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let db_path = tmp.path().join("mmr.db");
+
+    let first = Store::open(&db_path).expect("first migration replay");
+    assert_eq!(
+        first.schema_version().expect("schema"),
+        LATEST_SCHEMA_VERSION
+    );
+    drop(first);
+
+    let second = Store::open(&db_path).expect("idempotent migration replay");
+    assert_eq!(
+        second.schema_version().expect("schema"),
+        LATEST_SCHEMA_VERSION
     );
 }
 
