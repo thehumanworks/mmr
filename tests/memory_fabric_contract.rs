@@ -1,6 +1,6 @@
 use mmr::capture::{
-    ClaudeAdapter, CodexAdapter, EventBoundary, FileWatcher, WatchState, event_hash_set,
-    parse_claude_jsonl, parse_codex_jsonl, parse_fixture_jsonl,
+    ClaudeAdapter, CodexAdapter, CursorAdapter, EventBoundary, FileWatcher, WatchState,
+    event_hash_set, parse_claude_jsonl, parse_codex_jsonl, parse_cursor_jsonl, parse_fixture_jsonl,
 };
 use mmr::store::{LATEST_SCHEMA_VERSION, Store};
 use std::io::Write;
@@ -22,6 +22,10 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "claude_code_session",
         include_str!("fixtures/memory_fabric/claude_code_session.jsonl"),
+    ),
+    (
+        "cursor_agent_session",
+        include_str!("fixtures/memory_fabric/cursor_agent_session.jsonl"),
     ),
     (
         "human_note",
@@ -65,6 +69,8 @@ const MALFORMED_CODEX_ROLLOUT: &str =
     include_str!("fixtures/memory_fabric/codex_rollout_malformed_tail.jsonl");
 const MALFORMED_CLAUDE_CODE: &str =
     include_str!("fixtures/memory_fabric/claude_code_malformed_tail.jsonl");
+const MALFORMED_CURSOR_AGENT: &str =
+    include_str!("fixtures/memory_fabric/cursor_agent_malformed_tail.jsonl");
 
 const MVP_NON_GOAL_COMMANDS: &[&str] = &[
     "init",
@@ -83,6 +89,15 @@ fn encode_claude_project_name(path: &std::path::Path) -> String {
         "-".to_string()
     } else {
         format!("-{}", path.trim_start_matches('/').replace('/', "-"))
+    }
+}
+
+fn encode_cursor_project_name(path: &std::path::Path) -> String {
+    let path = path.to_str().expect("project path UTF-8");
+    if path == "/" {
+        String::new()
+    } else {
+        path.trim_start_matches('/').replace('/', "-")
     }
 }
 
@@ -544,6 +559,146 @@ fn claude_active_session_watcher_uses_complete_rows_only() {
         &String::from_utf8(next.bytes).expect("next delta UTF-8"),
     )
     .expect("parse completed claude row");
+    assert_eq!(next_batch.events.len(), 1);
+    assert_eq!(next_batch.events[0].boundary, EventBoundary::AssistantTurn);
+}
+
+#[test]
+fn cursor_importer_contract_is_implemented() {
+    let path = std::path::Path::new("tests/fixtures/memory_fabric/cursor_agent_session.jsonl");
+    let batch = parse_cursor_jsonl(
+        "cursor-agent-rollout-1",
+        path,
+        include_str!("fixtures/memory_fabric/cursor_agent_session.jsonl"),
+    )
+    .expect("parse cursor agent rollout");
+
+    assert_eq!(batch.source, "cursor");
+    assert_eq!(batch.parser_version, CursorAdapter::PARSER_VERSION);
+    assert_eq!(batch.events.len(), 6);
+    assert_eq!(event_hash_set(&batch.events).len(), 6);
+    assert!(batch.warnings.is_empty());
+    assert!(batch.events.iter().all(|event| {
+        event.source_session_id == "cursor-agent-rollout-1"
+            && event.parser_version == CursorAdapter::PARSER_VERSION
+            && event.raw_local_ref.contains("cursor_agent_session.jsonl")
+    }));
+    assert_eq!(batch.events[0].boundary, EventBoundary::UserTurn);
+    assert_eq!(batch.events[1].boundary, EventBoundary::AssistantTurn);
+    assert_eq!(batch.events[2].boundary, EventBoundary::Compaction);
+    assert_eq!(batch.events[3].boundary, EventBoundary::ToolCall);
+    assert_eq!(batch.events[4].boundary, EventBoundary::ToolResult);
+    assert_eq!(batch.events[5].boundary, EventBoundary::SessionEnd);
+    assert!(batch.events[3].content_text.contains("shell"));
+    assert!(
+        !batch.events[3]
+            .content_text
+            .contains("/Users/test/memory-fabric")
+    );
+    assert!(batch.events[3].content_text.contains("[LOCAL_PATH]"));
+    assert!(batch.events[4].content_text.contains("CursorAdapter"));
+    assert!(
+        batch.cursor_updates[0]
+            .cursor_value
+            .starts_with("line:3;bytes:")
+    );
+
+    let malformed = parse_cursor_jsonl(
+        "cursor-agent-bad",
+        std::path::Path::new("tests/fixtures/memory_fabric/cursor_agent_malformed_tail.jsonl"),
+        MALFORMED_CURSOR_AGENT,
+    )
+    .expect("parse malformed cursor rollout");
+    assert_eq!(malformed.events.len(), 2);
+    assert_eq!(malformed.warnings.len(), 1);
+    assert!(
+        malformed.warnings[0]
+            .message
+            .contains("skipped malformed Cursor JSONL row")
+    );
+
+    let partial_tail = "{\"role\":\"user\",\"timestamp\":\"2026-05-24T14:20:00Z\",\"id\":\"u-cursor-partial\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Keep complete Cursor rows.\"}]}}\n{\"role\":\"assistant\",\"timestamp\":\"2026-05-24T14:20:05Z\",\"message\":";
+    let partial = parse_cursor_jsonl(
+        "cursor-agent-partial",
+        std::path::Path::new("tests/fixtures/memory_fabric/cursor_agent_partial_tail.jsonl"),
+        partial_tail,
+    )
+    .expect("parse partial cursor rollout");
+    assert_eq!(partial.events.len(), 1);
+    assert!(partial.warnings.is_empty());
+    let consumed_bytes = partial_tail.rfind('\n').expect("complete row newline") + 1;
+    assert_eq!(
+        partial.cursor_updates[0].cursor_value,
+        format!("line:1;bytes:{consumed_bytes}")
+    );
+
+    let flat = parse_cursor_jsonl(
+        "cursor-flat",
+        std::path::Path::new("tests/fixtures/memory_fabric/cursor_agent_flat.jsonl"),
+        r#"{"role":"user","content":"Flat Cursor prompt.","timestamp":"2026-05-24T14:25:00Z","id":"flat-u"}
+{"role":"assistant","content":{"text":"Flat Cursor answer."},"timestamp":"2026-05-24T14:25:05Z","id":"flat-a"}
+{"role":"mystery","payload":{"cwd":"/Users/test/memory-fabric","path":"/Users/test/memory-fabric/file.txt"},"timestamp":"2026-05-24T14:25:10Z","id":"flat-unknown"}
+"#,
+    )
+    .expect("parse flat cursor rollout");
+    assert_eq!(flat.events.len(), 3);
+    assert_eq!(flat.events[0].boundary, EventBoundary::UserTurn);
+    assert_eq!(flat.events[1].boundary, EventBoundary::AssistantTurn);
+    assert_eq!(flat.events[2].boundary, EventBoundary::UnknownRawEvent);
+    assert!(
+        flat.events
+            .iter()
+            .all(|event| !event.content_text.contains("/Users/test/memory-fabric"))
+    );
+}
+
+#[test]
+fn cursor_active_session_watcher_uses_complete_rows_only() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let path = tmp.path().join("active-cursor.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"role":"user","timestamp":"2026-05-24T14:30:00Z","id":"u-active-cursor","message":{"content":[{"type":"text","text":"Watch Cursor rows."}]}}
+{"role":"assistant","timestamp":"2026-05-24T14:30:05Z","message":{"content":[{"type":"text","text":"#,
+    )
+    .expect("write partial active cursor");
+
+    let delta = FileWatcher::read_delta(&WatchState {
+        path: path.clone(),
+        offset: 0,
+        fingerprint: None,
+    })
+    .expect("partial delta");
+    assert!(delta.partial_tail);
+    let batch = parse_cursor_jsonl(
+        "active-cursor",
+        &path,
+        &String::from_utf8(delta.bytes).expect("delta UTF-8"),
+    )
+    .expect("parse complete cursor rows");
+    assert_eq!(batch.events.len(), 1);
+    assert_eq!(batch.events[0].boundary, EventBoundary::UserTurn);
+
+    std::fs::write(
+        &path,
+        r#"{"role":"user","timestamp":"2026-05-24T14:30:00Z","id":"u-active-cursor","message":{"content":[{"type":"text","text":"Watch Cursor rows."}]}}
+{"role":"assistant","timestamp":"2026-05-24T14:30:05Z","id":"a-active-cursor","message":{"content":[{"type":"text","text":"Assistant row is complete."}]}}
+"#,
+    )
+    .expect("complete active cursor");
+    let next = FileWatcher::read_delta(&WatchState {
+        path: path.clone(),
+        offset: delta.new_offset,
+        fingerprint: Some(delta.new_fingerprint),
+    })
+    .expect("completed delta");
+    assert!(!next.partial_tail);
+    let next_batch = parse_cursor_jsonl(
+        "active-cursor",
+        &path,
+        &String::from_utf8(next.bytes).expect("next delta UTF-8"),
+    )
+    .expect("parse completed cursor row");
     assert_eq!(next_batch.events.len(), 1);
     assert_eq!(next_batch.events[0].boundary, EventBoundary::AssistantTurn);
 }
@@ -1586,6 +1741,266 @@ fn claude_import_cli_contract_is_implemented() {
         .expect("cursor");
     assert_eq!(cursor.parser_version, ClaudeAdapter::PARSER_VERSION);
     assert!(cursor.last_event_hash.is_some());
+}
+
+#[test]
+fn cursor_import_cli_contract_is_implemented() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-cursor-project");
+    let other_project = tmp.path().join("other-cursor-project");
+    let cursor_root = home.join(".cursor");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::create_dir_all(&other_project).expect("create other project");
+    let project = std::fs::canonicalize(&project).expect("canonical project");
+    let other_project = std::fs::canonicalize(&other_project).expect("canonical other project");
+    let sessions_dir = cursor_root
+        .join("projects")
+        .join(encode_cursor_project_name(&project))
+        .join("agent-transcripts")
+        .join("cursor-agent-rollout-1");
+    let other_sessions_dir = cursor_root
+        .join("projects")
+        .join(encode_cursor_project_name(&other_project))
+        .join("agent-transcripts")
+        .join("cursor-agent-other");
+    std::fs::create_dir_all(&sessions_dir).expect("create cursor sessions");
+    std::fs::create_dir_all(&other_sessions_dir).expect("create other cursor sessions");
+    let matching_rollout = include_str!("fixtures/memory_fabric/cursor_agent_session.jsonl")
+        .replace(
+            "/Users/test/memory-fabric",
+            project.to_str().expect("project path UTF-8"),
+        );
+    std::fs::write(sessions_dir.join("session.jsonl"), matching_rollout)
+        .expect("write cursor rollout");
+    std::fs::write(
+        sessions_dir.join("flat.jsonl"),
+        r#"{"role":"user","content":"Flat Cursor import found by encoded project directory.","timestamp":"2026-05-24T14:40:00Z","id":"flat-cursor-u"}
+"#,
+    )
+    .expect("write flat cursor rollout");
+    let unrelated_rollout = include_str!("fixtures/memory_fabric/cursor_agent_session.jsonl")
+        .replace(
+            "Plan the Cursor importer.",
+            "Unrelated Cursor project should not import.",
+        );
+    std::fs::write(
+        other_sessions_dir.join("other-session.jsonl"),
+        unrelated_rollout,
+    )
+    .expect("write unrelated cursor rollout");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "import",
+            "--source",
+            "cursor",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            cursor_root.to_str().expect("cursor root UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("cursor import");
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("import JSON");
+    assert_eq!(json["source"], "cursor");
+    assert_eq!(json["discovered_sessions"].as_u64().unwrap(), 2);
+    assert_eq!(json["imported_events"].as_u64().unwrap(), 7);
+    assert!(json["warnings"].as_array().unwrap().is_empty());
+
+    let replay = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "import",
+            "--source",
+            "cursor",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            cursor_root.to_str().expect("cursor root UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("cursor import replay");
+    assert!(
+        replay.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let replay_json: serde_json::Value =
+        serde_json::from_slice(&replay.stdout).expect("replay JSON");
+    assert_eq!(replay_json["imported_events"].as_u64().unwrap(), 0);
+
+    let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "cursor",
+            "search",
+            "CursorAdapter",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search imported cursor");
+    assert!(
+        search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&search.stderr)
+    );
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("search JSON");
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(search_json["results"][0]["source"], "cursor");
+
+    let flat_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "cursor",
+            "search",
+            "Flat Cursor import found by encoded project directory.",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search flat cursor");
+    assert!(
+        flat_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&flat_search.stderr)
+    );
+    let flat_search_json: serde_json::Value =
+        serde_json::from_slice(&flat_search.stdout).expect("flat search JSON");
+    assert_eq!(flat_search_json["total_results"].as_u64().unwrap(), 1);
+
+    let unrelated_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "cursor",
+            "search",
+            "Unrelated Cursor project should not import.",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search unrelated cursor");
+    assert!(
+        unrelated_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&unrelated_search.stderr)
+    );
+    let unrelated_search_json: serde_json::Value =
+        serde_json::from_slice(&unrelated_search.stdout).expect("unrelated search JSON");
+    assert_eq!(unrelated_search_json["total_results"].as_u64().unwrap(), 0);
+
+    let cwd_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "cursor",
+            "search",
+            project.to_str().expect("project path UTF-8"),
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search cursor project path leakage");
+    assert!(
+        cwd_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&cwd_search.stderr)
+    );
+    let cwd_search_json: serde_json::Value =
+        serde_json::from_slice(&cwd_search.stdout).expect("cwd search JSON");
+    assert_eq!(cwd_search_json["total_results"].as_u64().unwrap(), 0);
+
+    let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+    let project_record = store
+        .project_by_path(&project)
+        .expect("project lookup")
+        .expect("project");
+    let cursor = store
+        .source_cursor(
+            &project_record.id,
+            "cursor",
+            sessions_dir
+                .join("session.jsonl")
+                .to_str()
+                .expect("cursor key UTF-8"),
+        )
+        .expect("cursor read")
+        .expect("cursor");
+    assert_eq!(cursor.parser_version, CursorAdapter::PARSER_VERSION);
+    assert!(cursor.last_event_hash.is_some());
+
+    let flat_root = tmp.path().join("flat-cursor-root");
+    std::fs::create_dir_all(&flat_root).expect("create flat cursor root");
+    std::fs::write(
+        flat_root.join("direct.jsonl"),
+        r#"{"role":"user","content":"Direct flat Cursor root imports without row cwd.","timestamp":"2026-05-24T14:45:00Z","id":"direct-cursor-u"}
+"#,
+    )
+    .expect("write direct flat cursor rollout");
+    let flat_import = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "import",
+            "--source",
+            "cursor",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--source-root",
+            flat_root.to_str().expect("flat cursor root UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("flat cursor import");
+    assert!(
+        flat_import.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&flat_import.stderr)
+    );
+    let flat_import_json: serde_json::Value =
+        serde_json::from_slice(&flat_import.stdout).expect("flat import JSON");
+    assert_eq!(flat_import_json["discovered_sessions"].as_u64().unwrap(), 1);
+    assert_eq!(flat_import_json["imported_events"].as_u64().unwrap(), 1);
+
+    let direct_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "--source",
+            "cursor",
+            "search",
+            "Direct flat Cursor root imports without row cwd.",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("search direct flat cursor");
+    assert!(
+        direct_search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&direct_search.stderr)
+    );
+    let direct_search_json: serde_json::Value =
+        serde_json::from_slice(&direct_search.stdout).expect("direct search JSON");
+    assert_eq!(direct_search_json["total_results"].as_u64().unwrap(), 1);
 }
 
 #[test]

@@ -7,7 +7,9 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
-use crate::capture::{ClaudeAdapter, CodexAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot};
+use crate::capture::{
+    ClaudeAdapter, CodexAdapter, CursorAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot,
+};
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
 use crate::redaction::{
     PiiCoverage, PiiCoverageStatus, RedactionFinding, RedactionOutcome, scan_text,
@@ -287,7 +289,7 @@ pub struct ImportArgs {
     /// Project path to link/import into
     #[arg(long)]
     project: PathBuf,
-    /// Source root (defaults to $HOME/.codex or $HOME/.claude based on --source)
+    /// Source root (defaults to $HOME/.codex, $HOME/.claude, or $HOME/.cursor based on --source)
     #[arg(long = "source-root")]
     source_root: Option<PathBuf>,
 }
@@ -639,7 +641,12 @@ fn import_response(
         Some(SourceFilter::Claude) => {
             import_with_adapter(&ClaudeAdapter::new(), &mut store, &project.id, &root)?
         }
-        _ => bail!("`mmr import` currently requires `--source codex` or `--source claude`"),
+        Some(SourceFilter::Cursor) => {
+            import_with_adapter(&CursorAdapter::new(), &mut store, &project.id, &root)?
+        }
+        _ => bail!(
+            "`mmr import` currently requires `--source codex`, `--source claude`, or `--source cursor`"
+        ),
     };
 
     Ok(ImportResponse {
@@ -668,7 +675,10 @@ fn default_import_source_root(source_filter: Option<SourceFilter>) -> Result<Pat
     match source_filter {
         Some(SourceFilter::Codex) => Ok(home.join(".codex")),
         Some(SourceFilter::Claude) => Ok(home.join(".claude")),
-        _ => bail!("`mmr import` currently requires `--source codex` or `--source claude`"),
+        Some(SourceFilter::Cursor) => Ok(home.join(".cursor")),
+        _ => bail!(
+            "`mmr import` currently requires `--source codex`, `--source claude`, or `--source cursor`"
+        ),
     }
 }
 
@@ -1209,6 +1219,7 @@ fn dry_run_blocked_reasons(event: &EventRecord, outcome: &RedactionOutcome) -> V
 
 fn safe_projection_blocker(event: &EventRecord) -> Option<&'static str> {
     match event.event_type.as_str() {
+        "tool_call" => Some("tool_call events require a dedicated safe sync projection"),
         "tool_result" => Some("tool_result events require a dedicated safe sync projection"),
         "unknown_raw_event" => {
             Some("unknown_raw_event events require a dedicated safe sync projection")

@@ -60,9 +60,10 @@ Each imported file records a source cursor with:
 The shared file watcher emits only complete JSONL rows, so active-session capture
 does not parse partial trailing writes until the row is complete.
 
-Tool output and unknown raw Codex events remain local evidence until a later
-safe projection exists. `sync --dry-run` reports them as requiring a dedicated
-safe sync projection even if deterministic redaction finds no blocking secret.
+Tool calls, tool output, and unknown raw Codex events remain local evidence until
+a later safe projection exists. `sync --dry-run` reports them as requiring a
+dedicated safe sync projection even if deterministic redaction finds no blocking
+secret.
 
 ## Search
 

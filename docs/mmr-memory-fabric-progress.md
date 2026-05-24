@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-275-claude-importer`
-- Last green commit: `9fb3342` (`add codex memory importer`)
-- Active Linear ticket: NHL-275
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274
-- Current work: Claude Code source importer and active-session capture
+- Branch: `codex/nhl-276-cursor-importer`
+- Last green commit: `fadd838` (`add claude memory importer`)
+- Active Linear ticket: NHL-276
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275
+- Current work: Cursor source importer and active-session capture
 
 ## Current Architecture Decisions
 
@@ -54,6 +54,13 @@
   `claude-code-jsonl-v1`, scopes discovery to the first row cwd or decoded
   Claude project directory matching the linked project, and truncates large tool
   results with an explicit marker.
+- NHL-276 imports Cursor agent transcript JSONL through `CursorAdapter`, parser
+  version `cursor-agent-jsonl-v1`, supports nested `agent-transcripts` and flat
+  JSONL layouts, and scopes discovery by cwd/workspace cwd or exact encoded
+  Cursor project directory.
+- Cursor tool-call projections sanitize local path segments before search
+  indexing. Tool calls, tool results, and unknown raw events require a future
+  dedicated safe projection before remote sync eligibility.
 
 ## Verification Commands And Results
 
@@ -189,6 +196,28 @@
     (`elapsed_ms=807`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
+- NHL-276 focused checks:
+  - `cargo test --test memory_fabric_contract cursor_importer_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract cursor_import_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract cursor_active_session_watcher_uses_complete_rows_only -- --nocapture`:
+    passed
+  - `cargo test tool_results_need_safe_projection_even_after_passing_redaction -- --nocapture`:
+    passed
+- Cursor importer adversarial review found real Cursor project aliases without
+  a leading dash, local path leakage through tool-call arguments, and undefined
+  direct flat-root behavior. Fixes are applied and verification was rerun
+  successfully.
+- Latest NHL-276 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 59 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 22 active tests passed and 8 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=739`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -212,10 +241,11 @@
 - `docs/mmr-search.md`
 - `docs/mmr-codex-importer.md`
 - `docs/mmr-claude-importer.md`
+- `docs/mmr-cursor-importer.md`
 
 ## Open Blockers
 
-- None for NHL-275.
+- None for NHL-276.
 
 ## Known Risks
 
@@ -227,9 +257,9 @@
   unless an ADR explicitly approves a breaking change.
 - Public `link`, `sync`, and `status` are still deferred to NHL-277; `__db-info`
   is hidden dev-only smoke plumbing.
-- Provider-specific Cursor adapter is deferred to NHL-276. NHL-274 supplies the
-  Codex adapter and NHL-275 supplies the Claude adapter on top of the NHL-270
-  provider-neutral framework.
+- NHL-274 supplies the Codex adapter, NHL-275 supplies the Claude adapter, and
+  NHL-276 supplies the Cursor adapter on top of the NHL-270 provider-neutral
+  framework.
 - The optional `openai/privacy-filter` model runtime is not bundled; redaction
   reports degraded PII coverage while deterministic blocking remains active.
 - Under degraded PII coverage, `sync --dry-run` treats every event as blocked
@@ -251,11 +281,14 @@
 - Claude import sanitizes unknown/provider-metadata rows instead of indexing raw
   JSON. Large tool results store bounded projections plus omitted character
   count and full-content hash.
+- Cursor import accepts current no-leading-dash Cursor project aliases, legacy
+  dash aliases, and direct custom flat roots. Cursor tool-call path-like content
+  is sanitized in normalized/search text.
 
 ## Next Exact Action
 
-Commit and push NHL-275, update Linear with scope/tests/risks, then begin
-NHL-276 Cursor importer/capture.
+Commit and push NHL-276, update Linear with scope/tests/risks, then begin
+NHL-277 link/sync/status.
 
 ## Do Not Redo
 
@@ -267,12 +300,15 @@ NHL-276 Cursor importer/capture.
 - NHL-272 is already marked `Done` in Linear.
 - NHL-273 is already marked `Done` in Linear.
 - NHL-274 is already marked `Done` in Linear.
-- NHL-275 is already marked `In Progress`.
+- NHL-275 is already marked `Done` in Linear.
+- NHL-276 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 - The Codex importer adversarial review findings have already been fixed and
   verified.
 - The Claude importer adversarial review findings have already been fixed and
+  verified.
+- The Cursor importer adversarial review findings have already been fixed and
   verified.
 
 ## Watch-Outs

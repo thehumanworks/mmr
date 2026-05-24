@@ -65,3 +65,5 @@ does not parse partial trailing writes until the row is complete.
 Large tool results are truncated at import time with a marker so search and
 future summary paths do not ingest unbounded tool payloads. The marker records
 the omitted character count and full-content hash for evidence reconciliation.
+Tool calls, tool results, and unknown events require a future dedicated safe
+projection before remote sync eligibility.

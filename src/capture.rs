@@ -686,7 +686,7 @@ fn claude_project_alias(search_root: &Path, path: &Path) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn encode_claude_project_path(project_path: &Path) -> String {
+fn encode_hyphen_project_path(project_path: &Path) -> String {
     let path = project_path.to_string_lossy();
     if path == "/" {
         "-".to_string()
@@ -734,7 +734,7 @@ fn claude_metadata_matches_project(metadata: &ClaudeSessionMetadata, project_pat
     metadata
         .project_alias
         .as_deref()
-        .map(|alias| alias == encode_claude_project_path(project_path))
+        .map(|alias| alias == encode_hyphen_project_path(project_path))
         .unwrap_or(false)
 }
 
@@ -1081,6 +1081,512 @@ fn truncate_chars(value: String, max_chars: usize) -> String {
         "{}\n... [truncated; omitted_chars={omitted_chars}; full_content_hash={full_hash}]",
         &value[..end]
     )
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CursorAdapter;
+
+impl CursorAdapter {
+    pub const PARSER_VERSION: &'static str = "cursor-agent-jsonl-v1";
+    pub const TOOL_RESULT_MAX_CHARS: usize = 2000;
+
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl SourceAdapter for CursorAdapter {
+    fn source_name(&self) -> &'static str {
+        "cursor"
+    }
+
+    fn parser_version(&self) -> &'static str {
+        Self::PARSER_VERSION
+    }
+
+    fn discover(&self, root: &SourceDiscoveryRoot) -> Result<Vec<SourceSessionRef>> {
+        let mut sessions = Vec::new();
+        let project_path = root.project_path.canonicalize().with_context(|| {
+            format!("canonicalize project path {}", root.project_path.display())
+        })?;
+        let flat_project_root = !root.source_root.join("projects").exists();
+        let search_root = cursor_search_root(&root.source_root);
+        if !search_root.exists() {
+            return Ok(sessions);
+        }
+
+        for entry in WalkDir::new(&search_root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file()
+                || entry.path().extension().and_then(|ext| ext.to_str()) != Some("jsonl")
+            {
+                continue;
+            }
+            let path = entry.path().to_path_buf();
+            let project_alias = cursor_project_alias(&search_root, &path, flat_project_root);
+            let metadata = cursor_session_metadata(&path, project_alias.as_deref())?;
+            if !cursor_metadata_matches_project(&metadata, &project_path) {
+                continue;
+            }
+            let session_id = metadata
+                .session_id
+                .unwrap_or_else(|| cursor_session_id_from_path(&search_root, &path));
+            sessions.push(SourceSessionRef {
+                source: self.source_name().to_string(),
+                session_id,
+                path,
+            });
+        }
+
+        sessions.sort_by(|left, right| left.path.cmp(&right.path));
+        sessions.dedup_by(|left, right| left.path == right.path);
+        Ok(sessions)
+    }
+
+    fn import_session(&self, session: &SourceSessionRef) -> Result<SourceImportBatch> {
+        let content = fs::read_to_string(&session.path)
+            .with_context(|| format!("read Cursor session {}", session.path.display()))?;
+        parse_cursor_jsonl(&session.session_id, &session.path, &content)
+    }
+}
+
+#[derive(Debug, Default)]
+struct CursorSessionMetadata {
+    session_id: Option<String>,
+    cwd: Option<String>,
+    project_alias: Option<String>,
+}
+
+fn cursor_search_root(source_root: &Path) -> PathBuf {
+    if source_root.join("projects").exists() {
+        source_root.join("projects")
+    } else {
+        source_root.to_path_buf()
+    }
+}
+
+fn encode_cursor_project_path(project_path: &Path) -> String {
+    let path = project_path.to_string_lossy();
+    if path == "/" {
+        String::new()
+    } else {
+        path.trim_start_matches('/').replace('/', "-")
+    }
+}
+
+fn cursor_project_alias(
+    search_root: &Path,
+    path: &Path,
+    flat_project_root: bool,
+) -> Option<String> {
+    let relative = path.strip_prefix(search_root).ok()?;
+    let components = relative
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    if flat_project_root && components.len() == 1 {
+        return None;
+    }
+    components.first().map(|component| (*component).to_string())
+}
+
+fn cursor_session_id_from_path(search_root: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(search_root).unwrap_or(path);
+    let components = relative
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    components
+        .windows(2)
+        .find_map(|window| (window[0] == "agent-transcripts").then(|| window[1].to_string()))
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "unknown-cursor-session".to_string())
+}
+
+fn cursor_session_metadata(
+    path: &Path,
+    project_alias: Option<&str>,
+) -> Result<CursorSessionMetadata> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("read Cursor session metadata {}", path.display()))?;
+    let mut metadata = CursorSessionMetadata {
+        session_id: None,
+        cwd: None,
+        project_alias: project_alias.map(ToString::to_string),
+    };
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if let Some(session_id) = string_field(&value, "sessionId")
+            .or_else(|| string_field(&value, "session_id"))
+            .filter(|id| !id.is_empty())
+        {
+            metadata.session_id = Some(session_id);
+        }
+        if let Some(cwd) = string_field(&value, "cwd")
+            .or_else(|| {
+                value
+                    .get("workspace")
+                    .and_then(|workspace| string_field(workspace, "cwd"))
+            })
+            .filter(|cwd| !cwd.is_empty())
+        {
+            metadata.cwd = Some(cwd);
+            break;
+        }
+    }
+
+    Ok(metadata)
+}
+
+fn cursor_metadata_matches_project(metadata: &CursorSessionMetadata, project_path: &Path) -> bool {
+    if let Some(cwd) = metadata.cwd.as_deref() {
+        return path_matches_project(cwd, project_path);
+    }
+    metadata
+        .project_alias
+        .as_deref()
+        .map(|alias| {
+            alias == encode_cursor_project_path(project_path)
+                || alias == encode_hyphen_project_path(project_path)
+        })
+        .unwrap_or(true)
+}
+
+pub fn parse_cursor_jsonl(
+    fallback_session_id: &str,
+    path: &Path,
+    content: &str,
+) -> Result<SourceImportBatch> {
+    let mut events = Vec::new();
+    let mut warnings = Vec::new();
+    let mut last_hash = None;
+    let mut current_session_id = fallback_session_id.to_string();
+    let mut emitted_lines = 0usize;
+    let mut consumed_bytes = 0usize;
+
+    let mut line_start = 0usize;
+    for (line_index, line) in content.lines().enumerate() {
+        let (line_has_newline, consumed_line_bytes) =
+            consumed_line_bounds(content, line_start, line);
+        if line.trim().is_empty() {
+            emitted_lines = line_index + 1;
+            consumed_bytes = consumed_line_bytes;
+            line_start = consumed_line_bytes;
+            continue;
+        }
+
+        let raw_local_ref = format!("{}:{}", path.display(), line_index + 1);
+        let value: Value = match serde_json::from_str(line) {
+            Ok(value) => value,
+            Err(err) => {
+                if !line_has_newline && consumed_line_bytes == content.len() {
+                    break;
+                }
+                warnings.push(SourceWarning {
+                    raw_local_ref: Some(raw_local_ref),
+                    message: format!("skipped malformed Cursor JSONL row: {err}"),
+                });
+                emitted_lines = line_index + 1;
+                consumed_bytes = consumed_line_bytes;
+                line_start = consumed_line_bytes;
+                continue;
+            }
+        };
+
+        if let Some(session_id) = string_field(&value, "sessionId")
+            .or_else(|| string_field(&value, "session_id"))
+            .filter(|id| !id.is_empty())
+        {
+            current_session_id = session_id;
+        }
+        let timestamp =
+            string_field(&value, "timestamp").unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+        let row_event_id = string_field(&value, "uuid")
+            .or_else(|| string_field(&value, "id"))
+            .or_else(|| Some(format!("line:{}:{}", line_index + 1, content_hash(line))));
+
+        for part in cursor_event_parts(&value) {
+            if part.content_text.trim().is_empty() {
+                continue;
+            }
+            let source_event_id = row_event_id.as_ref().map(|id| match &part.source_suffix {
+                Some(suffix) => format!("{id}:{suffix}"),
+                None => id.clone(),
+            });
+            let parent_hash = last_hash.clone();
+            let normalized = NormalizedEvent {
+                source: "cursor".to_string(),
+                source_session_id: current_session_id.clone(),
+                source_event_id,
+                boundary: part.boundary,
+                role: Some(part.role),
+                timestamp: timestamp.clone(),
+                content_text: part.content_text,
+                parser_version: CursorAdapter::PARSER_VERSION.to_string(),
+                raw_local_ref: raw_local_ref.clone(),
+                parent_hash,
+            };
+            last_hash = Some(content_hash(&normalized.content_text));
+            events.push(normalized);
+        }
+
+        emitted_lines = line_index + 1;
+        consumed_bytes = consumed_line_bytes;
+        line_start = consumed_line_bytes;
+    }
+
+    Ok(SourceImportBatch {
+        source: "cursor".to_string(),
+        parser_version: CursorAdapter::PARSER_VERSION.to_string(),
+        events,
+        cursor_updates: vec![SourceCursorUpdate {
+            cursor_key: path.display().to_string(),
+            cursor_value: format!("line:{emitted_lines};bytes:{consumed_bytes}"),
+            parser_version: CursorAdapter::PARSER_VERSION.to_string(),
+            last_event_hash: last_hash,
+        }],
+        warnings,
+    })
+}
+
+#[derive(Debug)]
+struct CursorEventPart {
+    boundary: EventBoundary,
+    role: String,
+    content_text: String,
+    source_suffix: Option<String>,
+}
+
+fn cursor_event_parts(value: &Value) -> Vec<CursorEventPart> {
+    if let Some(row_type) = string_field(value, "type") {
+        match row_type.as_str() {
+            "session_start" => {
+                return vec![cursor_simple_part(
+                    EventBoundary::SessionStart,
+                    "system",
+                    "Cursor session started",
+                    None,
+                )];
+            }
+            "session_end" => {
+                return vec![cursor_simple_part(
+                    EventBoundary::SessionEnd,
+                    "system",
+                    "Cursor session ended",
+                    None,
+                )];
+            }
+            "compaction" | "summary" => {
+                let text = string_field(value, "content")
+                    .or_else(|| text_from_field(value.get("message")))
+                    .unwrap_or_else(|| format!("Cursor {row_type}"));
+                return vec![cursor_simple_part(
+                    EventBoundary::Compaction,
+                    "system",
+                    &text,
+                    None,
+                )];
+            }
+            _ => {}
+        }
+    }
+
+    let role = string_field(value, "role")
+        .or_else(|| string_field(value, "type"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .or_else(|| value.get("content"));
+
+    let Some(content) = content else {
+        return vec![CursorEventPart {
+            boundary: EventBoundary::UnknownRawEvent,
+            role: "system".to_string(),
+            content_text: cursor_unknown_projection(value, &role),
+            source_suffix: None,
+        }];
+    };
+
+    match content {
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| cursor_content_part(item, &role, Some(index)))
+            .collect(),
+        _ => cursor_text_from_value(content).map_or_else(
+            || {
+                vec![CursorEventPart {
+                    boundary: EventBoundary::UnknownRawEvent,
+                    role: "system".to_string(),
+                    content_text: format!("Cursor {role} row had unsupported content shape"),
+                    source_suffix: None,
+                }]
+            },
+            |text| {
+                vec![CursorEventPart {
+                    boundary: cursor_role_boundary(&role),
+                    role: role.clone(),
+                    content_text: text,
+                    source_suffix: None,
+                }]
+            },
+        ),
+    }
+}
+
+fn cursor_content_part(item: &Value, row_role: &str, index: Option<usize>) -> CursorEventPart {
+    let block_type = string_field(item, "type").unwrap_or_else(|| "text".to_string());
+    let suffix = cursor_block_suffix(item, index);
+    match block_type.as_str() {
+        "tool_call" | "function_call" | "tool_use" => {
+            let name = string_field(item, "name").unwrap_or_else(|| "tool".to_string());
+            let args = item
+                .get("arguments")
+                .or_else(|| item.get("input"))
+                .map(Value::to_string)
+                .unwrap_or_else(|| item.to_string());
+            CursorEventPart {
+                boundary: EventBoundary::ToolCall,
+                role: "assistant".to_string(),
+                content_text: sanitize_local_path_segments(&format!("{name} {args}")),
+                source_suffix: suffix,
+            }
+        }
+        "tool_result" | "tool_output" | "function_call_output" => {
+            let output = item
+                .get("output")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .or_else(|| item.get("content").and_then(cursor_text_from_value))
+                .unwrap_or_else(|| "Cursor tool result metadata omitted".to_string());
+            CursorEventPart {
+                boundary: EventBoundary::ToolResult,
+                role: "tool".to_string(),
+                content_text: truncate_chars(output, CursorAdapter::TOOL_RESULT_MAX_CHARS),
+                source_suffix: suffix,
+            }
+        }
+        "thinking" | "reasoning" => CursorEventPart {
+            boundary: EventBoundary::Compaction,
+            role: "assistant".to_string(),
+            content_text: cursor_text_from_value(item)
+                .unwrap_or_else(|| "Cursor reasoning metadata omitted".to_string()),
+            source_suffix: suffix,
+        },
+        _ => CursorEventPart {
+            boundary: cursor_role_boundary(row_role),
+            role: row_role.to_string(),
+            content_text: cursor_text_from_value(item)
+                .unwrap_or_else(|| format!("Cursor content block metadata omitted: {block_type}")),
+            source_suffix: suffix,
+        },
+    }
+}
+
+fn cursor_simple_part(
+    boundary: EventBoundary,
+    role: &str,
+    content_text: &str,
+    source_suffix: Option<String>,
+) -> CursorEventPart {
+    CursorEventPart {
+        boundary,
+        role: role.to_string(),
+        content_text: content_text.to_string(),
+        source_suffix,
+    }
+}
+
+fn cursor_role_boundary(role: &str) -> EventBoundary {
+    match role {
+        "assistant" => EventBoundary::AssistantTurn,
+        "tool" => EventBoundary::ToolResult,
+        "user" => EventBoundary::UserTurn,
+        _ => EventBoundary::UnknownRawEvent,
+    }
+}
+
+fn cursor_block_suffix(item: &Value, index: Option<usize>) -> Option<String> {
+    string_field(item, "id")
+        .or_else(|| string_field(item, "tool_call_id"))
+        .or_else(|| string_field(item, "tool_use_id"))
+        .or_else(|| index.map(|index| format!("part-{index}")))
+}
+
+fn cursor_text_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) => {
+            let text = items
+                .iter()
+                .filter_map(cursor_text_from_value)
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.is_empty() { None } else { Some(text) }
+        }
+        Value::Object(map) => map
+            .get("text")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| map.get("content").and_then(cursor_text_from_value)),
+        _ => None,
+    }
+}
+
+fn cursor_unknown_projection(value: &Value, role: &str) -> String {
+    string_field(value, "content")
+        .or_else(|| text_from_field(value.get("message")))
+        .or_else(|| text_from_field(value.get("payload")))
+        .unwrap_or_else(|| format!("Cursor unknown event role/type: {role}"))
+}
+
+fn sanitize_local_path_segments(value: &str) -> String {
+    const PREFIXES: &[&str] = &["/Users/", "/home/", "/tmp/", "/var/", "/private/"];
+    let mut out = String::with_capacity(value.len());
+    let mut index = 0usize;
+
+    while index < value.len() {
+        let rest = &value[index..];
+        if PREFIXES.iter().any(|prefix| rest.starts_with(prefix)) {
+            out.push_str("[LOCAL_PATH]");
+            index += local_path_len(rest);
+            continue;
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+
+    out
+}
+
+fn local_path_len(value: &str) -> usize {
+    value
+        .char_indices()
+        .find_map(|(index, ch)| {
+            matches!(
+                ch,
+                '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ',' | '}' | ']' | ')' | '('
+            )
+            .then_some(index)
+        })
+        .unwrap_or(value.len())
 }
 
 #[derive(Debug, Clone)]

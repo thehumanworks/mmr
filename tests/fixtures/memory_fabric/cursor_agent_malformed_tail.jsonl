@@ -1,0 +1,3 @@
+{"role":"user","timestamp":"2026-05-24T14:10:00Z","id":"u-cursor-bad","message":{"content":[{"type":"text","text":"Keep valid Cursor rows."}]}}
+{"role":"assistant","timestamp":"2026-05-24T14:10:05Z","id":"a-cursor-bad","message":{"content":[{"type":"text","text":"Valid Cursor row before malformed tail."}]}}
+{"role":"assistant","timestamp":"2026-05-24T14:10:10Z","message":
