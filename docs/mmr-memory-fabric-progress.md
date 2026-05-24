@@ -139,12 +139,13 @@
   `memory_fabric_contract` with 37 active tests passed and 0 ignored MVP
   contracts
 - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-  (`elapsed_ms=755`)
+  (`elapsed_ms=1008`)
 - `cargo clippy --all-targets --all-features -- -D warnings`: passed
 - `cargo build --release`: passed
-- NHL-281 adversarial review found fresh-host hydration, `remember`
-  compatibility, leak-check, raw-retrieval, and limitation-doc gaps. Fixes are
-  applied and verification was rerun successfully.
+- NHL-281 adversarial review found direct `link` proof, all-source raw
+  retrieval, imported-source privacy coverage, exact summary citation,
+  fresh-host evidence remapping, and optional dream-provider smoke gaps. Fixes
+  are applied and verification was rerun successfully.
 - NHL-280 UX review found summary/docs drift, noisy status actions,
   copy/paste recovery gaps, fixture-specific auth wording, and non-diagnostic
   store existence reporting. Fixes are applied and verification was rerun

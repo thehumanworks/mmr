@@ -1534,7 +1534,10 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     let sensitive_import_json: serde_json::Value =
         serde_json::from_slice(&sensitive_import.stdout).expect("sensitive import JSON");
     assert_eq!(sensitive_import_json["source"], "codex");
-    assert_eq!(sensitive_import_json["imported_events"].as_u64().unwrap(), 3);
+    assert_eq!(
+        sensitive_import_json["imported_events"].as_u64().unwrap(),
+        3
+    );
     for output in [&note, &unsafe_note, &pii_note] {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);

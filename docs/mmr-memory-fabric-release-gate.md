@@ -35,8 +35,9 @@ It proves, from a clean non-Git temp directory, that:
   citations.
 - `mmr summary` and `mmr remember` use the stateless continuity runner through a
   mock Gemini endpoint, with `remember` retained as a compatibility alias.
-- `mmr redact scan` and `mmr sync --dry-run` block a fake secret without
-  printing the secret, and sync redacts PII before remote payloads are written.
+- `mmr redact scan` and `mmr sync --dry-run` block fake secrets from both
+  imported source history and human notes without printing the secret, and sync
+  redacts PII before remote payloads are written.
 - `mmr dream` applies only evidence-linked learned memory.
 - `mmr sync` uploads safe redacted projections and active learned memory while
   blocking unsafe content.
@@ -70,6 +71,13 @@ Dream command runner example:
 export MMR_DEFAULT_DREAM_RUNNER=command
 export MMR_DREAM_COMMAND="python ./dream_runner.py"
 mmr dream --dry-run --pretty
+```
+
+The automated optional command-runner smoke is gated separately:
+
+```bash
+MMR_RUN_EXTERNAL_DREAM_SMOKE=1 MMR_DREAM_COMMAND="python ./dream_runner.py" \
+  cargo test --test memory_fabric_contract optional_external_dream_command_smoke_is_gated -- --nocapture
 ```
 
 The built-in release gate uses the deterministic mock dream runner and a local
