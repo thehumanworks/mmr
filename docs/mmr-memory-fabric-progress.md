@@ -6,9 +6,9 @@
 - Last green commit: `f4f7a11` (`implement dream assimilation workflow`)
 - Last verified state: committed NHL-279 implementation passed the full
   verification loop.
-- Active Linear ticket: NHL-279 (`Implement lean mmr dream assimilation workflow`)
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278
-- Current work: push and close NHL-279.
+- Active Linear ticket: none; next is NHL-280
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278, NHL-279
+- Current work: prepare NHL-280 integrated CLI UX, diagnostics, and docs.
 
 ## Current Architecture Decisions
 
@@ -397,8 +397,8 @@
 
 ## Next Exact Action
 
-Push `codex/nhl-279-dream-assimilation`, update Linear with verification
-evidence, and mark NHL-279 Done. Then fetch NHL-280.
+Create/switch to a `codex/nhl-280-*` branch, fetch NHL-280 acceptance criteria,
+mark it In Progress if needed, and inspect the integrated CLI UX/docs gaps.
 
 ## Do Not Redo
 
@@ -414,8 +414,7 @@ evidence, and mark NHL-279 Done. Then fetch NHL-280.
 - NHL-276 is already marked `Done` in Linear.
 - NHL-277 is committed, pushed, commented in Linear, and marked `Done`.
 - NHL-278 is committed, pushed, commented in Linear, and marked `Done`.
-- NHL-279 implementation and verification have been completed locally; only the
-  commit/push/Linear boundary remains.
+- NHL-279 is committed, pushed, commented in Linear, and marked `Done`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 - The Codex importer adversarial review findings have already been fixed and
