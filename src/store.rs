@@ -37,6 +37,7 @@ pub struct EventRecord {
     pub project_id: String,
     pub session_id: String,
     pub source: String,
+    pub source_session_id: String,
     pub source_event_id: Option<String>,
     pub event_type: String,
     pub role: String,
@@ -47,6 +48,19 @@ pub struct EventRecord {
     pub parser_version: String,
     pub raw_local_ref: Option<String>,
     pub sync_status: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SourceEventIdentity<'a> {
+    pub project_id: &'a str,
+    pub source: &'a str,
+    pub source_session_id: &'a str,
+    pub source_event_id: Option<&'a str>,
+    pub event_type: &'a str,
+    pub role: &'a str,
+    pub timestamp: &'a str,
+    pub parent_hash: Option<&'a str>,
+    pub parser_version: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +124,36 @@ pub struct SourceCursorRecord {
     pub cursor_value: String,
     pub parser_version: String,
     pub last_event_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncManifestRecord {
+    pub id: String,
+    pub remote: String,
+    pub project_id: String,
+    pub manifest_version: i64,
+    pub root_hash: String,
+    pub redaction_policy_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncManifestEntryRecord {
+    pub id: String,
+    pub manifest_id: String,
+    pub entry_kind: String,
+    pub entry_ref: String,
+    pub content_hash: String,
+    pub sync_path: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSyncManifestEntry {
+    pub entry_kind: String,
+    pub entry_ref: String,
+    pub content_hash: String,
+    pub sync_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -802,7 +846,7 @@ impl Store {
 
     fn event_by_id_on_conn(conn: &Connection, event_id: &str) -> Result<EventRecord> {
         conn.query_row(
-            "SELECT id, project_id, session_id, source, source_event_id, event_type, role,
+            "SELECT id, project_id, session_id, source, source_session_id, source_event_id, event_type, role,
                     timestamp, content_text, content_hash, parent_hash, parser_version,
                     raw_local_ref, sync_status
              FROM events WHERE id = ?1",
@@ -821,6 +865,44 @@ impl Store {
                 |row| row.get(0),
             )
             .context("check event existence")
+    }
+
+    pub fn event_by_source_identity(
+        &self,
+        identity: SourceEventIdentity<'_>,
+    ) -> Result<Option<EventRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, project_id, session_id, source, source_session_id, source_event_id, event_type, role,
+                    timestamp, content_text, content_hash, parent_hash, parser_version,
+                    raw_local_ref, sync_status
+                 FROM events
+                 WHERE project_id = ?1
+                    AND source = ?2
+                    AND source_session_id = ?3
+                    AND ((source_event_id IS NULL AND ?4 IS NULL) OR source_event_id = ?4)
+                    AND event_type = ?5
+                    AND role = ?6
+                    AND timestamp = ?7
+                    AND ((parent_hash IS NULL AND ?8 IS NULL) OR parent_hash = ?8)
+                    AND parser_version = ?9
+                 ORDER BY id ASC
+                 LIMIT 1",
+                params![
+                    identity.project_id,
+                    identity.source,
+                    identity.source_session_id,
+                    identity.source_event_id,
+                    identity.event_type,
+                    identity.role,
+                    identity.timestamp,
+                    identity.parent_hash,
+                    identity.parser_version
+                ],
+                event_record_from_row,
+            )
+            .optional()
+            .context("lookup event by source identity")
     }
 
     pub fn upsert_search_document(&self, event: &EventRecord) -> Result<SearchDocumentRecord> {
@@ -974,7 +1056,7 @@ impl Store {
         source_session_id: Option<&str>,
     ) -> Result<Vec<EventRecord>> {
         let mut sql = String::from(
-            "SELECT id, project_id, session_id, source, source_event_id, event_type, role,
+            "SELECT id, project_id, session_id, source, source_session_id, source_event_id, event_type, role,
                     timestamp, content_text, content_hash, parent_hash, parser_version,
                     raw_local_ref, sync_status
              FROM events
@@ -1011,16 +1093,17 @@ impl Store {
                 project_id: row.get(1)?,
                 session_id: row.get(2)?,
                 source: row.get(3)?,
-                source_event_id: row.get(4)?,
-                event_type: row.get(5)?,
-                role: row.get(6)?,
-                timestamp: row.get(7)?,
-                content_text: row.get(8)?,
-                content_hash: row.get(9)?,
-                parent_hash: row.get(10)?,
-                parser_version: row.get(11)?,
-                raw_local_ref: row.get(12)?,
-                sync_status: row.get(13)?,
+                source_session_id: row.get(4)?,
+                source_event_id: row.get(5)?,
+                event_type: row.get(6)?,
+                role: row.get(7)?,
+                timestamp: row.get(8)?,
+                content_text: row.get(9)?,
+                content_hash: row.get(10)?,
+                parent_hash: row.get(11)?,
+                parser_version: row.get(12)?,
+                raw_local_ref: row.get(13)?,
+                sync_status: row.get(14)?,
             });
         }
         Ok(events)
@@ -1081,6 +1164,101 @@ impl Store {
             .context("read source cursor")
     }
 
+    pub fn mark_events_synced(&self, event_ids: &[String]) -> Result<()> {
+        for event_id in event_ids {
+            self.conn.execute(
+                "UPDATE events SET sync_status = 'synced' WHERE id = ?1",
+                params![event_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn record_sync_manifest(
+        &self,
+        remote: &str,
+        project_id: &str,
+        manifest_version: i64,
+        root_hash: &str,
+        redaction_policy_id: &str,
+        entries: &[NewSyncManifestEntry],
+    ) -> Result<SyncManifestRecord> {
+        let manifest_id = sync_manifest_id(remote, project_id, root_hash, redaction_policy_id);
+        let now = now_rfc3339()?;
+        self.conn.execute(
+            "INSERT INTO sync_manifests
+                (id, remote, project_id, manifest_version, root_hash, redaction_policy_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO NOTHING",
+            params![
+                manifest_id,
+                remote,
+                project_id,
+                manifest_version,
+                root_hash,
+                redaction_policy_id,
+                now
+            ],
+        )?;
+
+        for entry in entries {
+            let entry_id = sync_manifest_entry_id(&manifest_id, entry);
+            self.conn.execute(
+                "INSERT INTO sync_manifest_entries
+                    (id, manifest_id, entry_kind, entry_ref, content_hash, sync_path, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(manifest_id, entry_kind, entry_ref) DO NOTHING",
+                params![
+                    entry_id,
+                    manifest_id,
+                    entry.entry_kind,
+                    entry.entry_ref,
+                    entry.content_hash,
+                    entry.sync_path,
+                    now
+                ],
+            )?;
+        }
+
+        self.sync_manifest_by_id(&manifest_id)
+    }
+
+    pub fn sync_manifests_for_project(&self, project_id: &str) -> Result<Vec<SyncManifestRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, remote, project_id, manifest_version, root_hash, redaction_policy_id, created_at
+             FROM sync_manifests
+             WHERE project_id = ?1
+             ORDER BY created_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id], sync_manifest_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read sync manifests")
+    }
+
+    pub fn sync_manifest_entries(&self, manifest_id: &str) -> Result<Vec<SyncManifestEntryRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, manifest_id, entry_kind, entry_ref, content_hash, sync_path, created_at
+             FROM sync_manifest_entries
+             WHERE manifest_id = ?1
+             ORDER BY entry_kind ASC, entry_ref ASC, sync_path ASC",
+        )?;
+        let rows = stmt.query_map(params![manifest_id], sync_manifest_entry_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read sync manifest entries")
+    }
+
+    fn sync_manifest_by_id(&self, manifest_id: &str) -> Result<SyncManifestRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, remote, project_id, manifest_version, root_hash, redaction_policy_id, created_at
+                 FROM sync_manifests WHERE id = ?1",
+                params![manifest_id],
+                sync_manifest_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("sync manifest not found: {manifest_id}"))
+    }
+
     pub fn event_count(&self) -> Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
@@ -1129,16 +1307,17 @@ fn event_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EventRecor
         project_id: row.get(1)?,
         session_id: row.get(2)?,
         source: row.get(3)?,
-        source_event_id: row.get(4)?,
-        event_type: row.get(5)?,
-        role: row.get(6)?,
-        timestamp: row.get(7)?,
-        content_text: row.get(8)?,
-        content_hash: row.get(9)?,
-        parent_hash: row.get(10)?,
-        parser_version: row.get(11)?,
-        raw_local_ref: row.get(12)?,
-        sync_status: row.get(13)?,
+        source_session_id: row.get(4)?,
+        source_event_id: row.get(5)?,
+        event_type: row.get(6)?,
+        role: row.get(7)?,
+        timestamp: row.get(8)?,
+        content_text: row.get(9)?,
+        content_hash: row.get(10)?,
+        parent_hash: row.get(11)?,
+        parser_version: row.get(12)?,
+        raw_local_ref: row.get(13)?,
+        sync_status: row.get(14)?,
     })
 }
 
@@ -1181,6 +1360,32 @@ fn redaction_span_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Redactio
         replacement: row.get(6)?,
         confidence: row.get(7)?,
         blocks_sync: blocks_sync == 1,
+    })
+}
+
+fn sync_manifest_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SyncManifestRecord> {
+    Ok(SyncManifestRecord {
+        id: row.get(0)?,
+        remote: row.get(1)?,
+        project_id: row.get(2)?,
+        manifest_version: row.get(3)?,
+        root_hash: row.get(4)?,
+        redaction_policy_id: row.get(5)?,
+        created_at: row.get(6)?,
+    })
+}
+
+fn sync_manifest_entry_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SyncManifestEntryRecord> {
+    Ok(SyncManifestEntryRecord {
+        id: row.get(0)?,
+        manifest_id: row.get(1)?,
+        entry_kind: row.get(2)?,
+        entry_ref: row.get(3)?,
+        content_hash: row.get(4)?,
+        sync_path: row.get(5)?,
+        created_at: row.get(6)?,
     })
 }
 
@@ -1285,6 +1490,31 @@ fn redaction_span_id(run_id: &str, event_id: &str, span: &NewRedactionSpan) -> S
             format!(
                 "{}:{}:{}:{}:{}:{}",
                 run_id, event_id, span.kind, span.start_byte, span.end_byte, span.replacement
+            )
+            .as_bytes()
+        )
+    )
+}
+
+fn sync_manifest_id(
+    remote: &str,
+    project_id: &str,
+    root_hash: &str,
+    redaction_policy_id: &str,
+) -> String {
+    format!(
+        "sync-manifest:v1:{}",
+        hash_hex(format!("{remote}:{project_id}:{root_hash}:{redaction_policy_id}").as_bytes())
+    )
+}
+
+fn sync_manifest_entry_id(manifest_id: &str, entry: &NewSyncManifestEntry) -> String {
+    format!(
+        "sync-manifest-entry:v1:{}",
+        hash_hex(
+            format!(
+                "{}:{}:{}:{}",
+                manifest_id, entry.entry_kind, entry.entry_ref, entry.sync_path
             )
             .as_bytes()
         )

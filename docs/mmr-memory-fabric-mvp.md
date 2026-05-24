@@ -619,6 +619,43 @@ The default remote descriptor is:
 github:<authenticated-user>/mmr-store
 ```
 
+NHL-277 implements the first backend as a file-backed GitHub-layout adapter. In
+tests and local E2E runs, `MMR_FAKE_REMOTE_DIR` points at the fake repository
+root while the public descriptor remains `github:<user>/mmr-store`. Live GitHub
+smoke remains optional and must be explicitly gated by credentials.
+
+Repository layout:
+
+```text
+remote.json
+projects/<project-id>/
+  project.json
+  sessions/<source-session-id>/events/<event-id>.json
+  search/<event-id>.json
+  manifests/<root-hash>.json
+```
+
+Conflict strategy:
+
+- event and search payload files are immutable/content-addressed by event id
+- existing remote payloads are compared against the expected JSON before local
+  events are marked synced
+- hydration rejects remote events whose content hash or event id no longer
+  matches the redacted payload
+- manifests are root-hash addressed and replayable
+- sync never appends to a shared hot file
+- repeated sync writes no duplicate event payloads
+
+Sync payload rules:
+
+- full sync builds a redacted projection with deterministic local PII rules
+- deterministic secret findings block payload export
+- `tool_call`, `tool_result`, and `unknown_raw_event` stay blocked until a
+  dedicated safe projection exists
+- local raw refs and raw `search_documents.document_text` are not exported
+- local raw-derived event ids are not exported; remote ids are derived from the
+  redacted projection
+
 Remote data must be replayable enough to hydrate a fresh host:
 
 - schema version

@@ -5,4 +5,5 @@ pub mod messages;
 pub mod redaction;
 pub mod source;
 pub mod store;
+pub mod sync;
 pub mod types;

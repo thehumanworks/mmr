@@ -4,6 +4,7 @@ use mmr::capture::{
 };
 use mmr::store::{LATEST_SCHEMA_VERSION, Store};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const FIXTURES: &[(&str, &str)] = &[
@@ -704,29 +705,383 @@ fn cursor_active_session_watcher_uses_complete_rows_only() {
 }
 
 #[test]
-#[ignore = "pending NHL-277: implement link command"]
 fn link_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-277",
-        "mmr link sets up local state from a non-Git cwd, performs safe reconciliation, and prints status JSON",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let link = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("link project");
+    assert!(
+        link.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+    let link_json: serde_json::Value =
+        serde_json::from_slice(&link.stdout).expect("link stdout JSON");
+    let link_stdout = String::from_utf8_lossy(&link.stdout);
+    for local_path in [&home, &data_home, &project, &remote] {
+        assert!(
+            !link_stdout.contains(&local_path.to_string_lossy().to_string()),
+            "link stdout should not expose local path {}",
+            local_path.display()
+        );
+    }
+    assert_eq!(link_json["command"], "link");
+    assert_eq!(link_json["already_linked"], false);
+    assert_eq!(link_json["status"]["linked"], true);
+    assert_eq!(link_json["status"]["sync_status"], "synced");
+    assert_eq!(
+        link_json["remote"]["descriptor"],
+        "github:fixture-user/mmr-store"
+    );
+    assert_eq!(link_json["sync"]["status"], "synced");
+    assert!(remote.join("remote.json").exists());
+
+    let relink = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("relink project");
+    assert!(
+        relink.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&relink.stderr)
+    );
+    let relink_json: serde_json::Value =
+        serde_json::from_slice(&relink.stdout).expect("relink stdout JSON");
+    assert_eq!(relink_json["already_linked"], true);
+    assert_eq!(relink_json["sync"]["uploaded_events"].as_u64().unwrap(), 0);
+
+    let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+    let project_record = store
+        .project_by_path(&project)
+        .expect("project lookup")
+        .expect("project");
+    let manifests = store
+        .sync_manifests_for_project(&project_record.id)
+        .expect("manifests");
+    assert_eq!(manifests.len(), 1);
+
+    let conflict_remote = tmp.path().join("conflict-remote");
+    std::fs::create_dir_all(&conflict_remote).expect("create conflict remote");
+    std::fs::write(
+        conflict_remote.join("remote.json"),
+        r#"{"backend":"file-github","descriptor":"github:someone-else/mmr-store","repo":"mmr-store"}"#,
+    )
+    .expect("write conflict remote metadata");
+    let conflict = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", tmp.path().join("conflict-data"))
+        .env("MMR_FAKE_REMOTE_DIR", &conflict_remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("link conflict remote");
+    assert!(!conflict.status.success());
+    assert!(conflict.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&conflict.stderr).contains("remote payload conflict"),
+        "stderr={}",
+        String::from_utf8_lossy(&conflict.stderr)
     );
 }
 
 #[test]
-#[ignore = "pending NHL-277: implement sync command"]
 fn sync_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-277",
-        "mmr sync is idempotent, redaction-gated, non-destructive, and prints sync/status JSON",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .arg("link")
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(&project)
+            .output()
+            .expect("link before sync"),
     );
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .args([
+                "note",
+                "Email",
+                "person@example.com",
+                "about",
+                "portable",
+                "sync",
+            ])
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home)
+            .current_dir(&project)
+            .output()
+            .expect("add syncable note"),
+    );
+    let original_event_id = {
+        let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+        let project_record = store
+            .project_by_path(&project)
+            .expect("project lookup")
+            .expect("project");
+        let events = store
+            .events_for_project(&project_record.id, Some("note"), None)
+            .expect("events before sync");
+        assert_eq!(events.len(), 1);
+        events[0].id.clone()
+    };
+
+    let sync = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("sync")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("sync project");
+    assert!(
+        sync.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&sync.stderr)
+    );
+    let sync_stdout = String::from_utf8(sync.stdout).expect("sync stdout UTF-8");
+    assert!(!sync_stdout.contains("person@example.com"));
+    let sync_json: serde_json::Value =
+        serde_json::from_str(&sync_stdout).expect("sync stdout JSON");
+    assert_eq!(sync_json["status"], "synced");
+    assert_eq!(sync_json["synced_events"].as_u64().unwrap(), 1);
+    assert_eq!(sync_json["uploaded_events"].as_u64().unwrap(), 1);
+    assert_eq!(sync_json["blocked_events"].as_u64().unwrap(), 0);
+    assert_eq!(sync_json["pii_coverage"]["status"], "available");
+
+    let remote_text = remote_file_text(&remote);
+    assert!(!remote_text.contains("person@example.com"));
+    assert!(!remote_text.contains(&original_event_id));
+    assert!(remote_text.contains("[REDACTED:private_email]"));
+    let remote_event_count = remote_event_file_count(&remote);
+    assert_eq!(remote_event_count, 1);
+
+    let resync = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("sync")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("sync project again");
+    assert!(
+        resync.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&resync.stderr)
+    );
+    let resync_json: serde_json::Value =
+        serde_json::from_slice(&resync.stdout).expect("resync stdout JSON");
+    assert_eq!(resync_json["status"], "synced");
+    assert_eq!(resync_json["uploaded_events"].as_u64().unwrap(), 0);
+    assert_eq!(remote_event_file_count(&remote), remote_event_count);
+
+    let relink = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("relink after sync");
+    assert!(
+        relink.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&relink.stderr)
+    );
+    let relink_json: serde_json::Value =
+        serde_json::from_slice(&relink.stdout).expect("relink stdout JSON");
+    assert_eq!(relink_json["hydration"]["inserted_events"], 0);
+    assert_eq!(relink_json["hydration"]["existing_events"], 1);
+    let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store after relink");
+    let project_record = store
+        .project_by_path(&project)
+        .expect("project lookup after relink")
+        .expect("project after relink");
+    let events = store
+        .events_for_project(&project_record.id, Some("note"), None)
+        .expect("events after relink");
+    assert_eq!(events.len(), 1);
+
+    let remote_event_path = first_remote_event_file(&remote);
+    let mut remote_event: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&remote_event_path).expect("read remote event JSON"),
+    )
+    .expect("remote event JSON");
+    remote_event["content_text"] = serde_json::Value::String("tampered remote content".to_string());
+    std::fs::write(
+        &remote_event_path,
+        serde_json::to_vec_pretty(&remote_event).expect("tampered remote event JSON"),
+    )
+    .expect("write tampered remote event");
+    let tampered_sync = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("sync")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("sync tampered remote");
+    assert!(!tampered_sync.status.success());
+    assert!(tampered_sync.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&tampered_sync.stderr)
+            .contains("remote event content_hash mismatch"),
+        "stderr={}",
+        String::from_utf8_lossy(&tampered_sync.stderr)
+    );
+
+    std::fs::remove_dir_all(&remote).expect("remove remote");
+    let missing_remote_status = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("status")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("status with missing remote");
+    assert!(
+        missing_remote_status.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&missing_remote_status.stderr)
+    );
+    let missing_remote_status_json: serde_json::Value =
+        serde_json::from_slice(&missing_remote_status.stdout).expect("missing remote status JSON");
+    assert_eq!(
+        missing_remote_status_json["status"]["sync_status"],
+        "remote_unavailable"
+    );
+    assert_eq!(missing_remote_status_json["remote"]["available"], false);
 }
 
 #[test]
-#[ignore = "pending NHL-277: implement status command"]
 fn status_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-277",
-        "mmr status reports store, project, source, redaction, and sync state as JSON",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let project = tmp.path().join("plain-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .arg("link")
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(&project)
+            .output()
+            .expect("link before status"),
+    );
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .args(["note", "password=hunter2"])
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home)
+            .current_dir(&project)
+            .output()
+            .expect("add blocked note"),
+    );
+
+    let sync = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("sync")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("sync blocked note");
+    assert!(
+        sync.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&sync.stderr)
+    );
+    let sync_stdout = String::from_utf8(sync.stdout).expect("sync stdout UTF-8");
+    assert!(!sync_stdout.contains("hunter2"));
+    let sync_json: serde_json::Value =
+        serde_json::from_str(&sync_stdout).expect("sync stdout JSON");
+    assert_eq!(sync_json["status"], "blocked");
+    assert_eq!(sync_json["blocked_events"].as_u64().unwrap(), 1);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("status")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("status");
+    assert!(
+        status.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status stdout JSON");
+    assert_eq!(status_json["command"], "status");
+    assert_eq!(status_json["status"]["linked"], true);
+    assert_eq!(status_json["status"]["sync_status"], "blocked");
+    assert_eq!(status_json["status"]["redaction"]["blocked"], 1);
+    assert_eq!(status_json["status"]["source_counts"]["note"], 1);
+    assert!(!remote_file_text(&remote).contains("hunter2"));
+
+    let auth_failure = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", tmp.path().join("auth-data"))
+        .env("MMR_FAKE_REMOTE_DIR", tmp.path().join("auth-remote"))
+        .env("MMR_FAKE_REMOTE_AUTH", "fail")
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("link auth failure");
+    assert!(
+        auth_failure.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&auth_failure.stderr)
+    );
+    let auth_failure_json: serde_json::Value =
+        serde_json::from_slice(&auth_failure.stdout).expect("auth failure link JSON");
+    assert_eq!(auth_failure_json["sync"]["status"], "remote_pending");
+    assert_eq!(auth_failure_json["remote"]["auth_status"], "failed");
+    assert_eq!(
+        auth_failure_json["status"]["sync_status"],
+        "remote_unavailable"
     );
 }
 
@@ -2022,16 +2377,188 @@ fn dream_assimilation_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-277: implement sync manifest generation"]
 fn sync_manifest_contract_is_implemented() {
-    pending_contract(
-        "NHL-277",
-        "generate replayable redacted sync manifests for github:<user>/mmr-store hydration",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home_one = tmp.path().join("data-one");
+    let data_home_two = tmp.path().join("data-two");
+    let project = tmp.path().join("plain-project");
+    let fresh_project = tmp.path().join("fresh-host-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::create_dir_all(&fresh_project).expect("create fresh project");
+
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .arg("link")
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home_one)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(&project)
+            .output()
+            .expect("link first store"),
     );
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .args(["note", "portable", "decision", "stays", "searchable"])
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home_one)
+            .current_dir(&project)
+            .output()
+            .expect("note first store"),
+    );
+    let sync = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("sync")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home_one)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&project)
+        .output()
+        .expect("sync first store");
+    assert!(
+        sync.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&sync.stderr)
+    );
+    let sync_json: serde_json::Value =
+        serde_json::from_slice(&sync.stdout).expect("sync stdout JSON");
+    assert_eq!(sync_json["status"], "synced");
+
+    let store_one = Store::open(data_home_one.join("mmr").join("mmr.db")).expect("store one");
+    let project_one = store_one
+        .project_by_path(&project)
+        .expect("project one lookup")
+        .expect("project one");
+    let manifests = store_one
+        .sync_manifests_for_project(&project_one.id)
+        .expect("sync manifests");
+    let manifest_with_entries = manifests
+        .iter()
+        .find(|manifest| {
+            store_one
+                .sync_manifest_entries(&manifest.id)
+                .expect("manifest entries")
+                .len()
+                >= 2
+        })
+        .expect("manifest with event and search entries");
+    let entries = store_one
+        .sync_manifest_entries(&manifest_with_entries.id)
+        .expect("manifest entries");
+    assert!(entries.iter().any(|entry| entry.entry_kind == "event"));
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.entry_kind == "search_document")
+    );
+    let remote_text = remote_file_text(&remote);
+    assert!(!remote_text.contains(&project.to_string_lossy().to_string()));
+    assert!(!remote_text.contains(&fresh_project.to_string_lossy().to_string()));
+
+    let hydrate = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home_two)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&fresh_project)
+        .output()
+        .expect("hydrate second store");
+    assert!(
+        hydrate.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&hydrate.stderr)
+    );
+    let hydrate_json: serde_json::Value =
+        serde_json::from_slice(&hydrate.stdout).expect("hydrate stdout JSON");
+    assert_eq!(hydrate_json["hydration"]["inserted_events"], 1);
+
+    let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["search", "portable decision"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home_two)
+        .current_dir(&fresh_project)
+        .output()
+        .expect("search hydrated store");
+    assert!(
+        search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&search.stderr)
+    );
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("search stdout JSON");
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(remote_event_file_count(&remote), 1);
 }
 
 fn pending_contract(ticket: &str, behavior: &str) -> ! {
     panic!("{ticket} pending contract: {behavior}. Remove #[ignore] when implemented.");
+}
+
+fn assert_success(output: std::process::Output) {
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn remote_event_file_count(remote: &Path) -> usize {
+    if !remote.exists() {
+        return 0;
+    }
+    walkdir::WalkDir::new(remote)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .filter(|entry| {
+            entry
+                .path()
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == "events")
+        })
+        .count()
+}
+
+fn first_remote_event_file(remote: &Path) -> PathBuf {
+    walkdir::WalkDir::new(remote)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .find(|entry| {
+            entry
+                .path()
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == "events")
+        })
+        .unwrap_or_else(|| panic!("remote event file under {}", remote.display()))
+        .into_path()
+}
+
+fn remote_file_text(remote: &Path) -> String {
+    if !remote.exists() {
+        return String::new();
+    }
+    let mut text = String::new();
+    for entry in walkdir::WalkDir::new(remote)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+    {
+        text.push_str(
+            &std::fs::read_to_string(entry.path())
+                .unwrap_or_else(|err| panic!("read remote file {}: {err}", entry.path().display())),
+        );
+        text.push('\n');
+    }
+    text
 }
 
 fn seed_search_fixture() -> (

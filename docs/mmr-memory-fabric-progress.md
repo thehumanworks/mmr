@@ -2,11 +2,12 @@
 
 ## Current State
 
-- Branch: `codex/nhl-276-cursor-importer`
-- Last green commit: `fadd838` (`add claude memory importer`)
-- Active Linear ticket: NHL-276
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275
-- Current work: Cursor source importer and active-session capture
+- Branch: `codex/nhl-277-link-sync-status`
+- Last green commit: `cb8ecfd` (`add cursor memory importer`)
+- Active Linear ticket: NHL-277
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276
+- Current work: lean `mmr link`, full `mmr sync`, `mmr status`, and default
+  GitHub-layout `mmr-store` sync/hydration
 
 ## Current Architecture Decisions
 
@@ -61,6 +62,28 @@
 - Cursor tool-call projections sanitize local path segments before search
   indexing. Tool calls, tool results, and unknown raw events require a future
   dedicated safe projection before remote sync eligibility.
+- NHL-277 adds `mmr link` as the first-run setup command for the current cwd
+  project. It ensures the local store/project link, hydrates from the remote,
+  reconciles available Codex/Claude/Cursor source roots, rebuilds search
+  documents, syncs redacted projections, and prints JSON status.
+- Full `mmr sync` now uses a file-backed GitHub-layout adapter with the public
+  descriptor `github:<user>/mmr-store`. Tests set `MMR_FAKE_REMOTE_DIR`; the
+  adapter writes immutable session-sharded event payloads, redacted search
+  projections, and root-hash-addressed manifests.
+- Full sync uses deterministic local PII redaction for syncable projections,
+  blocks deterministic secrets, and continues to block tool calls, tool
+  results, and unknown raw events until a dedicated safe projection exists.
+- Fresh-host hydration replays redacted remote events into the local SQLite
+  store and rebuilds usable search documents without exporting local raw refs,
+  including when the receiving machine links the project at a different local
+  path.
+- Remote sync never exports local raw-derived event ids. Remote event ids are
+  derived from redacted projections, existing remote payloads are compared
+  before reuse, and hydration rejects payloads whose content hash or event id no
+  longer matches the redacted JSON.
+- `mmr status` reports remote-unavailable or remote-missing states when local
+  rows are marked synced but the remote backing store is unavailable or missing
+  expected event payloads.
 
 ## Verification Commands And Results
 
@@ -127,7 +150,7 @@
     `memory_fabric_contract` with 10 active tests passed and 11 pending ignored
     contracts
   - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-    (`elapsed_ms=726`)
+    (`elapsed_ms=809`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
 - NHL-273 focused checks:
@@ -218,6 +241,30 @@
     (`elapsed_ms=739`)
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
+- NHL-277 focused checks:
+  - `cargo test --test memory_fabric_contract -- --nocapture`: passed, 26
+    active tests and 4 pending ignored contracts
+  - `cargo test --test memory_fabric_contract link_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract sync_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract sync_manifest_contract_is_implemented -- --nocapture`:
+    passed
+- NHL-277 adversarial review found local resync duplication through redacted
+  remote ids, raw-derived `original_event_id` leakage, missing remote integrity
+  checks, stale `status` reporting when the remote disappears, and minor local
+  path exposure in status JSON. Fixes are applied for the blockers/high issues
+  and remote root/source-root path exposure; local store/project paths remain in
+  local status JSON as intentional diagnostics.
+- Latest NHL-277 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 59 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 26 active tests passed and 4 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=726`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -230,6 +277,7 @@
 - `src/store.rs`
 - `src/lib.rs`
 - `src/cli.rs`
+- `src/sync.rs`
 - `docs/mmr-memory-fabric-store.md`
 - `Cargo.toml`
 - `Cargo.lock`
@@ -245,18 +293,18 @@
 
 ## Open Blockers
 
-- None for NHL-276.
+- None for NHL-277.
 
 ## Known Risks
 
 - The remaining pending contract tests are intentionally ignored until downstream
-  tickets implement the referenced adapter, redaction, search, summary, dream,
-  and sync modules.
-- GitHub transport is still deferred to NHL-277.
+  tickets implement the referenced summary and dream modules.
 - NHL-269 locks the initial SQL schema, but future migrations must stay additive
   unless an ADR explicitly approves a breaking change.
-- Public `link`, `sync`, and `status` are still deferred to NHL-277; `__db-info`
-  is hidden dev-only smoke plumbing.
+- NHL-277 ships a file-backed GitHub-layout adapter for deterministic local/E2E
+  verification. Live GitHub API transport remains an optional future hardening
+  path; the MVP happy path still uses descriptor `github:<user>/mmr-store`.
+- `__db-info` remains hidden dev-only smoke plumbing.
 - NHL-274 supplies the Codex adapter, NHL-275 supplies the Claude adapter, and
   NHL-276 supplies the Cursor adapter on top of the NHL-270 provider-neutral
   framework.
@@ -264,9 +312,9 @@
   reports degraded PII coverage while deterministic blocking remains active.
 - Under degraded PII coverage, `sync --dry-run` treats every event as blocked
   and omits payload previews so false negatives cannot leak through dry-run JSON.
-- NHL-277 must not treat `events.sync_status = "redacted"` alone as sufficient
-  upload permission; sync has to evaluate active policy coverage and block
-  degraded-policy events without explicit versioned override.
+- Full sync must continue to evaluate active policy coverage instead of
+  treating `events.sync_status = "redacted"` alone as sufficient upload
+  permission.
 - False-positive allowlist and hard-purge flows are documented as explicit
   future policy surfaces, not silent MVP behavior.
 - `mmr export --format tree` writes local raw search material for external
@@ -287,8 +335,8 @@
 
 ## Next Exact Action
 
-Commit and push NHL-276, update Linear with scope/tests/risks, then begin
-NHL-277 link/sync/status.
+Commit and push NHL-277, update Linear with scope/tests/risks, then begin
+NHL-278 dream runner/provider abstraction.
 
 ## Do Not Redo
 
@@ -301,7 +349,9 @@ NHL-277 link/sync/status.
 - NHL-273 is already marked `Done` in Linear.
 - NHL-274 is already marked `Done` in Linear.
 - NHL-275 is already marked `Done` in Linear.
-- NHL-276 is already marked `In Progress`.
+- NHL-276 is already marked `Done` in Linear.
+- NHL-277 has passed full local verification; only commit/push and Linear
+  closure remain.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 - The Codex importer adversarial review findings have already been fixed and
@@ -309,6 +359,8 @@ NHL-277 link/sync/status.
 - The Claude importer adversarial review findings have already been fixed and
   verified.
 - The Cursor importer adversarial review findings have already been fixed and
+  verified.
+- The link/sync/status adversarial review findings have already been fixed and
   verified.
 
 ## Watch-Outs

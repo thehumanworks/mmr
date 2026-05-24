@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::num::NonZeroUsize;
@@ -17,6 +18,10 @@ use crate::redaction::{
 use crate::store::{
     DEFAULT_REDACTION_POLICY_ID, EventRecord, NewEvent, NewRedactionSpan, ProjectRecord, Store,
     content_hash,
+};
+use crate::sync::{
+    HydrationReport, RemoteSummary, SyncReport, hydrate_project, remote_for_operations,
+    remote_for_status, safe_projection_blocker, sync_project,
 };
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
@@ -131,6 +136,8 @@ pub enum Commands {
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
+    /// First-run setup for the current project and default mmr-store remote
+    Link,
     /// Import normalized events into the local memory store
     Import(ImportArgs),
     /// Add a human-authored note to the local memory store
@@ -145,8 +152,10 @@ pub enum Commands {
     Search(SearchTextArgs),
     /// Inspect and apply local redaction policy before sync
     Redact(RedactArgs),
-    /// Sync safety view; full remote sync lands in NHL-277
+    /// Safely reconcile the linked project with the default mmr-store remote
     Sync(SyncArgs),
+    /// Inspect local project, redaction, and sync state
+    Status(StatusArgs),
     /// Inspect the local mmr database path and schema version
     #[command(name = "__db-info", hide = true)]
     DbInfo {
@@ -213,6 +222,13 @@ pub struct SyncArgs {
     /// Show what would sync, without contacting a remote
     #[arg(long)]
     dry_run: bool,
+    /// Project path (omit to use current directory)
+    #[arg(long)]
+    project: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct StatusArgs {
     /// Project path (omit to use current directory)
     #[arg(long)]
     project: Option<PathBuf>,
@@ -528,6 +544,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             .await?;
             format_remember_response(&response, remember.output_format, cli.pretty)?
         }
+        Commands::Link => serialize(&link_response(source_filter)?, cli.pretty)?,
         Commands::Import(args) => serialize(&import_response(&args, source_filter)?, cli.pretty)?,
         Commands::Note { text } => serialize(&note_response(text)?, cli.pretty)?,
         Commands::Rg(args) => rg_output(&args, source_filter, cli.pretty)?,
@@ -539,6 +556,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         }
         Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
         Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
+        Commands::Status(args) => serialize(&status_response(&args)?, cli.pretty)?,
         Commands::DbInfo {
             project,
             smoke_event,
@@ -602,6 +620,361 @@ fn read_note_text(text: Vec<String>) -> Result<String> {
         bail!("note text is empty");
     }
     Ok(note)
+}
+
+#[derive(Debug, Serialize)]
+struct LinkResponse {
+    command: String,
+    already_linked: bool,
+    store: StoreStatus,
+    project: ProjectStatus,
+    remote: RemoteSummary,
+    hydration: HydrationReport,
+    imports: Vec<SourceImportStatus>,
+    rebuilt_search_documents: usize,
+    sync: SyncReport,
+    status: StatusProjectSnapshot,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusResponse {
+    command: String,
+    store: StoreStatus,
+    project: Option<ProjectStatus>,
+    remote: RemoteSummary,
+    status: StatusProjectSnapshot,
+}
+
+#[derive(Debug, Serialize)]
+struct StoreStatus {
+    schema_version: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectStatus {
+    id: String,
+    display_name: String,
+    path_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceImportStatus {
+    source: String,
+    status: String,
+    discovered_sessions: usize,
+    imported_events: usize,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusProjectSnapshot {
+    linked: bool,
+    sync_status: String,
+    events_total: usize,
+    source_counts: BTreeMap<String, usize>,
+    sync_status_counts: BTreeMap<String, usize>,
+    redaction: StatusRedactionSnapshot,
+    sync: StatusSyncSnapshot,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusRedactionSnapshot {
+    policy_id: String,
+    redacted_or_synced: usize,
+    blocked: usize,
+    pending: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusSyncSnapshot {
+    remote_events: usize,
+    local_manifests: usize,
+    latest_manifest_id: Option<String>,
+    blocked_events: usize,
+    unsynced_events: usize,
+}
+
+fn link_response(source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
+    let mut store = Store::open_default()?;
+    let info = store.info()?;
+    let cwd = std::env::current_dir().context("current_dir")?;
+    let already_linked = store.project_by_path(&cwd)?.is_some();
+    let project = store.ensure_project_link(&cwd)?;
+    let remote = remote_for_status()?;
+    let remote_auth_ok = remote.summary().auth_status == "ok";
+    let hydration = if remote_auth_ok {
+        hydrate_project(&mut store, &project, &remote)?
+    } else {
+        HydrationReport {
+            remote_events: 0,
+            inserted_events: 0,
+            existing_events: 0,
+        }
+    };
+    let imports = reconcile_default_sources(&mut store, &project, source_filter)?;
+    let rebuilt_search_documents = rebuild_search_documents(&store, &project, source_filter)?;
+    let sync = if remote_auth_ok {
+        sync_project(
+            &mut store,
+            &project,
+            &remote,
+            source_filter_name(source_filter),
+        )?
+    } else {
+        remote_pending_sync_report(&store, &project, &remote, source_filter)?
+    };
+    let status = status_snapshot(&store, Some(&project), Some(&remote))?;
+    Ok(LinkResponse {
+        command: "link".to_string(),
+        already_linked,
+        store: StoreStatus {
+            schema_version: info.schema_version,
+        },
+        project: project_status(&project),
+        remote: sync.remote.clone(),
+        hydration,
+        imports,
+        rebuilt_search_documents,
+        sync,
+        status,
+    })
+}
+
+fn remote_pending_sync_report(
+    store: &Store,
+    project: &ProjectRecord,
+    remote: &crate::sync::FakeGithubRemote,
+    source_filter: Option<SourceFilter>,
+) -> Result<SyncReport> {
+    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    Ok(SyncReport {
+        status: "remote_pending".to_string(),
+        remote: remote.summary(),
+        policy_id: DEFAULT_REDACTION_POLICY_ID.to_string(),
+        manifest_id: String::new(),
+        root_hash: String::new(),
+        total_events: events.len(),
+        synced_events: 0,
+        uploaded_events: 0,
+        uploaded_search_documents: 0,
+        blocked_events: 0,
+        remote_events: 0,
+        append_only: true,
+        pii_coverage: scan_text("").pii_coverage,
+        blocked: Vec::new(),
+    })
+}
+
+fn status_response(args: &StatusArgs) -> Result<StatusResponse> {
+    let store = Store::open_default()?;
+    let info = store.info()?;
+    let project_path = match &args.project {
+        Some(path) => path.clone(),
+        None => std::env::current_dir().context("current_dir")?,
+    };
+    let project = store.project_by_path(&project_path)?;
+    let remote = remote_for_status()?;
+    let status = status_snapshot(&store, project.as_ref(), Some(&remote))?;
+    Ok(StatusResponse {
+        command: "status".to_string(),
+        store: StoreStatus {
+            schema_version: info.schema_version,
+        },
+        project: project.as_ref().map(project_status),
+        remote: remote.summary(),
+        status,
+    })
+}
+
+fn reconcile_default_sources(
+    store: &mut Store,
+    project: &ProjectRecord,
+    source_filter: Option<SourceFilter>,
+) -> Result<Vec<SourceImportStatus>> {
+    let sources = match source_filter {
+        Some(source) => vec![source],
+        None => vec![
+            SourceFilter::Codex,
+            SourceFilter::Claude,
+            SourceFilter::Cursor,
+        ],
+    };
+    let mut reports = Vec::new();
+    for source in sources {
+        let source_name = source_filter_name(Some(source)).unwrap_or("unknown");
+        let Some(source_root) = default_source_root_for(source)? else {
+            reports.push(SourceImportStatus {
+                source: source_name.to_string(),
+                status: "unsupported".to_string(),
+                discovered_sessions: 0,
+                imported_events: 0,
+                warnings: vec![format!("{source_name} source import is not implemented")],
+            });
+            continue;
+        };
+        if !source_root.exists() {
+            reports.push(SourceImportStatus {
+                source: source_name.to_string(),
+                status: "skipped".to_string(),
+                discovered_sessions: 0,
+                imported_events: 0,
+                warnings: vec![format!("source root not found for {source_name}")],
+            });
+            continue;
+        }
+        let root = SourceDiscoveryRoot {
+            project_path: PathBuf::from(&project.canonical_path),
+            source_root,
+        };
+        let report = match source {
+            SourceFilter::Codex => {
+                import_with_adapter(&CodexAdapter::new(), store, &project.id, &root)?
+            }
+            SourceFilter::Claude => {
+                import_with_adapter(&ClaudeAdapter::new(), store, &project.id, &root)?
+            }
+            SourceFilter::Cursor => {
+                import_with_adapter(&CursorAdapter::new(), store, &project.id, &root)?
+            }
+            SourceFilter::Grok | SourceFilter::Pi => {
+                unreachable!("unsupported sources handled above")
+            }
+        };
+        reports.push(SourceImportStatus {
+            source: report.source,
+            status: "imported".to_string(),
+            discovered_sessions: report.discovered_sessions,
+            imported_events: report.imported_events,
+            warnings: report.warnings,
+        });
+    }
+    Ok(reports)
+}
+
+fn default_source_root_for(source: SourceFilter) -> Result<Option<PathBuf>> {
+    let home = match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home),
+        None => return Ok(None),
+    };
+    Ok(match source {
+        SourceFilter::Codex => Some(home.join(".codex")),
+        SourceFilter::Claude => Some(home.join(".claude")),
+        SourceFilter::Cursor => Some(home.join(".cursor")),
+        SourceFilter::Grok | SourceFilter::Pi => None,
+    })
+}
+
+fn rebuild_search_documents(
+    store: &Store,
+    project: &ProjectRecord,
+    source_filter: Option<SourceFilter>,
+) -> Result<usize> {
+    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    for event in &events {
+        store.upsert_search_document(event)?;
+    }
+    Ok(events.len())
+}
+
+fn status_snapshot(
+    store: &Store,
+    project: Option<&ProjectRecord>,
+    remote: Option<&crate::sync::FakeGithubRemote>,
+) -> Result<StatusProjectSnapshot> {
+    let Some(project) = project else {
+        return Ok(StatusProjectSnapshot {
+            linked: false,
+            sync_status: "unlinked".to_string(),
+            events_total: 0,
+            source_counts: BTreeMap::new(),
+            sync_status_counts: BTreeMap::new(),
+            redaction: StatusRedactionSnapshot {
+                policy_id: DEFAULT_REDACTION_POLICY_ID.to_string(),
+                redacted_or_synced: 0,
+                blocked: 0,
+                pending: 0,
+            },
+            sync: StatusSyncSnapshot {
+                remote_events: 0,
+                local_manifests: 0,
+                latest_manifest_id: None,
+                blocked_events: 0,
+                unsynced_events: 0,
+            },
+        });
+    };
+
+    let events = store.events_for_project(&project.id, None, None)?;
+    let mut source_counts = BTreeMap::new();
+    let mut sync_status_counts = BTreeMap::new();
+    for event in &events {
+        *source_counts.entry(event.source.clone()).or_insert(0) += 1;
+        *sync_status_counts
+            .entry(event.sync_status.clone())
+            .or_insert(0) += 1;
+    }
+    let blocked_events = *sync_status_counts.get("blocked").unwrap_or(&0);
+    let synced_events = *sync_status_counts.get("synced").unwrap_or(&0);
+    let redacted_events = *sync_status_counts.get("redacted").unwrap_or(&0);
+    let pending_events = events
+        .len()
+        .saturating_sub(blocked_events + synced_events + redacted_events);
+    let unsynced_events = events.len().saturating_sub(synced_events + blocked_events);
+    let manifests = store.sync_manifests_for_project(&project.id)?;
+    let remote_summary = remote.map(|remote| remote.summary());
+    let remote_auth_failed = remote_summary
+        .as_ref()
+        .is_some_and(|summary| summary.auth_status != "ok");
+    let remote_available = remote_summary
+        .as_ref()
+        .is_some_and(|summary| summary.available && summary.auth_status == "ok");
+    let remote_events = match remote {
+        Some(remote) if remote_available => remote.count_events(project).unwrap_or(0),
+        _ => 0,
+    };
+    let remote_required = synced_events > 0 || !manifests.is_empty();
+    let sync_status = if remote_auth_failed {
+        "remote_unavailable"
+    } else if blocked_events > 0 {
+        "blocked"
+    } else if remote_required && !remote_available {
+        "remote_unavailable"
+    } else if remote_available && remote_events < synced_events {
+        "remote_missing"
+    } else if unsynced_events > 0 {
+        "pending"
+    } else {
+        "synced"
+    };
+
+    Ok(StatusProjectSnapshot {
+        linked: true,
+        sync_status: sync_status.to_string(),
+        events_total: events.len(),
+        source_counts,
+        sync_status_counts,
+        redaction: StatusRedactionSnapshot {
+            policy_id: DEFAULT_REDACTION_POLICY_ID.to_string(),
+            redacted_or_synced: redacted_events + synced_events,
+            blocked: blocked_events,
+            pending: pending_events,
+        },
+        sync: StatusSyncSnapshot {
+            remote_events,
+            local_manifests: manifests.len(),
+            latest_manifest_id: manifests.first().map(|manifest| manifest.id.clone()),
+            blocked_events,
+            unsynced_events,
+        },
+    })
+}
+
+fn project_status(project: &ProjectRecord) -> ProjectStatus {
+    ProjectStatus {
+        id: project.id.clone(),
+        display_name: project.display_name.clone(),
+        path_hash: content_hash(&project.canonical_path),
+    }
 }
 
 fn now_rfc3339() -> Result<String> {
@@ -1067,13 +1440,25 @@ fn redact_response(
 fn sync_response(
     args: &SyncArgs,
     source_filter: Option<SourceFilter>,
-) -> Result<SyncDryRunResponse> {
-    if !args.dry_run {
-        bail!("only `mmr sync --dry-run` is implemented before NHL-277 full sync");
-    }
-
+) -> Result<serde_json::Value> {
     let store = Store::open_default()?;
     let project = linked_project(&store, args.project.as_deref())?;
+    if !args.dry_run {
+        drop(store);
+        let mut store = Store::open_default()?;
+        let remote = remote_for_operations()?;
+        hydrate_project(&mut store, &project, &remote)?;
+        reconcile_default_sources(&mut store, &project, source_filter)?;
+        rebuild_search_documents(&store, &project, source_filter)?;
+        let response = sync_project(
+            &mut store,
+            &project,
+            &remote,
+            source_filter_name(source_filter),
+        )?;
+        return serde_json::to_value(response).context("serialize sync response");
+    }
+
     let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
 
     let mut sync_events = Vec::new();
@@ -1113,7 +1498,7 @@ fn sync_response(
         });
     }
 
-    Ok(SyncDryRunResponse {
+    let response = SyncDryRunResponse {
         dry_run: true,
         project_id: project.id,
         remote: "github:<authenticated-user>/mmr-store".to_string(),
@@ -1123,7 +1508,8 @@ fn sync_response(
         blocked_events,
         pii_coverage: pii_coverage.unwrap_or_else(|| scan_text("").pii_coverage),
         events: sync_events,
-    })
+    };
+    serde_json::to_value(response).context("serialize sync dry-run response")
 }
 
 fn linked_project(store: &Store, project: Option<&Path>) -> Result<ProjectRecord> {
@@ -1215,17 +1601,6 @@ fn dry_run_blocked_reasons(event: &EventRecord, outcome: &RedactionOutcome) -> V
         reasons.push(outcome.pii_coverage.reason.clone());
     }
     reasons
-}
-
-fn safe_projection_blocker(event: &EventRecord) -> Option<&'static str> {
-    match event.event_type.as_str() {
-        "tool_call" => Some("tool_call events require a dedicated safe sync projection"),
-        "tool_result" => Some("tool_result events require a dedicated safe sync projection"),
-        "unknown_raw_event" => {
-            Some("unknown_raw_event events require a dedicated safe sync projection")
-        }
-        _ => None,
-    }
 }
 
 fn redacted_event_summary(
@@ -1853,6 +2228,7 @@ mod tests {
             project_id: "proj:v1:test".to_string(),
             session_id: "session:v1:test".to_string(),
             source: "codex".to_string(),
+            source_session_id: "codex-session".to_string(),
             source_event_id: Some("out-1".to_string()),
             event_type: "tool_result".to_string(),
             role: "tool".to_string(),
