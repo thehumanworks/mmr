@@ -3,12 +3,12 @@
 ## Current State
 
 - Branch: `codex/nhl-279-dream-assimilation`
-- Last green commit: `b0b3b8b` (`update memory fabric progress after dream runner`)
-- Last verified state: uncommitted NHL-279 worktree changes passed the full
+- Last green commit: `f4f7a11` (`implement dream assimilation workflow`)
+- Last verified state: committed NHL-279 implementation passed the full
   verification loop.
 - Active Linear ticket: NHL-279 (`Implement lean mmr dream assimilation workflow`)
 - Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278
-- Current work: commit, push, and close NHL-279.
+- Current work: push and close NHL-279.
 
 ## Current Architecture Decisions
 
@@ -126,7 +126,7 @@
   `memory_fabric_contract` with 29 active tests passed and 2 pending NHL-282
   tests ignored
 - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-  (`elapsed_ms=759`)
+  (`elapsed_ms=804`)
 - `cargo clippy --all-targets --all-features -- -D warnings`: passed
 - `cargo build --release`: passed
 - Adversarial review found issues in `rg` stdout semantics, downstream gate
@@ -397,9 +397,8 @@
 
 ## Next Exact Action
 
-Stage the NHL-279 files, commit `implement dream assimilation workflow`, push
-`codex/nhl-279-dream-assimilation`, update Linear with verification evidence,
-and mark NHL-279 Done. Then fetch NHL-280.
+Push `codex/nhl-279-dream-assimilation`, update Linear with verification
+evidence, and mark NHL-279 Done. Then fetch NHL-280.
 
 ## Do Not Redo
 
