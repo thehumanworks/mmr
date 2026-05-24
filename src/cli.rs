@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::fs;
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -118,6 +119,12 @@ pub enum Commands {
         /// Project name or path (omit to use current directory)
         #[arg(long)]
         project: Option<String>,
+        /// Export format
+        #[arg(long, value_enum, default_value = "json")]
+        format: ExportFormatArg,
+        /// Output directory for --format tree
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
     },
     /// Generate a stateless continuity brief from prior sessions
     Remember(RememberArgs),
@@ -127,6 +134,10 @@ pub enum Commands {
         #[arg(value_name = "TEXT", trailing_var_arg = true)]
         text: Vec<String>,
     },
+    /// POSIX-friendly exact search over local memory documents
+    Rg(SearchTextArgs),
+    /// Structured lexical search over local memory documents
+    Search(SearchTextArgs),
     /// Inspect and apply local redaction policy before sync
     Redact(RedactArgs),
     /// Sync safety view; full remote sync lands in NHL-277
@@ -233,10 +244,54 @@ pub enum RememberOutputFormatArg {
     Md,
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[clap(rename_all = "kebab-case")]
+pub enum ExportFormatArg {
+    #[default]
+    Json,
+    Tree,
+}
+
+#[derive(Args, Debug)]
+pub struct SearchTextArgs {
+    /// Literal query or pattern to find
+    query: String,
+    /// Project path (omit to use current directory)
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// Source session id to search
+    #[arg(long)]
+    session: Option<String>,
+    /// Event role filter
+    #[arg(long)]
+    role: Option<String>,
+    /// Event type filter
+    #[arg(long = "event-type")]
+    event_type: Option<String>,
+    /// Case-insensitive literal matching
+    #[arg(short = 'i', long)]
+    ignore_case: bool,
+    /// Context lines before and after each match
+    #[arg(short = 'C', long, default_value_t = 0)]
+    context: usize,
+    /// Emit line-oriented output instead of JSON (rg only)
+    #[arg(long)]
+    line: bool,
+}
+
 pub async fn run_cli(cli: Cli) -> Result<String> {
     let source_filter = effective_source(cli.source);
     if let Commands::Note { text } = &cli.command {
         return serialize(&note_response(text.clone())?, cli.pretty);
+    }
+    if let Commands::Rg(args) = &cli.command {
+        return rg_output(args, source_filter, cli.pretty);
+    }
+    if let Commands::Search(args) = &cli.command {
+        if args.line {
+            bail!("--line is only supported for `mmr rg`");
+        }
+        return serialize(&search_response(args, source_filter)?, cli.pretty);
     }
     if let Commands::Redact(args) = &cli.command {
         return serialize(&redact_response(args, source_filter)?, cli.pretty);
@@ -349,80 +404,89 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             }
             serialize(&response, cli.pretty)?
         }
-        Commands::Export { project } => {
-            let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
-            if let Some(proj) = project {
-                let response = service.messages(
-                    None,
-                    Some(proj.as_str()),
-                    source_filter,
-                    MessageQueryOptions::new(None, 0, sort),
-                );
+        Commands::Export {
+            project,
+            format,
+            output_dir,
+        } => {
+            if format == ExportFormatArg::Tree {
+                let response = export_tree_response(project, output_dir, source_filter)?;
                 serialize(&response, cli.pretty)?
             } else {
-                let (codex_path, claude_name) =
-                    resolve_project_from_cwd().context("could not get current directory")?;
-                let cursor_name = claude_name.clone();
-                let mut messages: Vec<ApiMessage> = Vec::new();
-                if source_filter.is_none() || source_filter == Some(SourceFilter::Codex) {
-                    let codex = service.messages(
+                let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
+                if let Some(proj) = project {
+                    let response = service.messages(
                         None,
-                        Some(&codex_path),
-                        Some(SourceFilter::Codex),
+                        Some(proj.as_str()),
+                        source_filter,
                         MessageQueryOptions::new(None, 0, sort),
                     );
-                    messages.extend(codex.messages);
+                    serialize(&response, cli.pretty)?
+                } else {
+                    let (codex_path, claude_name) =
+                        resolve_project_from_cwd().context("could not get current directory")?;
+                    let cursor_name = claude_name.clone();
+                    let mut messages: Vec<ApiMessage> = Vec::new();
+                    if source_filter.is_none() || source_filter == Some(SourceFilter::Codex) {
+                        let codex = service.messages(
+                            None,
+                            Some(&codex_path),
+                            Some(SourceFilter::Codex),
+                            MessageQueryOptions::new(None, 0, sort),
+                        );
+                        messages.extend(codex.messages);
+                    }
+                    if source_filter.is_none() || source_filter == Some(SourceFilter::Claude) {
+                        let claude = service.messages(
+                            None,
+                            Some(&claude_name),
+                            Some(SourceFilter::Claude),
+                            MessageQueryOptions::new(None, 0, sort),
+                        );
+                        messages.extend(claude.messages);
+                    }
+                    if source_filter.is_none() || source_filter == Some(SourceFilter::Cursor) {
+                        let cursor = service.messages(
+                            None,
+                            Some(&cursor_name),
+                            Some(SourceFilter::Cursor),
+                            MessageQueryOptions::new(None, 0, sort),
+                        );
+                        messages.extend(cursor.messages);
+                    }
+                    if source_filter.is_none() || source_filter == Some(SourceFilter::Grok) {
+                        let grok = service.messages(
+                            None,
+                            Some(&codex_path),
+                            Some(SourceFilter::Grok),
+                            MessageQueryOptions::new(None, 0, sort),
+                        );
+                        messages.extend(grok.messages);
+                    }
+                    if source_filter.is_none() || source_filter == Some(SourceFilter::Pi) {
+                        let pi = service.messages(
+                            None,
+                            Some(&codex_path),
+                            Some(SourceFilter::Pi),
+                            MessageQueryOptions::new(None, 0, sort),
+                        );
+                        messages.extend(pi.messages);
+                    }
+                    messages.sort_by(|a, b| {
+                        a.timestamp
+                            .cmp(&b.timestamp)
+                            .then_with(|| a.session_id.cmp(&b.session_id))
+                    });
+                    let total = messages.len() as i64;
+                    let response = ApiMessagesResponse {
+                        messages,
+                        total_messages: total,
+                        next_page: false,
+                        next_offset: total,
+                        next_command: None,
+                    };
+                    serialize(&response, cli.pretty)?
                 }
-                if source_filter.is_none() || source_filter == Some(SourceFilter::Claude) {
-                    let claude = service.messages(
-                        None,
-                        Some(&claude_name),
-                        Some(SourceFilter::Claude),
-                        MessageQueryOptions::new(None, 0, sort),
-                    );
-                    messages.extend(claude.messages);
-                }
-                if source_filter.is_none() || source_filter == Some(SourceFilter::Cursor) {
-                    let cursor = service.messages(
-                        None,
-                        Some(&cursor_name),
-                        Some(SourceFilter::Cursor),
-                        MessageQueryOptions::new(None, 0, sort),
-                    );
-                    messages.extend(cursor.messages);
-                }
-                if source_filter.is_none() || source_filter == Some(SourceFilter::Grok) {
-                    let grok = service.messages(
-                        None,
-                        Some(&codex_path),
-                        Some(SourceFilter::Grok),
-                        MessageQueryOptions::new(None, 0, sort),
-                    );
-                    messages.extend(grok.messages);
-                }
-                if source_filter.is_none() || source_filter == Some(SourceFilter::Pi) {
-                    let pi = service.messages(
-                        None,
-                        Some(&codex_path),
-                        Some(SourceFilter::Pi),
-                        MessageQueryOptions::new(None, 0, sort),
-                    );
-                    messages.extend(pi.messages);
-                }
-                messages.sort_by(|a, b| {
-                    a.timestamp
-                        .cmp(&b.timestamp)
-                        .then_with(|| a.session_id.cmp(&b.session_id))
-                });
-                let total = messages.len() as i64;
-                let response = ApiMessagesResponse {
-                    messages,
-                    total_messages: total,
-                    next_page: false,
-                    next_offset: total,
-                    next_command: None,
-                };
-                serialize(&response, cli.pretty)?
             }
         }
         Commands::Remember(remember) => {
@@ -447,6 +511,13 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             format_remember_response(&response, remember.output_format, cli.pretty)?
         }
         Commands::Note { text } => serialize(&note_response(text)?, cli.pretty)?,
+        Commands::Rg(args) => rg_output(&args, source_filter, cli.pretty)?,
+        Commands::Search(args) => {
+            if args.line {
+                bail!("--line is only supported for `mmr rg`");
+            }
+            serialize(&search_response(&args, source_filter)?, cli.pretty)?
+        }
         Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
         Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
         Commands::DbInfo {
@@ -518,6 +589,287 @@ fn now_rfc3339() -> Result<String> {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .context("format timestamp")
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResponse {
+    query: String,
+    total_results: usize,
+    results: Vec<SearchResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResult {
+    project_id: String,
+    source: String,
+    session_id: String,
+    event_id: String,
+    event_type: String,
+    role: String,
+    timestamp: String,
+    citation: String,
+    line_number: usize,
+    snippet: String,
+    before: Vec<String>,
+    after: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportTreeResponse {
+    format: String,
+    output_dir: String,
+    total_files: usize,
+    files: Vec<ExportTreeFile>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportTreeFile {
+    path: String,
+    event_id: String,
+    citation: String,
+}
+
+fn rg_output(
+    args: &SearchTextArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    let response = search_response(args, source_filter)?;
+    if !args.line {
+        return serialize(&response, pretty);
+    }
+
+    let mut output = String::new();
+    for result in response.results {
+        output.push_str(&format!(
+            "{}\t{}\t{}\t{}\n",
+            result.citation, result.line_number, result.source, result.snippet
+        ));
+    }
+    Ok(output)
+}
+
+fn search_response(
+    args: &SearchTextArgs,
+    source_filter: Option<SourceFilter>,
+) -> Result<SearchResponse> {
+    let mut store = Store::open_default()?;
+    let project = linked_project(&store, args.project.as_deref())?;
+    let results = search_project(
+        &mut store,
+        &project,
+        source_filter,
+        args.session.as_deref(),
+        args.role.as_deref(),
+        args.event_type.as_deref(),
+        &args.query,
+        args.ignore_case,
+        args.context,
+    )?;
+
+    Ok(SearchResponse {
+        query: args.query.clone(),
+        total_results: results.len(),
+        results,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_project(
+    store: &mut Store,
+    project: &ProjectRecord,
+    source_filter: Option<SourceFilter>,
+    session: Option<&str>,
+    role: Option<&str>,
+    event_type: Option<&str>,
+    query: &str,
+    ignore_case: bool,
+    context: usize,
+) -> Result<Vec<SearchResult>> {
+    if query.is_empty() {
+        bail!("search query is empty");
+    }
+
+    let events =
+        store.events_for_project(&project.id, source_filter_name(source_filter), session)?;
+    let mut results = Vec::new();
+    for event in events {
+        if role.is_some_and(|role| role != event.role) {
+            continue;
+        }
+        if event_type.is_some_and(|event_type| event_type != event.event_type) {
+            continue;
+        }
+
+        let search_document = store.upsert_search_document(&event)?;
+        for line_match in
+            find_line_matches(&search_document.document_text, query, ignore_case, context)
+        {
+            results.push(SearchResult {
+                project_id: event.project_id.clone(),
+                source: event.source.clone(),
+                session_id: event.session_id.clone(),
+                event_id: event.id.clone(),
+                event_type: event.event_type.clone(),
+                role: event.role.clone(),
+                timestamp: event.timestamp.clone(),
+                citation: search_document.citation.clone(),
+                line_number: line_match.line_number,
+                snippet: line_match.snippet,
+                before: line_match.before,
+                after: line_match.after,
+            });
+        }
+    }
+
+    results.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+            .then_with(|| left.line_number.cmp(&right.line_number))
+    });
+    Ok(results)
+}
+
+#[derive(Debug)]
+struct LineMatch {
+    line_number: usize,
+    snippet: String,
+    before: Vec<String>,
+    after: Vec<String>,
+}
+
+fn find_line_matches(
+    document_text: &str,
+    query: &str,
+    ignore_case: bool,
+    context: usize,
+) -> Vec<LineMatch> {
+    let lines = document_text.lines().collect::<Vec<_>>();
+    let query_cmp = if ignore_case {
+        query.to_lowercase()
+    } else {
+        query.to_string()
+    };
+    let mut matches = Vec::new();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let line_cmp = if ignore_case {
+            line.to_lowercase()
+        } else {
+            (*line).to_string()
+        };
+        if !line_cmp.contains(&query_cmp) {
+            continue;
+        }
+        let before_start = idx.saturating_sub(context);
+        let after_end = (idx + 1 + context).min(lines.len());
+        matches.push(LineMatch {
+            line_number: idx + 1,
+            snippet: truncate_snippet(line),
+            before: lines[before_start..idx]
+                .iter()
+                .map(|line| truncate_snippet(line))
+                .collect(),
+            after: lines[idx + 1..after_end]
+                .iter()
+                .map(|line| truncate_snippet(line))
+                .collect(),
+        });
+    }
+
+    matches
+}
+
+fn truncate_snippet(line: &str) -> String {
+    const MAX_SNIPPET_CHARS: usize = 500;
+    let mut snippet = line.chars().take(MAX_SNIPPET_CHARS).collect::<String>();
+    if line.chars().count() > MAX_SNIPPET_CHARS {
+        snippet.push_str("...");
+    }
+    snippet
+}
+
+fn export_tree_response(
+    project: Option<String>,
+    output_dir: Option<PathBuf>,
+    source_filter: Option<SourceFilter>,
+) -> Result<ExportTreeResponse> {
+    let base_output_dir =
+        output_dir.ok_or_else(|| anyhow::anyhow!("--output-dir is required with --format tree"))?;
+    fs::create_dir_all(&base_output_dir).with_context(|| {
+        format!(
+            "create export output directory {}",
+            base_output_dir.display()
+        )
+    })?;
+
+    let store = Store::open_default()?;
+    let project_path = project.as_deref().map(PathBuf::from);
+    let project = linked_project(&store, project_path.as_deref())?;
+    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    let run_dir = base_output_dir.join(format!(
+        "mmr-tree-{}",
+        sanitize_path_component(&content_hash(&format!(
+            "{}:{}:{}",
+            project.id,
+            source_filter_name(source_filter).unwrap_or("all"),
+            now_rfc3339()?
+        )))
+    ));
+    fs::create_dir_all(&run_dir)
+        .with_context(|| format!("create export run directory {}", run_dir.display()))?;
+    let mut files = Vec::new();
+
+    for event in events {
+        let search_document = store.upsert_search_document(&event)?;
+        let relative_path = PathBuf::from(sanitize_path_component(&event.source))
+            .join(sanitize_path_component(&event.session_id))
+            .join(format!("{}.md", sanitize_path_component(&event.id)));
+        let full_path = run_dir.join(&relative_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create export subdirectory {}", parent.display()))?;
+        }
+        let contents = format!(
+            "# mmr event\n\ncitation: {}\nsource: {}\nsession_id: {}\nevent_id: {}\nevent_type: {}\nrole: {}\ntimestamp: {}\n\n{}\n",
+            search_document.citation,
+            event.source,
+            event.session_id,
+            event.id,
+            event.event_type,
+            event.role,
+            event.timestamp,
+            search_document.document_text
+        );
+        fs::write(&full_path, contents)
+            .with_context(|| format!("write export file {}", full_path.display()))?;
+        files.push(ExportTreeFile {
+            path: full_path.to_string_lossy().into_owned(),
+            event_id: event.id,
+            citation: search_document.citation,
+        });
+    }
+
+    Ok(ExportTreeResponse {
+        format: "tree".to_string(),
+        output_dir: run_dir.to_string_lossy().into_owned(),
+        total_files: files.len(),
+        files,
+    })
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -1342,6 +1694,26 @@ mod tests {
             panic!("expected note command");
         };
         assert_eq!(text, vec!["decision:", "use", "fixtures"]);
+    }
+
+    #[test]
+    fn rg_and_search_commands_parse() {
+        let rg = Cli::try_parse_from(["mmr", "rg", "panic", "--role", "assistant", "-i"])
+            .expect("rg should parse");
+        let Commands::Rg(args) = rg.command else {
+            panic!("expected rg command");
+        };
+        assert_eq!(args.query, "panic");
+        assert_eq!(args.role.as_deref(), Some("assistant"));
+        assert!(args.ignore_case);
+
+        let search = Cli::try_parse_from(["mmr", "search", "decision", "--session", "notes"])
+            .expect("search should parse");
+        let Commands::Search(args) = search.command else {
+            panic!("expected search command");
+        };
+        assert_eq!(args.query, "decision");
+        assert_eq!(args.session.as_deref(), Some("notes"));
     }
 
     #[test]

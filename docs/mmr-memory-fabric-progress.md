@@ -2,11 +2,11 @@
 
 ## Current State
 
-- Branch: `codex/nhl-272-redaction`
-- Last green commit: `1cb2a0f` (`add note ingestion command`)
-- Active Linear ticket: NHL-272
-- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271
-- Current work: redaction-before-sync pipeline
+- Branch: `codex/nhl-273-search`
+- Last green commit: `ba8bb0a` (`add redaction safety pipeline`)
+- Active Linear ticket: NHL-273
+- Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272
+- Current work: exact and structured lexical search
 
 ## Current Architecture Decisions
 
@@ -37,6 +37,11 @@
 - NHL-272 redaction uses deterministic local secret/PII scanners by default,
   records redaction runs/spans in SQLite, and exposes `mmr sync --dry-run` as a
   safety view before NHL-277 full remote sync.
+- NHL-273 search uses generated local `search_documents` rows, literal substring
+  matching by default, `--ignore-case` for case-insensitive matching, and JSON
+  stdout except for explicit `mmr rg --line`.
+- `mmr export --format tree` writes each run into a fresh `mmr-tree-*`
+  subdirectory and omits local raw refs from exported files.
 
 ## Verification Commands And Results
 
@@ -97,6 +102,34 @@
 - NHL-272 implementation is in progress; source-filtered and read-only dry-run
   fixes from adversarial review are applied. Follow-up review found no blockers.
   Full verification is green.
+- Latest NHL-272 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 56 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 10 active tests passed and 11 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=726`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
+- NHL-273 focused checks:
+  - `cargo test --test memory_fabric_contract rg_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract search_cli_contract_is_implemented -- --nocapture`:
+    passed
+  - `cargo test --test memory_fabric_contract search_document_contract_is_implemented -- --nocapture`:
+    passed
+- Search/citation adversarial review found stale tree export files, raw local ref
+  leakage, `search --line` ambiguity, and colon-delimited `rg --line` parsing
+  issues. Fixes are applied and verification was rerun successfully.
+- Latest NHL-273 full verification:
+  - `cargo fmt`: passed
+  - `cargo test`: passed, including 57 unit tests, 65 CLI contract tests, and
+    `memory_fabric_contract` with 13 active tests passed and 8 pending ignored
+    contracts
+  - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
+    (`elapsed_ms=819`)
+  - `cargo clippy --all-targets --all-features -- -D warnings`: passed
+  - `cargo build --release`: passed
 
 ## Touched Files And Modules
 
@@ -117,10 +150,11 @@
 - `docs/mmr-note.md`
 - `src/redaction.rs`
 - `docs/mmr-redaction.md`
+- `docs/mmr-search.md`
 
 ## Open Blockers
 
-- None for NHL-272.
+- None for NHL-273.
 
 ## Known Risks
 
@@ -135,8 +169,6 @@
 - Provider-specific Codex, Claude, and Cursor adapters are deferred to NHL-274,
   NHL-275, and NHL-276. NHL-270 only supplies the provider-neutral framework and
   fixture adapter.
-- `mmr note` creates search documents, but public `mmr search`/`mmr rg` remains
-  deferred to NHL-273.
 - The optional `openai/privacy-filter` model runtime is not bundled; redaction
   reports degraded PII coverage while deterministic blocking remains active.
 - Under degraded PII coverage, `sync --dry-run` treats every event as blocked
@@ -146,11 +178,14 @@
   degraded-policy events without explicit versioned override.
 - False-positive allowlist and hard-purge flows are documented as explicit
   future policy surfaces, not silent MVP behavior.
+- `mmr export --format tree` writes local raw search material for external
+  tools into a fresh run directory and requires explicit `--output-dir`; it is
+  not a remote sync path.
 
 ## Next Exact Action
 
-Finish NHL-272 docs/tests, run adversarial review for secret exfiltration and
-irreversible remote history, then run the full verification loop.
+Commit and push NHL-273, update Linear with scope/tests/risks, then begin the
+next unblocked MVP ticket.
 
 ## Do Not Redo
 
@@ -159,7 +194,8 @@ irreversible remote history, then run the full verification loop.
 - NHL-269 is already marked `Done` in Linear.
 - NHL-270 is already marked `Done` in Linear.
 - NHL-271 is already marked `Done` in Linear.
-- NHL-272 is already marked `In Progress`.
+- NHL-272 is already marked `Done` in Linear.
+- NHL-273 is already marked `In Progress`.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 

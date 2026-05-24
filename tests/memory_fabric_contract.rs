@@ -390,21 +390,160 @@ fn note_requires_linked_project() {
 }
 
 #[test]
-#[ignore = "pending NHL-273: implement rg command"]
 fn rg_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-273",
-        "mmr rg performs POSIX-friendly exact search over generated documents with citations",
+    let (_tmp, home, data_home, project, codex_event_id, _) = seed_search_fixture();
+
+    let exact = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["rg", "panic at src/main.rs:42"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("rg exact");
+    assert!(
+        exact.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&exact.stderr)
+    );
+    let exact_json: serde_json::Value = serde_json::from_slice(&exact.stdout).expect("rg JSON");
+    assert_eq!(exact_json["total_results"].as_u64().unwrap(), 1);
+    let result = &exact_json["results"][0];
+    assert_eq!(result["event_id"].as_str().unwrap(), codex_event_id);
+    assert!(
+        result["citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://event/")
+    );
+
+    let special = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["rg", "ERROR[abc]*"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("rg special");
+    assert!(
+        special.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&special.stderr)
+    );
+    let special_json: serde_json::Value =
+        serde_json::from_slice(&special.stdout).expect("rg special JSON");
+    assert_eq!(
+        special_json["total_results"].as_u64().unwrap(),
+        1,
+        "special characters are literal, not regex"
+    );
+
+    let scoped = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["--source", "codex", "rg", "PANIC", "--ignore-case"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("rg scoped");
+    assert!(
+        scoped.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&scoped.stderr)
+    );
+    let scoped_json: serde_json::Value =
+        serde_json::from_slice(&scoped.stdout).expect("rg scoped JSON");
+    assert_eq!(scoped_json["total_results"].as_u64().unwrap(), 1);
+    assert!(
+        scoped_json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|result| result["source"] == "codex")
+    );
+
+    let line = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["rg", "panic at src/main.rs:42", "--line"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("rg line");
+    assert!(
+        line.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&line.stderr)
+    );
+    let line_stdout = String::from_utf8(line.stdout).expect("line stdout utf8");
+    assert!(line_stdout.contains("mmr://event/"));
+    assert!(line_stdout.contains("panic at src/main.rs:42"));
+    let columns = line_stdout
+        .lines()
+        .next()
+        .expect("line result")
+        .split('\t')
+        .collect::<Vec<_>>();
+    assert_eq!(columns.len(), 4);
+    assert!(columns[0].starts_with("mmr://event/"));
+    assert_eq!(columns[1], "1");
+
+    let search_line = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["search", "decision", "--line"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("search line rejection");
+    assert!(!search_line.status.success(), "search --line should fail");
+    assert!(
+        String::from_utf8_lossy(&search_line.stderr).contains("--line is only supported"),
+        "stderr={}",
+        String::from_utf8_lossy(&search_line.stderr)
     );
 }
 
 #[test]
-#[ignore = "pending NHL-273: implement search command"]
 fn search_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-273",
-        "mmr search performs structured exact search with source, role, project, session, event-type, and citation fields",
+    let (_tmp, home, data_home, project, _, note_event_id) = seed_search_fixture();
+
+    let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["search", "decision", "--role", "user", "--session", "notes"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("search decision");
+    assert!(
+        search.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&search.stderr)
     );
+    let json: serde_json::Value = serde_json::from_slice(&search.stdout).expect("search JSON");
+    assert_eq!(json["query"], "decision");
+    assert_eq!(json["total_results"].as_u64().unwrap(), 1);
+    let result = &json["results"][0];
+    assert_eq!(result["event_id"].as_str().unwrap(), note_event_id);
+    assert_eq!(result["role"], "user");
+    assert_eq!(result["event_type"], "note");
+    assert!(result["snippet"].as_str().unwrap().contains("decision"));
+    assert!(result.get("raw_local_ref").is_none());
+
+    let project_scoped = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "search",
+            "decision",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("project search");
+    assert!(
+        project_scoped.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&project_scoped.stderr)
+    );
+    let project_json: serde_json::Value =
+        serde_json::from_slice(&project_scoped.stdout).expect("project search JSON");
+    assert_eq!(project_json["total_results"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -706,12 +845,60 @@ fn redaction_policy_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-273: implement search document generation"]
 fn search_document_contract_is_implemented() {
-    pending_contract(
-        "NHL-273",
-        "generate exact-search documents with event citations for every normalized event",
+    let (_tmp, home, data_home, project, codex_event_id, _) = seed_search_fixture();
+
+    let output_dir = tempfile::tempdir().expect("export output dir");
+    let export = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "export",
+            "--format",
+            "tree",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+            "--output-dir",
+            output_dir.path().to_str().expect("output path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("export tree");
+    assert!(
+        export.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&export.stderr)
     );
+    let export_json: serde_json::Value =
+        serde_json::from_slice(&export.stdout).expect("export tree JSON");
+    assert!(export_json["total_files"].as_u64().unwrap() >= 3);
+    let files = export_json["files"].as_array().unwrap();
+    assert!(files.iter().any(|file| file["event_id"] == codex_event_id));
+    let run_dir = std::path::PathBuf::from(export_json["output_dir"].as_str().unwrap());
+    assert_eq!(run_dir.parent().unwrap(), output_dir.path());
+    assert!(
+        run_dir
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("mmr-tree-")
+    );
+    let searchable_text = files
+        .iter()
+        .map(|file| {
+            std::fs::read_to_string(file["path"].as_str().unwrap()).expect("read exported file")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(searchable_text.contains("panic at src/main.rs:42"));
+    assert!(!searchable_text.contains("raw_local_ref"));
+    assert!(!searchable_text.contains("tests/fixtures/search/codex.jsonl"));
+
+    let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+    let search_doc = store
+        .search_document_by_event(&codex_event_id)
+        .expect("generated search document");
+    assert!(search_doc.document_text.contains("panic at src/main.rs:42"));
 }
 
 #[test]
@@ -743,4 +930,87 @@ fn sync_manifest_contract_is_implemented() {
 
 fn pending_contract(ticket: &str, behavior: &str) -> ! {
     panic!("{ticket} pending contract: {behavior}. Remove #[ignore] when implemented.");
+}
+
+fn seed_search_fixture() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    String,
+    String,
+) {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let root = tmp.path().to_path_buf();
+    let home = root.join("home");
+    let data_home = root.join("data");
+    let project = root.join("plain-project");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+
+    let link = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "__db-info",
+            "--project",
+            project.to_str().expect("project path UTF-8"),
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .output()
+        .expect("link project");
+    assert!(
+        link.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+
+    let mut store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+    let project_record = store
+        .project_by_path(&project)
+        .expect("project lookup")
+        .expect("project");
+    let codex = mmr::store::NewEvent::new(
+        "codex",
+        "search-codex",
+        "tool_output",
+        "tool",
+        "2026-05-24T11:00:00Z",
+        "panic at src/main.rs:42\nERROR[abc]* literal marker",
+        "search-test-v1",
+    )
+    .with_source_event_id("search-codex-1")
+    .with_raw_local_ref("tests/fixtures/search/codex.jsonl:1");
+    let codex_event = store
+        .insert_event(&project_record.id, &codex)
+        .expect("insert codex event without search doc");
+
+    let note = mmr::store::NewEvent::new(
+        "note",
+        "notes",
+        "note",
+        "user",
+        "2026-05-24T11:01:00Z",
+        "decision: exact search should stay lexical",
+        "note-v1",
+    )
+    .with_source_event_id("search-note-1");
+    let (note_event, _) = store
+        .insert_event_with_search_document(&project_record.id, &note)
+        .expect("insert note event");
+
+    let cursor = mmr::store::NewEvent::new(
+        "cursor",
+        "search-cursor",
+        "message",
+        "assistant",
+        "2026-05-24T11:02:00Z",
+        "panic at cursor should be filtered by source",
+        "search-test-v1",
+    )
+    .with_source_event_id("search-cursor-1");
+    store
+        .insert_event_with_search_document(&project_record.id, &cursor)
+        .expect("insert cursor event");
+
+    (tmp, home, data_home, project, codex_event.id, note_event.id)
 }

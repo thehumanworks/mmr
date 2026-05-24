@@ -223,6 +223,10 @@ Key fields:
 These rows are local-only source material until a redacted sync projection is
 explicitly generated. Sync code must not export `document_text` directly.
 
+NHL-273 search commands rebuild missing rows from normalized events on demand.
+`mmr rg` and `mmr search` read these documents for lexical matches and return
+`mmr://event/<event-id>` citations.
+
 ### `summaries`
 
 Stateless summary audit/cache records.

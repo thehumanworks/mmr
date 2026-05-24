@@ -17,3 +17,4 @@ When implementing or reviewing behavior:
 - [Source adapter framework](../docs/mmr-source-adapters.md)
 - [Note command](../docs/mmr-note.md)
 - [Redaction before sync](../docs/mmr-redaction.md)
+- [Search commands](../docs/mmr-search.md)
