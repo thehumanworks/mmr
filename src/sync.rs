@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,8 +11,9 @@ use crate::redaction::{
     RedactionFinding, scan_text_with_detector,
 };
 use crate::store::{
-    DEFAULT_REDACTION_POLICY_ID, EventRecord, NewEvent, NewRedactionSpan, NewSyncManifestEntry,
-    ProjectRecord, SourceEventIdentity, Store, content_hash, default_db_path,
+    DEFAULT_REDACTION_POLICY_ID, EventRecord, LearnedMemoryRecord, NewEvent, NewLearnedMemory,
+    NewRedactionSpan, NewSyncManifestEntry, ProjectRecord, SourceEventIdentity, Store,
+    content_hash, default_db_path,
 };
 
 const ENV_FAKE_REMOTE_DIR: &str = "MMR_FAKE_REMOTE_DIR";
@@ -44,6 +45,9 @@ pub struct HydrationReport {
     pub remote_events: usize,
     pub inserted_events: usize,
     pub existing_events: usize,
+    pub remote_learned_memory: usize,
+    pub inserted_learned_memory: usize,
+    pub existing_learned_memory: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,8 +61,12 @@ pub struct SyncReport {
     pub synced_events: usize,
     pub uploaded_events: usize,
     pub uploaded_search_documents: usize,
+    pub synced_learned_memory: usize,
+    pub uploaded_learned_memory: usize,
     pub blocked_events: usize,
+    pub blocked_learned_memory: usize,
     pub remote_events: usize,
+    pub remote_learned_memory: usize,
     pub append_only: bool,
     pub pii_coverage: PiiCoverage,
     pub blocked: Vec<SyncBlockedEvent>,
@@ -107,6 +115,20 @@ struct RemoteProjectPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemoteLearnedMemoryPayload {
+    manifest_version: u32,
+    id: String,
+    kind: String,
+    claim: String,
+    confidence: f64,
+    status: String,
+    evidence_refs: Vec<String>,
+    counterevidence_refs: Vec<String>,
+    content_hash: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RemoteManifestPayload {
     manifest_version: u32,
     remote: String,
@@ -127,10 +149,18 @@ struct RemoteManifestEntry {
 #[derive(Debug, Clone)]
 struct SyncProjection {
     event_id: String,
+    original_event_id: String,
     event: RemoteEventPayload,
     search: RemoteSearchPayload,
     event_path: String,
     search_path: String,
+}
+
+#[derive(Debug, Clone)]
+struct LearnedMemoryProjection {
+    memory_id: String,
+    memory: RemoteLearnedMemoryPayload,
+    path: String,
 }
 
 pub fn remote_for_operations() -> Result<FakeGithubRemote> {
@@ -158,43 +188,88 @@ pub fn hydrate_project(
     remote: &FakeGithubRemote,
 ) -> Result<HydrationReport> {
     let events = remote.read_events(project)?;
+    let learned_memory = remote.read_learned_memory(project)?;
     let mut inserted_events = 0;
     let mut existing_events = 0;
+    let mut inserted_learned_memory = 0;
+    let mut existing_learned_memory = 0;
     let mut synced_event_ids = Vec::new();
+    let mut remote_event_ref_map = BTreeMap::new();
+    let mut remote_evidence_refs = BTreeSet::new();
 
     for payload in &events {
         let event = payload.to_new_event(remote)?;
-        if let Some(event_record) = store.event_by_source_identity(SourceEventIdentity {
-            project_id: &project.id,
-            source: &payload.source,
-            source_session_id: &payload.source_session_id,
-            source_event_id: payload.source_event_id.as_deref(),
-            event_type: &payload.event_type,
-            role: &payload.role,
-            timestamp: &payload.timestamp,
-            parent_hash: payload.parent_hash.as_deref(),
-            parser_version: &payload.parser_version,
-        })? {
+        let event_record = if let Some(event_record) =
+            store.event_by_source_identity(SourceEventIdentity {
+                project_id: &project.id,
+                source: &payload.source,
+                source_session_id: &payload.source_session_id,
+                source_event_id: payload.source_event_id.as_deref(),
+                event_type: &payload.event_type,
+                role: &payload.role,
+                timestamp: &payload.timestamp,
+                parent_hash: payload.parent_hash.as_deref(),
+                parser_version: &payload.parser_version,
+            })? {
             store.upsert_search_document(&event_record)?;
-            synced_event_ids.push(event_record.id);
             existing_events += 1;
+            event_record
         } else if store.event_exists(&event.event_id())? {
             let event_record = store.event_by_id(&event.event_id())?;
             store.upsert_search_document(&event_record)?;
-            synced_event_ids.push(event_record.id);
             existing_events += 1;
+            event_record
         } else {
             let (event_record, _) = store.insert_event_with_search_document(&project.id, &event)?;
-            synced_event_ids.push(event_record.id);
             inserted_events += 1;
-        }
+            event_record
+        };
+        synced_event_ids.push(event_record.id.clone());
+        remote_evidence_refs.insert(format!("mmr://event/{}", payload.event_id));
+        remote_event_ref_map.insert(
+            format!("mmr://event/{}", payload.event_id),
+            format!("mmr://event/{}", event_record.id),
+        );
     }
     store.mark_events_synced(&synced_event_ids)?;
+
+    for payload in &learned_memory {
+        payload
+            .validate(&remote_evidence_refs)
+            .map_err(|err| anyhow::anyhow!("invalid remote learned memory payload: {err}"))?;
+        let evidence_refs =
+            remap_remote_learned_memory_refs(&payload.evidence_refs, &remote_event_ref_map)?;
+        let counterevidence_refs =
+            remap_remote_learned_memory_refs(&payload.counterevidence_refs, &remote_event_ref_map)?;
+        let existed = store.learned_memory_by_id(&payload.id).is_ok();
+        let memory = NewLearnedMemory {
+            kind: payload.kind.clone(),
+            claim: payload.claim.clone(),
+            confidence: payload.confidence,
+            evidence_refs,
+            counterevidence_refs,
+            status: payload.status.clone(),
+        };
+        store.upsert_learned_memory_from_sync(
+            &payload.id,
+            &project.id,
+            &memory,
+            &payload.created_at,
+        )?;
+        if existed {
+            existing_learned_memory += 1;
+        } else {
+            inserted_learned_memory += 1;
+        }
+    }
 
     Ok(HydrationReport {
         remote_events: events.len(),
         inserted_events,
         existing_events,
+        remote_learned_memory: learned_memory.len(),
+        inserted_learned_memory,
+        existing_learned_memory,
     })
 }
 
@@ -258,8 +333,32 @@ pub fn sync_project(
         projections.push(projection);
     }
 
+    let mut evidence_ref_map = BTreeMap::new();
+    for projection in &projections {
+        evidence_ref_map.insert(
+            format!("mmr://event/{}", projection.original_event_id),
+            format!("mmr://event/{}", projection.event_id),
+        );
+    }
+    let mut learned_projections = Vec::new();
+    let mut blocked_learned_memory = 0;
+    if source.is_none() {
+        for memory in store.learned_memory_for_project(&project.id)? {
+            if memory.status != "active" {
+                continue;
+            }
+            match LearnedMemoryProjection::from_memory(&project_prefix, &memory, &evidence_ref_map)
+            {
+                Ok(Some(projection)) => learned_projections.push(projection),
+                Ok(None) => blocked_learned_memory += 1,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
     let mut uploaded_events = 0;
     let mut uploaded_search_documents = 0;
+    let mut uploaded_learned_memory = 0;
     let mut manifest_entries = Vec::new();
     for projection in &projections {
         if remote.write_json_if_absent(&projection.event_path, &projection.event)? {
@@ -279,6 +378,17 @@ pub fn sync_project(
             ref_id: projection.event_id.clone(),
             content_hash: projection.search.content_hash.clone(),
             sync_path: projection.search_path.clone(),
+        });
+    }
+    for projection in &learned_projections {
+        if remote.write_json_if_absent(&projection.path, &projection.memory)? {
+            uploaded_learned_memory += 1;
+        }
+        manifest_entries.push(RemoteManifestEntry {
+            kind: "learned_memory".to_string(),
+            ref_id: projection.memory_id.clone(),
+            content_hash: projection.memory.content_hash.clone(),
+            sync_path: projection.path.clone(),
         });
     }
     manifest_entries.sort_by(|left, right| {
@@ -321,9 +431,10 @@ pub fn sync_project(
     store.mark_events_synced(&synced_original_ids)?;
 
     let remote_events = remote.count_events(project)?;
-    let status = if blocked.is_empty() {
+    let remote_learned_memory = remote.count_learned_memory(project)?;
+    let status = if blocked.is_empty() && blocked_learned_memory == 0 {
         "synced"
-    } else if projections.is_empty() {
+    } else if projections.is_empty() && learned_projections.is_empty() {
         "blocked"
     } else {
         "partial"
@@ -342,8 +453,12 @@ pub fn sync_project(
         synced_events: projections.len(),
         uploaded_events,
         uploaded_search_documents,
+        synced_learned_memory: learned_projections.len(),
+        uploaded_learned_memory,
         blocked_events: blocked.len(),
+        blocked_learned_memory,
         remote_events,
+        remote_learned_memory,
         append_only: true,
         pii_coverage,
         blocked,
@@ -422,6 +537,23 @@ impl FakeGithubRemote {
         Ok(count)
     }
 
+    pub fn count_learned_memory(&self, project: &ProjectRecord) -> Result<usize> {
+        let Some(project_prefix) = self.project_prefix_for_read(project)? else {
+            return Ok(0);
+        };
+        let memory_dir = self.root.join(project_prefix).join("learned-memory");
+        if !memory_dir.exists() {
+            return Ok(0);
+        }
+        let count = WalkDir::new(memory_dir)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        Ok(count)
+    }
+
     fn write_project(
         &self,
         project: &ProjectRecord,
@@ -489,6 +621,44 @@ impl FakeGithubRemote {
                 .then_with(|| left.event_id.cmp(&right.event_id))
         });
         Ok(events)
+    }
+
+    fn read_learned_memory(
+        &self,
+        project: &ProjectRecord,
+    ) -> Result<Vec<RemoteLearnedMemoryPayload>> {
+        let Some(project_prefix) = self.project_prefix_for_read(project)? else {
+            return Ok(Vec::new());
+        };
+        let memory_dir = self.root.join(project_prefix).join("learned-memory");
+        if !memory_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut memories = Vec::new();
+        for entry in WalkDir::new(memory_dir)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        {
+            let bytes = fs::read(entry.path()).with_context(|| {
+                format!("read remote learned memory {}", entry.path().display())
+            })?;
+            let payload = serde_json::from_slice::<RemoteLearnedMemoryPayload>(&bytes)
+                .with_context(|| {
+                    format!("parse remote learned memory {}", entry.path().display())
+                })?;
+            payload
+                .validate_shape()
+                .map_err(|err| anyhow::anyhow!("invalid remote learned memory payload: {err}"))?;
+            memories.push(payload);
+        }
+        memories.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(memories)
     }
 
     fn write_json_if_absent<T: Serialize>(&self, relative_path: &str, value: &T) -> Result<bool> {
@@ -628,11 +798,87 @@ impl SyncProjection {
 
         Self {
             event_id,
+            original_event_id: event.id.clone(),
             event: event_payload,
             search,
             event_path,
             search_path,
         }
+    }
+}
+
+impl LearnedMemoryProjection {
+    fn from_memory(
+        project_prefix: &str,
+        memory: &LearnedMemoryRecord,
+        evidence_ref_map: &BTreeMap<String, String>,
+    ) -> Result<Option<Self>> {
+        if !remote_memory_kind_is_safe(&memory.kind) {
+            return Ok(None);
+        }
+        let outcome = scan_text_with_detector(&memory.claim, &DeterministicPrivacyDetector);
+        if outcome.blocks_sync || outcome.pii_coverage.status != PiiCoverageStatus::Available {
+            return Ok(None);
+        }
+        let kind_outcome = scan_text_with_detector(&memory.kind, &DeterministicPrivacyDetector);
+        if kind_outcome.blocks_sync
+            || kind_outcome.pii_coverage.status != PiiCoverageStatus::Available
+            || !kind_outcome.findings.is_empty()
+        {
+            return Ok(None);
+        }
+        let Some(evidence_refs) = remap_evidence_refs(&memory.evidence_refs, evidence_ref_map)
+        else {
+            return Ok(None);
+        };
+        let Some(counterevidence_refs) =
+            remap_evidence_refs(&memory.counterevidence_refs, evidence_ref_map)
+        else {
+            return Ok(None);
+        };
+        if evidence_refs.is_empty() {
+            return Ok(None);
+        }
+        let remote_kind = memory.kind.trim().to_ascii_lowercase();
+        let memory_id = remote_learned_memory_id(
+            &remote_kind,
+            &outcome.redacted_text,
+            memory.confidence,
+            &memory.status,
+            &evidence_refs,
+            &counterevidence_refs,
+        )?;
+        let content_hash = remote_learned_memory_content_hash(RemoteLearnedMemoryMaterial {
+            id: Some(&memory_id),
+            kind: &remote_kind,
+            claim: &outcome.redacted_text,
+            confidence: memory.confidence,
+            status: &memory.status,
+            evidence_refs: &evidence_refs,
+            counterevidence_refs: &counterevidence_refs,
+            created_at: Some(&memory.created_at),
+        })?;
+        let payload = RemoteLearnedMemoryPayload {
+            manifest_version: MANIFEST_VERSION,
+            id: memory_id.clone(),
+            kind: remote_kind,
+            claim: outcome.redacted_text,
+            confidence: memory.confidence,
+            status: memory.status.clone(),
+            evidence_refs,
+            counterevidence_refs,
+            content_hash,
+            created_at: memory.created_at.clone(),
+        };
+        let path = format!(
+            "{project_prefix}/learned-memory/{}.json",
+            safe_path_component(&memory_id)
+        );
+        Ok(Some(Self {
+            memory_id,
+            memory: payload,
+            path,
+        }))
     }
 }
 
@@ -690,6 +936,80 @@ impl RemoteEventPayload {
     }
 }
 
+impl RemoteLearnedMemoryPayload {
+    fn validate_shape(&self) -> Result<()> {
+        if self.manifest_version != MANIFEST_VERSION {
+            bail!(
+                "remote learned memory manifest version mismatch: expected {MANIFEST_VERSION}, found {}",
+                self.manifest_version
+            );
+        }
+        if !matches!(
+            self.status.as_str(),
+            "active" | "pending" | "superseded" | "rejected"
+        ) {
+            bail!("invalid remote learned memory status: {}", self.status);
+        }
+        if self.evidence_refs.is_empty() {
+            bail!("remote learned memory requires evidence refs");
+        }
+        for evidence_ref in self
+            .evidence_refs
+            .iter()
+            .chain(self.counterevidence_refs.iter())
+        {
+            if !evidence_ref.starts_with("mmr://event/") {
+                bail!("invalid remote learned memory evidence ref: {evidence_ref}");
+            }
+        }
+        if !remote_memory_kind_is_safe(&self.kind) {
+            bail!("remote learned memory kind is unsafe");
+        }
+        let expected_id = remote_learned_memory_id(
+            &self.kind,
+            &self.claim,
+            self.confidence,
+            &self.status,
+            &self.evidence_refs,
+            &self.counterevidence_refs,
+        )?;
+        if self.id != expected_id {
+            bail!("remote learned memory id mismatch for {}", self.id);
+        }
+        let expected_hash = remote_learned_memory_content_hash(RemoteLearnedMemoryMaterial {
+            id: Some(&self.id),
+            kind: &self.kind,
+            claim: &self.claim,
+            confidence: self.confidence,
+            status: &self.status,
+            evidence_refs: &self.evidence_refs,
+            counterevidence_refs: &self.counterevidence_refs,
+            created_at: Some(&self.created_at),
+        })?;
+        if self.content_hash != expected_hash {
+            bail!(
+                "remote learned memory content_hash mismatch for {}",
+                self.id
+            );
+        }
+        Ok(())
+    }
+
+    fn validate(&self, valid_evidence_refs: &BTreeSet<String>) -> Result<()> {
+        self.validate_shape()?;
+        for evidence_ref in self
+            .evidence_refs
+            .iter()
+            .chain(self.counterevidence_refs.iter())
+        {
+            if !valid_evidence_refs.contains(evidence_ref) {
+                bail!("remote learned memory references missing evidence: {evidence_ref}");
+            }
+        }
+        Ok(())
+    }
+}
+
 fn new_redaction_span_from_finding(finding: &RedactionFinding) -> NewRedactionSpan {
     NewRedactionSpan {
         kind: finding.kind.clone(),
@@ -714,6 +1034,107 @@ fn blocking_reasons(findings: &[RedactionFinding]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+fn remap_evidence_refs(
+    refs: &[String],
+    evidence_ref_map: &BTreeMap<String, String>,
+) -> Option<Vec<String>> {
+    let mut mapped = Vec::with_capacity(refs.len());
+    for evidence_ref in refs {
+        mapped.push(evidence_ref_map.get(evidence_ref)?.clone());
+    }
+    mapped.sort();
+    mapped.dedup();
+    Some(mapped)
+}
+
+fn remap_remote_learned_memory_refs(
+    refs: &[String],
+    evidence_ref_map: &BTreeMap<String, String>,
+) -> Result<Vec<String>> {
+    let mut mapped = Vec::with_capacity(refs.len());
+    for evidence_ref in refs {
+        let mapped_ref = evidence_ref_map.get(evidence_ref).ok_or_else(|| {
+            anyhow::anyhow!("remote learned memory references missing evidence: {evidence_ref}")
+        })?;
+        mapped.push(mapped_ref.clone());
+    }
+    mapped.sort();
+    mapped.dedup();
+    Ok(mapped)
+}
+
+fn remote_memory_kind_is_safe(kind: &str) -> bool {
+    let kind = kind.trim().to_ascii_lowercase();
+    if kind.is_empty()
+        || kind.len() > 64
+        || !kind
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        return false;
+    }
+    !["identity", "personal", "secret", "credential", "sensitive"]
+        .iter()
+        .any(|needle| kind.contains(needle))
+}
+
+fn remote_learned_memory_id(
+    kind: &str,
+    claim: &str,
+    confidence: f64,
+    status: &str,
+    evidence_refs: &[String],
+    counterevidence_refs: &[String],
+) -> Result<String> {
+    let material = remote_learned_memory_material(RemoteLearnedMemoryMaterial {
+        id: None,
+        kind,
+        claim,
+        confidence,
+        status,
+        evidence_refs,
+        counterevidence_refs,
+        created_at: None,
+    })?;
+    Ok(format!("learned-memory:v1:{}", content_hash(&material)))
+}
+
+fn remote_learned_memory_content_hash(input: RemoteLearnedMemoryMaterial<'_>) -> Result<String> {
+    let material = remote_learned_memory_material(input)?;
+    Ok(content_hash(&material))
+}
+
+struct RemoteLearnedMemoryMaterial<'a> {
+    id: Option<&'a str>,
+    kind: &'a str,
+    claim: &'a str,
+    confidence: f64,
+    status: &'a str,
+    evidence_refs: &'a [String],
+    counterevidence_refs: &'a [String],
+    created_at: Option<&'a str>,
+}
+
+fn remote_learned_memory_material(input: RemoteLearnedMemoryMaterial<'_>) -> Result<String> {
+    let mut evidence_refs = input.evidence_refs.to_vec();
+    evidence_refs.sort();
+    evidence_refs.dedup();
+    let mut counterevidence_refs = input.counterevidence_refs.to_vec();
+    counterevidence_refs.sort();
+    counterevidence_refs.dedup();
+    serde_json::to_string(&serde_json::json!({
+        "id": input.id,
+        "kind": input.kind,
+        "claim": input.claim,
+        "confidence": input.confidence,
+        "status": input.status,
+        "evidence_refs": evidence_refs,
+        "counterevidence_refs": counterevidence_refs,
+        "created_at": input.created_at,
+    }))
+    .context("serialize remote learned memory material")
 }
 
 fn manifest_root_hash(entries: &[RemoteManifestEntry]) -> String {

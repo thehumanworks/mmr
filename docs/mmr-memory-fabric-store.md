@@ -31,7 +31,7 @@ Tests and scripts should set `XDG_DATA_HOME` when they need an isolated store.
 ```json
 {
   "db_path": "/tmp/data/mmr/mmr.db",
-  "schema_version": 1
+  "schema_version": 2
 }
 ```
 
@@ -265,6 +265,7 @@ Key fields:
 - `claim`
 - `confidence`
 - `evidence_refs_json`
+- `counterevidence_refs_json`
 - `status`: `pending`, `accepted`, or `rejected`
 
 ### `learned_memory`
@@ -279,8 +280,15 @@ Key fields:
 - `confidence`
 - `status`: `active`, `pending`, `superseded`, or `rejected`
 - `evidence_refs_json`
+- `counterevidence_refs_json`
 - optional `dream_run_id`
 - optional `superseded_by`
+
+`mmr dream` writes active learned memory only for high-confidence,
+non-sensitive, counterevidence-free claims. Lower-confidence or disputed items
+remain candidates unless a later repair/review workflow promotes them.
+Replaying the same learned-memory claim/evidence tuple is idempotent: the
+existing memory row is preserved rather than overwritten by a later dream run.
 
 ### `sync_manifests`
 

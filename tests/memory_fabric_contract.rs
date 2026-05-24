@@ -6,7 +6,7 @@ use mmr::dream::{
     DreamEvidenceMode, DreamObservationStatus, DreamRunner, DreamRunnerConfig, EvidenceAccess,
     MockDreamRunner, build_evidence_bundle, build_evidence_request,
 };
-use mmr::store::{LATEST_SCHEMA_VERSION, Store};
+use mmr::store::{LATEST_SCHEMA_VERSION, NewDreamCandidate, NewLearnedMemory, Store};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -208,7 +208,10 @@ fn db_info_smoke_links_non_git_project_and_round_trips_synthetic_event() {
     );
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("stdout JSON");
-    assert_eq!(json["schema_version"].as_i64().unwrap(), 1);
+    assert_eq!(
+        json["schema_version"].as_i64().unwrap(),
+        LATEST_SCHEMA_VERSION
+    );
     assert_eq!(json["event_count"].as_i64().unwrap(), 1);
     assert!(json["project_id"].as_str().unwrap().starts_with("proj:v1:"));
     assert_eq!(
@@ -1466,12 +1469,303 @@ fn dream_runner_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-279: implement dream command"]
 fn dream_cli_contract_is_implemented() {
-    pending_contract(
-        "NHL-279",
-        "mmr dream analyzes the current project and writes learned memory only with valid evidence refs",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let data_home = tmp.path().join("data");
+    let data_home_fresh = tmp.path().join("data-fresh");
+    let project = tmp.path().join("dream-project");
+    let fresh_project = tmp.path().join("fresh-dream-project");
+    let remote = tmp.path().join("fake-github");
+    std::fs::create_dir_all(&home).expect("create HOME");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::create_dir_all(&fresh_project).expect("create fresh project");
+
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .arg("link")
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(&project)
+            .output()
+            .expect("link before dream"),
     );
+    let note = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "note",
+            "Email",
+            "person@example.com",
+            "while",
+            "discussing",
+            "durable",
+            "assimilation",
+            "evidence.",
+        ])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("add dream evidence note");
+    assert_success_ref(&note);
+    let note = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["search", "durable assimilation evidence"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("find note evidence");
+    assert_success_ref(&note);
+    let note_json: serde_json::Value =
+        serde_json::from_slice(&note.stdout).expect("note search stdout JSON");
+    let evidence_event_id = note_json["results"][0]["event_id"]
+        .as_str()
+        .expect("evidence event id")
+        .to_string();
+    let evidence_ref = format!("mmr://event/{evidence_event_id}");
+    let output_json = dream_output_json(
+        &evidence_ref,
+        "Prefer durable assimilation checks.",
+        0.93,
+        "",
+    );
+
+    let dry_run = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["dream", "--dry-run"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_DREAM_MOCK_OUTPUT", &output_json)
+        .current_dir(&project)
+        .output()
+        .expect("dream dry run");
+    assert_success_ref(&dry_run);
+    let dry_run_json: serde_json::Value =
+        serde_json::from_slice(&dry_run.stdout).expect("dry-run JSON");
+    assert_eq!(dry_run_json["dry_run"], true);
+    assert_eq!(dry_run_json["applied"].as_u64().unwrap(), 1);
+    assert_eq!(dry_run_json["dream_run"]["id"], serde_json::Value::Null);
+    {
+        let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
+        let project_record = store
+            .project_by_path(&project)
+            .expect("project lookup")
+            .expect("project");
+        assert!(
+            store
+                .learned_memory_for_project(&project_record.id)
+                .expect("learned memory")
+                .is_empty()
+        );
+    }
+
+    let review = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["dream", "--review"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_DREAM_MOCK_OUTPUT", &output_json)
+        .current_dir(&project)
+        .output()
+        .expect("dream review");
+    assert_success_ref(&review);
+    let review_json: serde_json::Value =
+        serde_json::from_slice(&review.stdout).expect("review JSON");
+    assert_eq!(review_json["review"], true);
+    assert_eq!(review_json["dream_run"]["status"], "review");
+
+    let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("dream")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_DREAM_MOCK_OUTPUT", &output_json)
+        .current_dir(&project)
+        .output()
+        .expect("dream apply");
+    assert_success_ref(&dream);
+    let dream_json: serde_json::Value =
+        serde_json::from_slice(&dream.stdout).expect("dream stdout JSON");
+    assert_eq!(dream_json["command"], "dream");
+    assert_eq!(dream_json["applied"].as_u64().unwrap(), 1);
+    assert_eq!(dream_json["queued"].as_u64().unwrap(), 0);
+    assert_eq!(dream_json["learned_memory"][0]["status"], "active");
+    assert_eq!(
+        dream_json["learned_memory"][0]["evidence_refs"][0],
+        evidence_ref
+    );
+
+    let low_confidence = dream_output_json(&evidence_ref, "Maybe archive scratch notes.", 0.42, "");
+    let queued = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("dream")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_DREAM_MOCK_OUTPUT", &low_confidence)
+        .current_dir(&project)
+        .output()
+        .expect("dream low confidence");
+    assert_success_ref(&queued);
+    let queued_json: serde_json::Value =
+        serde_json::from_slice(&queued.stdout).expect("queued JSON");
+    assert_eq!(queued_json["applied"].as_u64().unwrap(), 0);
+    assert_eq!(queued_json["queued"].as_u64().unwrap(), 1);
+
+    let counterevidence = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("dream")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env(
+            "MMR_DREAM_MOCK_OUTPUT",
+            dream_output_with_top_counterevidence(
+                &evidence_ref,
+                "Conflicted dream memory should not become active.",
+                0.95,
+            ),
+        )
+        .current_dir(&project)
+        .output()
+        .expect("dream counterevidence");
+    assert_success_ref(&counterevidence);
+    let counterevidence_json: serde_json::Value =
+        serde_json::from_slice(&counterevidence.stdout).expect("counterevidence JSON");
+    assert_eq!(counterevidence_json["applied"].as_u64().unwrap(), 0);
+    assert!(
+        counterevidence_json["queued"].as_u64().unwrap() >= 1,
+        "counterevidenced memory should be queued"
+    );
+
+    let sensitive_kind = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("dream")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env(
+            "MMR_DREAM_MOCK_OUTPUT",
+            dream_output_with_kind(
+                &evidence_ref,
+                "person@example.com",
+                "A safe-looking claim with an unsafe kind must not persist.",
+                0.95,
+            ),
+        )
+        .current_dir(&project)
+        .output()
+        .expect("dream unsafe kind");
+    assert_success_ref(&sensitive_kind);
+    let sensitive_kind_json: serde_json::Value =
+        serde_json::from_slice(&sensitive_kind.stdout).expect("sensitive kind JSON");
+    assert_eq!(sensitive_kind_json["applied"].as_u64().unwrap(), 0);
+    assert_eq!(sensitive_kind_json["rejected"].as_u64().unwrap(), 1);
+
+    let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["search", "durable assimilation checks"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("search learned memory");
+    assert_success_ref(&search);
+    let search_json: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("search JSON");
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(search_json["results"][0]["source"], "learned_memory");
+
+    let counterevidence_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["search", "Conflicted dream memory"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("search counterevidenced memory");
+    assert_success_ref(&counterevidence_search);
+    let counterevidence_search_json: serde_json::Value =
+        serde_json::from_slice(&counterevidence_search.stdout)
+            .expect("counterevidence search JSON");
+    assert_eq!(
+        counterevidence_search_json["total_results"]
+            .as_u64()
+            .unwrap(),
+        0
+    );
+
+    let invalid_ref_output = dream_output_json(
+        "mmr://event/evt:v1:missing",
+        "Unsupported memories are rejected.",
+        0.94,
+        "",
+    );
+    let invalid = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("dream")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_DREAM_MOCK_OUTPUT", invalid_ref_output)
+        .current_dir(&project)
+        .output()
+        .expect("dream invalid evidence");
+    assert!(!invalid.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr).contains("missing evidence"),
+        "stderr={}",
+        String::from_utf8_lossy(&invalid.stderr)
+    );
+
+    let reserved_flag = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["dream", "--best-of", "2"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&project)
+        .output()
+        .expect("dream reserved flag");
+    assert!(!reserved_flag.status.success());
+    assert!(
+        String::from_utf8_lossy(&reserved_flag.stderr).contains("unexpected argument"),
+        "stderr={}",
+        String::from_utf8_lossy(&reserved_flag.stderr)
+    );
+
+    assert_success(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .arg("sync")
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", &data_home)
+            .env("MMR_FAKE_REMOTE_DIR", &remote)
+            .env("MMR_GITHUB_USER", "fixture-user")
+            .current_dir(&project)
+            .output()
+            .expect("sync dream memory"),
+    );
+    let remote_text = remote_file_text(&remote);
+    assert!(!remote_text.contains("person@example.com"));
+    assert!(!remote_text.contains(&evidence_event_id));
+    assert!(remote_text.contains("[REDACTED:private_email]"));
+    assert!(remote_text.contains("Prefer durable assimilation checks."));
+
+    let hydrate = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("link")
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home_fresh)
+        .env("MMR_FAKE_REMOTE_DIR", &remote)
+        .env("MMR_GITHUB_USER", "fixture-user")
+        .current_dir(&fresh_project)
+        .output()
+        .expect("hydrate learned memory");
+    assert_success_ref(&hydrate);
+    let hydrate_json: serde_json::Value =
+        serde_json::from_slice(&hydrate.stdout).expect("hydrate JSON");
+    assert_eq!(
+        hydrate_json["hydration"]["inserted_learned_memory"]
+            .as_u64()
+            .unwrap(),
+        1
+    );
+    let hydrated_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["search", "durable assimilation checks"])
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", &data_home_fresh)
+        .current_dir(&fresh_project)
+        .output()
+        .expect("search hydrated learned memory");
+    assert_success_ref(&hydrated_search);
+    let hydrated_search_json: serde_json::Value =
+        serde_json::from_slice(&hydrated_search.stdout).expect("hydrated search JSON");
+    assert_eq!(hydrated_search_json["total_results"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -2456,12 +2750,192 @@ fn summary_generation_contract_is_implemented() {
 }
 
 #[test]
-#[ignore = "pending NHL-279: implement dream assimilation validation"]
 fn dream_assimilation_contract_is_implemented() {
-    pending_contract(
-        "NHL-279",
-        "validate structured dream output and write learned memory only when every evidence ref resolves",
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let project_dir = tmp.path().join("dream-assimilation");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+    let mut store = Store::open_in_memory().expect("store");
+    let project = store.ensure_project_link(&project_dir).expect("project");
+    let event = store
+        .insert_event(
+            &project.id,
+            &mmr::store::NewEvent::new(
+                "note",
+                "notes",
+                "note",
+                "user",
+                "2026-05-24T16:00:00Z",
+                "durable dream evidence",
+                "note-v1",
+            )
+            .with_source_event_id("dream-assimilation-evidence"),
+        )
+        .expect("evidence event");
+    let evidence_ref = format!("mmr://event/{}", event.id);
+    let run = store
+        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence")
+        .expect("start dream run");
+    let persisted = store
+        .complete_dream_run(
+            &run.id,
+            "sha256:output",
+            &[NewDreamCandidate {
+                kind: "preference".to_string(),
+                claim: "Prefer durable assimilation checks.".to_string(),
+                confidence: 0.93,
+                evidence_refs: vec![evidence_ref.clone()],
+                counterevidence_refs: Vec::new(),
+                status: "accepted".to_string(),
+            }],
+            &[NewLearnedMemory {
+                kind: "preference".to_string(),
+                claim: "Prefer durable assimilation checks.".to_string(),
+                confidence: 0.93,
+                evidence_refs: vec![evidence_ref.clone()],
+                counterevidence_refs: Vec::new(),
+                status: "active".to_string(),
+            }],
+        )
+        .expect("complete dream run");
+    assert_eq!(persisted.run.status, "completed");
+    assert_eq!(persisted.candidates[0].status, "accepted");
+    assert_eq!(persisted.learned_memory[0].status, "active");
+    assert_eq!(
+        persisted.learned_memory[0].evidence_refs,
+        vec![evidence_ref]
     );
+    let original_memory = persisted.learned_memory[0].clone();
+
+    let duplicate = store
+        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-duplicate")
+        .expect("start duplicate dream run");
+    let duplicate_persisted = store
+        .complete_dream_run(
+            &duplicate.id,
+            "sha256:duplicate-output",
+            &[],
+            &[NewLearnedMemory {
+                kind: original_memory.kind.clone(),
+                claim: original_memory.claim.clone(),
+                confidence: 0.99,
+                evidence_refs: original_memory.evidence_refs.clone(),
+                counterevidence_refs: original_memory.counterevidence_refs.clone(),
+                status: "active".to_string(),
+            }],
+        )
+        .expect("complete duplicate dream run");
+    assert!(
+        duplicate_persisted.learned_memory.is_empty(),
+        "duplicate learned memory must not silently overwrite the original row"
+    );
+    let preserved = store
+        .learned_memory_by_id(&original_memory.id)
+        .expect("original learned memory preserved");
+    assert_eq!(preserved.dream_run_id.as_deref(), Some(run.id.as_str()));
+    assert_eq!(preserved.confidence, 0.93);
+
+    let second = store
+        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-2")
+        .expect("start second dream run");
+    let err = store
+        .complete_dream_run(
+            &second.id,
+            "sha256:bad-output",
+            &[],
+            &[NewLearnedMemory {
+                kind: "preference".to_string(),
+                claim: "Missing evidence should not persist.".to_string(),
+                confidence: 0.91,
+                evidence_refs: Vec::new(),
+                counterevidence_refs: Vec::new(),
+                status: "active".to_string(),
+            }],
+        )
+        .expect_err("missing evidence refs should fail atomically");
+    assert!(
+        err.to_string()
+            .contains("requires at least one evidence ref")
+    );
+    assert!(
+        store
+            .learned_memory_for_dream_run(&second.id)
+            .expect("failed run learned memory")
+            .is_empty()
+    );
+    let failed = store
+        .fail_dream_run(&second.id, Some("sha256:bad-output"))
+        .expect("mark failed");
+    assert_eq!(failed.status, "failed");
+
+    let other_project_dir = tmp.path().join("other-dream-project");
+    std::fs::create_dir_all(&other_project_dir).expect("other project dir");
+    let other_project = store
+        .ensure_project_link(&other_project_dir)
+        .expect("other project");
+    let other_event = store
+        .insert_event(
+            &other_project.id,
+            &mmr::store::NewEvent::new(
+                "note",
+                "notes",
+                "note",
+                "user",
+                "2026-05-24T16:01:00Z",
+                "other project evidence",
+                "note-v1",
+            )
+            .with_source_event_id("other-dream-evidence"),
+        )
+        .expect("other evidence event");
+    let cross_project = store
+        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-cross")
+        .expect("start cross-project dream run");
+    let err = store
+        .complete_dream_run(
+            &cross_project.id,
+            "sha256:cross-output",
+            &[],
+            &[NewLearnedMemory {
+                kind: "preference".to_string(),
+                claim: "Cross-project evidence must not persist.".to_string(),
+                confidence: 0.91,
+                evidence_refs: vec![format!("mmr://event/{}", other_event.id)],
+                counterevidence_refs: Vec::new(),
+                status: "active".to_string(),
+            }],
+        )
+        .expect_err("cross-project evidence refs should fail atomically");
+    assert!(err.to_string().contains("missing evidence"), "err={err}");
+    store
+        .fail_dream_run(&cross_project.id, Some("sha256:cross-output"))
+        .expect("mark cross-project run failed");
+
+    let third = store
+        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-3")
+        .expect("start third dream run");
+    assert!(
+        store
+            .complete_dream_run(
+                &third.id,
+                "sha256:output-3",
+                &[NewDreamCandidate {
+                    kind: "pattern".to_string(),
+                    claim: "Queued memories remain internal.".to_string(),
+                    confidence: 0.42,
+                    evidence_refs: vec![format!("mmr://event/{}", event.id)],
+                    counterevidence_refs: Vec::new(),
+                    status: "pending".to_string(),
+                }],
+                &[],
+            )
+            .expect("complete pending run")
+            .learned_memory
+            .is_empty()
+    );
+    let pending_candidates = store
+        .dream_candidates_for_run(&third.id)
+        .expect("pending candidates");
+    assert_eq!(pending_candidates[0].status, "pending");
 }
 
 #[test]
@@ -2587,18 +3061,95 @@ fn pending_contract(ticket: &str, behavior: &str) -> ! {
 }
 
 fn dream_observation_json(evidence_ref: &str, confidence: f64) -> String {
+    dream_output_json(
+        evidence_ref,
+        "Prefer fixture-driven tests.",
+        confidence,
+        r#""patterns": ["evidence-linked memory"],
+      "open_loops": [],
+      "counterevidence_refs": [],"#,
+    )
+}
+
+fn dream_output_json(
+    evidence_ref: &str,
+    claim: &str,
+    confidence: f64,
+    extra_fields: &str,
+) -> String {
+    let extra_fields = if extra_fields.trim().is_empty() {
+        String::new()
+    } else {
+        format!("{extra_fields}\n      ")
+    };
     format!(
         r#"{{
   "observations": [
     {{
       "kind": "preference",
-      "claim": "Prefer fixture-driven tests.",
+      "claim": "{claim}",
       "confidence": {confidence},
       "scope": "project",
       "recommended_action": "Keep evidence refs attached.",
-      "patterns": ["evidence-linked memory"],
-      "open_loops": [],
-      "counterevidence_refs": [],
+      {extra_fields}
+      "evidence_refs": ["{evidence_ref}"]
+    }}
+  ],
+  "learned_memory_updates": [
+    {{
+      "kind": "preference",
+      "claim": "{claim}",
+      "confidence": {confidence},
+      "evidence_refs": ["{evidence_ref}"]
+    }}
+  ]
+}}"#
+    )
+}
+
+fn dream_output_with_top_counterevidence(
+    evidence_ref: &str,
+    claim: &str,
+    confidence: f64,
+) -> String {
+    format!(
+        r#"{{
+  "observations": [
+    {{
+      "kind": "preference",
+      "claim": "{claim}",
+      "confidence": {confidence},
+      "evidence_refs": ["{evidence_ref}"]
+    }}
+  ],
+  "counterevidence": [
+    {{
+      "kind": "counterevidence",
+      "claim": "Evidence is conflicting enough to require review.",
+      "confidence": 0.89,
+      "evidence_refs": ["{evidence_ref}"]
+    }}
+  ]
+}}"#
+    )
+}
+
+fn dream_output_with_kind(evidence_ref: &str, kind: &str, claim: &str, confidence: f64) -> String {
+    format!(
+        r#"{{
+  "observations": [
+    {{
+      "kind": "{kind}",
+      "claim": "{claim}",
+      "confidence": {confidence},
+      "evidence_refs": ["{evidence_ref}"]
+    }}
+  ],
+  "learned_memory_updates": [
+    {{
+      "kind": "{kind}",
+      "claim": "{claim}",
+      "confidence": {confidence},
       "evidence_refs": ["{evidence_ref}"]
     }}
   ]
@@ -2607,6 +3158,10 @@ fn dream_observation_json(evidence_ref: &str, confidence: f64) -> String {
 }
 
 fn assert_success(output: std::process::Output) {
+    assert_success_ref(&output);
+}
+
+fn assert_success_ref(output: &std::process::Output) {
     assert!(
         output.status.success(),
         "stderr={}",

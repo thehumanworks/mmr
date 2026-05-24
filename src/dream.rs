@@ -13,8 +13,10 @@ use crate::store::{EventRecord, ProjectRecord, Store, content_hash};
 
 pub const ENV_DEFAULT_DREAM_RUNNER: &str = "MMR_DEFAULT_DREAM_RUNNER";
 pub const ENV_DREAM_COMMAND: &str = "MMR_DREAM_COMMAND";
+pub const ENV_DREAM_MOCK_FAILURE: &str = "MMR_DREAM_MOCK_FAILURE";
+pub const ENV_DREAM_MOCK_OUTPUT: &str = "MMR_DREAM_MOCK_OUTPUT";
 pub const DEFAULT_DREAM_RUNNER: &str = "mock";
-const ACTIVE_CONFIDENCE_MIN: f64 = 0.5;
+const ACTIVE_CONFIDENCE_MIN: f64 = 0.8;
 const COMMAND_RUNNER_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +165,7 @@ pub struct DreamUsage {
 pub struct ValidatedDreamOutput {
     pub learned_memory: Vec<ValidatedLearnedMemory>,
     pub observations: Vec<DreamObservation>,
+    pub counterevidence: Vec<DreamObservation>,
     pub diagnostics: DreamDiagnostics,
     pub usage: Option<DreamUsage>,
 }
@@ -173,6 +176,7 @@ pub struct ValidatedLearnedMemory {
     pub claim: String,
     pub confidence: f64,
     pub evidence_refs: Vec<String>,
+    pub counterevidence_refs: Vec<String>,
     pub status: ValidatedLearnedMemoryStatus,
 }
 
@@ -181,6 +185,7 @@ pub struct ValidatedLearnedMemory {
 pub enum ValidatedLearnedMemoryStatus {
     Active,
     Pending,
+    Rejected,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -494,12 +499,12 @@ pub fn validate_dream_output(
 ) -> Result<ValidatedDreamOutput> {
     validate_output(&mut output, valid_evidence_refs)
         .map_err(|err| anyhow::anyhow!("resolve dream evidence ref failed: {err}"))?;
-    let learned_source = if !output.learned_memory_updates.is_empty() {
+    let learned_source: &[DreamObservation] = if !output.learned_memory_updates.is_empty() {
         &output.learned_memory_updates
     } else if !output.claims.is_empty() {
         &output.claims
     } else {
-        &output.observations
+        &[]
     };
     let learned_memory = learned_source
         .iter()
@@ -508,16 +513,18 @@ pub fn validate_dream_output(
             claim: observation.claim.clone(),
             confidence: observation.confidence,
             evidence_refs: observation.evidence_refs.clone(),
-            status: if observation.confidence >= ACTIVE_CONFIDENCE_MIN {
-                ValidatedLearnedMemoryStatus::Active
-            } else {
-                ValidatedLearnedMemoryStatus::Pending
+            counterevidence_refs: observation.counterevidence_refs.clone(),
+            status: match observation.status {
+                DreamObservationStatus::Active => ValidatedLearnedMemoryStatus::Active,
+                DreamObservationStatus::Pending => ValidatedLearnedMemoryStatus::Pending,
+                DreamObservationStatus::Rejected => ValidatedLearnedMemoryStatus::Rejected,
             },
         })
         .collect();
     Ok(ValidatedDreamOutput {
         learned_memory,
         observations: output.observations,
+        counterevidence: output.counterevidence,
         diagnostics: output.diagnostics,
         usage: output.usage,
     })
@@ -549,11 +556,13 @@ pub fn validate_output(
         .chain(output.counterevidence.iter_mut())
     {
         validate_observation(observation, valid_evidence_refs)?;
-        observation.status = if observation.confidence >= ACTIVE_CONFIDENCE_MIN {
-            DreamObservationStatus::Active
-        } else {
-            DreamObservationStatus::Pending
-        };
+        if observation.status != DreamObservationStatus::Rejected {
+            observation.status = if observation.confidence >= ACTIVE_CONFIDENCE_MIN {
+                DreamObservationStatus::Active
+            } else {
+                DreamObservationStatus::Pending
+            };
+        }
     }
     Ok(())
 }

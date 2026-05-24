@@ -145,7 +145,7 @@ Minimum JSON fields:
   "store": {
     "path": "...",
     "exists": true,
-    "schema_version": 1
+    "schema_version": 2
   },
   "project": {
     "id": "...",
@@ -585,7 +585,7 @@ part of the contract and must be preserved.
 Dreaming is stateful assimilation, not summarization.
 
 NHL-278 implements the provider-neutral runner layer in `src/dream.rs`.
-NHL-279 owns the public `mmr dream` command and durable learned-memory writes.
+NHL-279 adds the public `mmr dream` command and durable learned-memory writes.
 
 Runner selection resolves from an explicit runner override, project default,
 user default (`MMR_DEFAULT_DREAM_RUNNER`), then the built-in `mock` runner. The
@@ -597,6 +597,12 @@ example `MMR_DREAM_COMMAND="python runner.py"`.
 Shared-safe evidence bundles redact deterministic local PII, omit events blocked
 by deterministic secret findings, and preserve normalized metadata plus
 `mmr://event/<id>` refs.
+
+`mmr dream --dry-run` validates proposed learned-memory changes without writing
+state. `mmr dream --review` returns the same non-mutating proposal shape with a
+review status. A normal `mmr dream` records a dream run and writes active
+learned memory only after runner output passes schema and evidence-ref
+validation.
 
 Provider output must be structured before it can update learned memory:
 
@@ -622,10 +628,17 @@ Validation rules:
 - Runner requests use shared-safe redacted evidence by default; raw local
   evidence requires explicit local-only opt-in and is blocked for command/API
   style runners.
-- Low-confidence claims may be stored as pending only if a downstream ticket adds
-  an internal status, but no public candidate-review command ships in the MVP.
+- Confidence below `0.8`, counterevidence, or sensitive/identity-affecting
+  content queues or rejects the item instead of applying active learned memory.
+- Plain `observations` are candidates/audit material. Active learned memory must
+  come from `learned_memory_updates` or explicit `claims`.
 - A dream run may not silently overwrite learned memory. Supersession must be
   explicit via `superseded_by` or a later equivalent field.
+- Learned memory sync remaps local evidence refs to redacted remote event refs,
+  and hydration restores learned-memory rows after replaying remote events.
+- Active learned memory is inspectable through existing `search`/`rg` surfaces;
+  the MVP does not expose public `learn`, `context`, `candidates`, `knowledge`,
+  `promote`, or `reject` commands.
 
 ## Sync Manifest Contract
 

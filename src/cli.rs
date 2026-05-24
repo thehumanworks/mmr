@@ -11,12 +11,20 @@ use crate::agent::ai;
 use crate::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot,
 };
+use crate::dream::{
+    CommandDreamRunner, DreamConfigOverride, DreamEvidenceMode, DreamObservation, DreamRunner,
+    DreamRunnerConfig, DreamRunnerKind, ENV_DEFAULT_DREAM_RUNNER, ENV_DREAM_MOCK_FAILURE,
+    ENV_DREAM_MOCK_OUTPUT, MockDreamRunner, ValidatedDreamOutput, ValidatedLearnedMemoryStatus,
+    build_evidence_request, validate_dream_output,
+};
 use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
 use crate::redaction::{
-    PiiCoverage, PiiCoverageStatus, RedactionFinding, RedactionOutcome, scan_text,
+    DeterministicPrivacyDetector, PiiCoverage, PiiCoverageStatus, RedactionFinding,
+    RedactionOutcome, scan_text, scan_text_with_detector,
 };
 use crate::store::{
-    DEFAULT_REDACTION_POLICY_ID, EventRecord, NewEvent, NewRedactionSpan, ProjectRecord, Store,
+    DEFAULT_REDACTION_POLICY_ID, DreamCandidateRecord, EventRecord, LearnedMemoryRecord,
+    NewDreamCandidate, NewEvent, NewLearnedMemory, NewRedactionSpan, ProjectRecord, Store,
     content_hash,
 };
 use crate::sync::{
@@ -150,6 +158,8 @@ pub enum Commands {
     Rg(SearchTextArgs),
     /// Structured lexical search over local memory documents
     Search(SearchTextArgs),
+    /// Assimilate project evidence into evidence-linked learned memory
+    Dream(DreamArgs),
     /// Inspect and apply local redaction policy before sync
     Redact(RedactArgs),
     /// Safely reconcile the linked project with the default mmr-store remote
@@ -301,6 +311,48 @@ pub struct SearchTextArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct DreamArgs {
+    /// Project path (omit to use current directory)
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// Validate proposed learned memory without writing it
+    #[arg(long)]
+    dry_run: bool,
+    /// Queue proposed changes for review without writing active learned memory
+    #[arg(long)]
+    review: bool,
+    /// Dream runner to use: mock or command
+    #[arg(long)]
+    runner: Option<String>,
+    /// Provider model identifier
+    #[arg(long)]
+    model: Option<String>,
+    /// Evidence projection mode
+    #[arg(long = "evidence-mode", value_enum, default_value = "shared-safe")]
+    evidence_mode: DreamEvidenceModeArg,
+    /// Permit raw local evidence for local-only mock experiments
+    #[arg(long)]
+    allow_raw_evidence: bool,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[clap(rename_all = "kebab-case")]
+pub enum DreamEvidenceModeArg {
+    #[default]
+    SharedSafe,
+    LocalRaw,
+}
+
+impl From<DreamEvidenceModeArg> for DreamEvidenceMode {
+    fn from(value: DreamEvidenceModeArg) -> Self {
+        match value {
+            DreamEvidenceModeArg::SharedSafe => DreamEvidenceMode::SharedSafe,
+            DreamEvidenceModeArg::LocalRaw => DreamEvidenceMode::LocalRaw,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
 pub struct ImportArgs {
     /// Project path to link/import into
     #[arg(long)]
@@ -323,6 +375,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             bail!("--line is only supported for `mmr rg`");
         }
         return serialize(&search_response(args, source_filter)?, cli.pretty);
+    }
+    if let Commands::Dream(args) = &cli.command {
+        return serialize(&dream_response(args)?, cli.pretty);
     }
     if let Commands::Import(args) = &cli.command {
         return serialize(&import_response(args, source_filter)?, cli.pretty);
@@ -554,6 +609,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             }
             serialize(&search_response(&args, source_filter)?, cli.pretty)?
         }
+        Commands::Dream(args) => serialize(&dream_response(&args)?, cli.pretty)?,
         Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
         Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
         Commands::Status(args) => serialize(&status_response(&args)?, cli.pretty)?,
@@ -709,6 +765,9 @@ fn link_response(source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
             remote_events: 0,
             inserted_events: 0,
             existing_events: 0,
+            remote_learned_memory: 0,
+            inserted_learned_memory: 0,
+            existing_learned_memory: 0,
         }
     };
     let imports = reconcile_default_sources(&mut store, &project, source_filter)?;
@@ -757,8 +816,12 @@ fn remote_pending_sync_report(
         synced_events: 0,
         uploaded_events: 0,
         uploaded_search_documents: 0,
+        synced_learned_memory: 0,
+        uploaded_learned_memory: 0,
         blocked_events: 0,
+        blocked_learned_memory: 0,
         remote_events: 0,
+        remote_learned_memory: 0,
         append_only: true,
         pii_coverage: scan_text("").pii_coverage,
         blocked: Vec::new(),
@@ -1072,6 +1135,519 @@ fn default_import_source_root(source_filter: Option<SourceFilter>) -> Result<Pat
 }
 
 #[derive(Debug, Serialize)]
+struct DreamResponse {
+    command: String,
+    dry_run: bool,
+    review: bool,
+    project_id: String,
+    runner: String,
+    model: Option<String>,
+    evidence: DreamEvidenceResponse,
+    dream_run: DreamRunResponse,
+    applied: usize,
+    queued: usize,
+    rejected: usize,
+    candidates: Vec<DreamCandidateResponse>,
+    learned_memory: Vec<DreamLearnedMemoryResponse>,
+    diagnostics: crate::dream::DreamDiagnostics,
+}
+
+#[derive(Debug, Serialize)]
+struct DreamEvidenceResponse {
+    included_events: usize,
+    evidence_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DreamRunResponse {
+    id: Option<String>,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DreamCandidateResponse {
+    id: Option<String>,
+    kind: String,
+    claim: String,
+    confidence: f64,
+    status: String,
+    evidence_refs: Vec<String>,
+    counterevidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DreamLearnedMemoryResponse {
+    id: Option<String>,
+    kind: String,
+    claim: String,
+    confidence: f64,
+    status: String,
+    evidence_refs: Vec<String>,
+    counterevidence_refs: Vec<String>,
+}
+
+fn dream_response(args: &DreamArgs) -> Result<DreamResponse> {
+    let mut store = Store::open_default()?;
+    let project = linked_project(&store, args.project.as_deref())?;
+    let config = dream_runner_config(args);
+    let request = build_evidence_request(&store, &project, &config)?;
+    if request.evidence.is_empty() {
+        bail!("dream requires at least one shared-safe evidence event");
+    }
+
+    let runner = dream_runner_for_config(&config, &request)?;
+    let mut run = None;
+    if !args.dry_run && !args.review {
+        let model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| default_dream_model(&config.runner));
+        run = Some(store.start_dream_run(
+            &project.id,
+            &config.runner,
+            &model,
+            &request.evidence_hash,
+        )?);
+    }
+
+    let output = match runner.run(&request) {
+        Ok(output) => output,
+        Err(err) => {
+            if let Some(run) = &run {
+                let _ = store.fail_dream_run(&run.id, None);
+            }
+            return Err(anyhow::anyhow!("dream runner failed: {err}"));
+        }
+    };
+    let validated = match validate_dream_output(&request.evidence_refs(), output.clone()) {
+        Ok(validated) => validated,
+        Err(err) => {
+            if let Some(run) = &run {
+                let output_hash = serde_json::to_string(&output)
+                    .map(|json| content_hash(&json))
+                    .ok();
+                let _ = store.fail_dream_run(&run.id, output_hash.as_deref());
+            }
+            return Err(err);
+        }
+    };
+    let classified = classify_dream_output(&validated);
+
+    if args.dry_run || args.review {
+        let candidates = classified
+            .candidates
+            .iter()
+            .map(|candidate| dream_candidate_preview_response(candidate, None))
+            .collect::<Vec<_>>();
+        let learned_memory = classified
+            .learned_memory
+            .iter()
+            .map(|memory| dream_learned_memory_preview_response(memory, None))
+            .collect::<Vec<_>>();
+        let applied = learned_memory
+            .iter()
+            .filter(|memory| memory.status == "active")
+            .count();
+        let queued = learned_memory
+            .iter()
+            .filter(|memory| memory.status == "pending")
+            .count()
+            + candidates
+                .iter()
+                .filter(|candidate| candidate.status == "pending")
+                .count()
+                .saturating_sub(queued_learned_preview_count(&learned_memory));
+        let rejected = candidates
+            .iter()
+            .filter(|candidate| candidate.status == "rejected")
+            .count();
+        return Ok(DreamResponse {
+            command: "dream".to_string(),
+            dry_run: true,
+            review: args.review,
+            project_id: project.id,
+            runner: config.runner,
+            model: config.model,
+            evidence: DreamEvidenceResponse {
+                included_events: request.evidence.len(),
+                evidence_hash: request.evidence_hash,
+            },
+            dream_run: DreamRunResponse {
+                id: None,
+                status: if args.review { "review" } else { "dry_run" }.to_string(),
+            },
+            applied,
+            queued,
+            rejected,
+            candidates,
+            learned_memory,
+            diagnostics: validated.diagnostics,
+        });
+    }
+
+    let run = run.expect("dream run is started for non-dry-run dream");
+    let output_hash =
+        content_hash(&serde_json::to_string(&output).context("serialize dream output")?);
+    let persisted = match store.complete_dream_run(
+        &run.id,
+        &output_hash,
+        &classified.candidates,
+        &classified.learned_memory,
+    ) {
+        Ok(persisted) => persisted,
+        Err(err) => {
+            let _ = store.fail_dream_run(&run.id, Some(&output_hash));
+            return Err(err);
+        }
+    };
+
+    let candidates = persisted
+        .candidates
+        .iter()
+        .map(dream_candidate_record_response)
+        .collect::<Vec<_>>();
+    let learned_memory = persisted
+        .learned_memory
+        .iter()
+        .map(dream_learned_memory_record_response)
+        .collect::<Vec<_>>();
+    let applied = learned_memory
+        .iter()
+        .filter(|memory| memory.status == "active")
+        .count();
+    let queued = learned_memory
+        .iter()
+        .filter(|memory| memory.status == "pending")
+        .count()
+        + candidates
+            .iter()
+            .filter(|candidate| candidate.status == "pending")
+            .count()
+            .saturating_sub(queued_learned_preview_count(&learned_memory));
+    let rejected = candidates
+        .iter()
+        .filter(|candidate| candidate.status == "rejected")
+        .count();
+
+    Ok(DreamResponse {
+        command: "dream".to_string(),
+        dry_run: false,
+        review: false,
+        project_id: project.id,
+        runner: config.runner,
+        model: config.model,
+        evidence: DreamEvidenceResponse {
+            included_events: request.evidence.len(),
+            evidence_hash: request.evidence_hash,
+        },
+        dream_run: DreamRunResponse {
+            id: Some(persisted.run.id),
+            status: persisted.run.status,
+        },
+        applied,
+        queued,
+        rejected,
+        candidates,
+        learned_memory,
+        diagnostics: validated.diagnostics,
+    })
+}
+
+#[derive(Debug)]
+struct ClassifiedDreamOutput {
+    candidates: Vec<NewDreamCandidate>,
+    learned_memory: Vec<NewLearnedMemory>,
+}
+
+fn dream_runner_config(args: &DreamArgs) -> DreamRunnerConfig {
+    let user_runner = std::env::var(ENV_DEFAULT_DREAM_RUNNER).ok();
+    DreamRunnerConfig::resolve(
+        DreamConfigOverride {
+            runner: args.runner.clone(),
+            model: args.model.clone(),
+            evidence_mode: Some(args.evidence_mode.into()),
+            allow_raw_evidence: args.allow_raw_evidence,
+            best_of: None,
+            retries: None,
+        },
+        None,
+        user_runner.as_deref(),
+    )
+}
+
+fn dream_runner_for_config(
+    config: &DreamRunnerConfig,
+    request: &crate::dream::DreamRequest,
+) -> Result<Box<dyn DreamRunner>> {
+    match config.runner_kind()? {
+        DreamRunnerKind::Mock => {
+            if let Ok(message) = std::env::var(ENV_DREAM_MOCK_FAILURE) {
+                Ok(Box::new(MockDreamRunner::failing(message)))
+            } else if let Ok(output) = std::env::var(ENV_DREAM_MOCK_OUTPUT) {
+                Ok(Box::new(MockDreamRunner::returning_json(output)))
+            } else {
+                Ok(Box::new(MockDreamRunner::returning_json(
+                    default_mock_dream_output(request),
+                )))
+            }
+        }
+        DreamRunnerKind::Command => Ok(Box::new(CommandDreamRunner::from_env()?)),
+    }
+}
+
+fn default_mock_dream_output(request: &crate::dream::DreamRequest) -> String {
+    let evidence_ref = request
+        .evidence
+        .first()
+        .map(|event| event.evidence_ref.as_str())
+        .unwrap_or("mmr://event/evt:v1:missing");
+    format!(
+        r#"{{
+  "observations": [
+    {{
+      "kind": "observation",
+      "claim": "Project evidence is available for configured dream assimilation.",
+      "confidence": 0.49,
+      "evidence_refs": ["{evidence_ref}"]
+    }}
+  ],
+  "diagnostics": {{"warnings": ["mock dream runner used; set MMR_DREAM_MOCK_OUTPUT or configure MMR_DREAM_COMMAND for provider output"]}}
+}}"#
+    )
+}
+
+fn default_dream_model(runner: &str) -> String {
+    match runner {
+        "mock" => "mock".to_string(),
+        "command" => "command".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn classify_dream_output(output: &ValidatedDreamOutput) -> ClassifiedDreamOutput {
+    let mut candidates = output
+        .observations
+        .iter()
+        .map(candidate_from_observation)
+        .collect::<Vec<_>>();
+    let global_counterevidence_refs = output
+        .counterevidence
+        .iter()
+        .flat_map(|observation| {
+            observation
+                .evidence_refs
+                .iter()
+                .chain(observation.counterevidence_refs.iter())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !global_counterevidence_refs.is_empty() {
+        for candidate in &mut candidates {
+            if candidate.status == "accepted" {
+                candidate.status = "pending".to_string();
+            }
+            candidate
+                .counterevidence_refs
+                .extend(global_counterevidence_refs.iter().cloned());
+            candidate.counterevidence_refs = normalized_refs(&candidate.counterevidence_refs);
+        }
+    }
+    candidates.extend(
+        output
+            .counterevidence
+            .iter()
+            .map(counterevidence_candidate_from_observation),
+    );
+    let mut learned_memory = Vec::new();
+    for memory in &output.learned_memory {
+        let mut memory_counterevidence_refs = memory.counterevidence_refs.clone();
+        memory_counterevidence_refs.extend(global_counterevidence_refs.iter().cloned());
+        let status = learned_memory_status(
+            &memory.kind,
+            &memory.claim,
+            memory.confidence,
+            &memory_counterevidence_refs,
+            &memory.status,
+        );
+        let evidence_refs = normalized_refs(&memory.evidence_refs);
+        let counterevidence_refs = normalized_refs(&memory_counterevidence_refs);
+        if status == "active" {
+            learned_memory.push(NewLearnedMemory {
+                kind: memory.kind.clone(),
+                claim: memory.claim.clone(),
+                confidence: memory.confidence,
+                evidence_refs,
+                counterevidence_refs,
+                status,
+            });
+        } else if !candidates.iter().any(|candidate| {
+            candidate.kind == memory.kind
+                && candidate.claim == memory.claim
+                && candidate.evidence_refs == evidence_refs
+        }) {
+            candidates.push(NewDreamCandidate {
+                kind: memory.kind.clone(),
+                claim: memory.claim.clone(),
+                confidence: memory.confidence,
+                evidence_refs,
+                counterevidence_refs,
+                status,
+            });
+        }
+    }
+    ClassifiedDreamOutput {
+        candidates,
+        learned_memory,
+    }
+}
+
+fn candidate_from_observation(observation: &DreamObservation) -> NewDreamCandidate {
+    NewDreamCandidate {
+        kind: observation.kind.clone(),
+        claim: observation.claim.clone(),
+        confidence: observation.confidence,
+        evidence_refs: normalized_refs(&observation.evidence_refs),
+        counterevidence_refs: normalized_refs(&observation.counterevidence_refs),
+        status: candidate_status(observation),
+    }
+}
+
+fn counterevidence_candidate_from_observation(observation: &DreamObservation) -> NewDreamCandidate {
+    NewDreamCandidate {
+        kind: observation.kind.clone(),
+        claim: observation.claim.clone(),
+        confidence: observation.confidence,
+        evidence_refs: normalized_refs(&observation.evidence_refs),
+        counterevidence_refs: normalized_refs(&observation.counterevidence_refs),
+        status: "pending".to_string(),
+    }
+}
+
+fn candidate_status(observation: &DreamObservation) -> String {
+    if claim_is_sensitive(&observation.kind, &observation.claim) {
+        "rejected".to_string()
+    } else if observation.confidence >= 0.8 && observation.counterevidence_refs.is_empty() {
+        "accepted".to_string()
+    } else {
+        "pending".to_string()
+    }
+}
+
+fn learned_memory_status(
+    kind: &str,
+    claim: &str,
+    confidence: f64,
+    counterevidence_refs: &[String],
+    status: &ValidatedLearnedMemoryStatus,
+) -> String {
+    if claim_is_sensitive(kind, claim) {
+        "rejected".to_string()
+    } else if !counterevidence_refs.is_empty() {
+        "pending".to_string()
+    } else {
+        match status {
+            ValidatedLearnedMemoryStatus::Active if confidence >= 0.8 => "active".to_string(),
+            ValidatedLearnedMemoryStatus::Active => "pending".to_string(),
+            ValidatedLearnedMemoryStatus::Pending => "pending".to_string(),
+            ValidatedLearnedMemoryStatus::Rejected => "rejected".to_string(),
+        }
+    }
+}
+
+fn claim_is_sensitive(kind: &str, claim: &str) -> bool {
+    let normalized_kind = kind.trim().to_ascii_lowercase();
+    if normalized_kind.is_empty()
+        || normalized_kind.len() > 64
+        || !normalized_kind
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+    {
+        return true;
+    }
+    if ["identity", "personal", "secret", "credential", "sensitive"]
+        .iter()
+        .any(|needle| normalized_kind.contains(needle))
+    {
+        return true;
+    }
+    let outcome = scan_text_with_detector(
+        &format!("{normalized_kind}\n{}", claim.trim()),
+        &DeterministicPrivacyDetector,
+    );
+    outcome.blocks_sync || !outcome.findings.is_empty()
+}
+
+fn normalized_refs(refs: &[String]) -> Vec<String> {
+    let mut refs = refs.to_vec();
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+fn queued_learned_preview_count(learned_memory: &[DreamLearnedMemoryResponse]) -> usize {
+    learned_memory
+        .iter()
+        .filter(|memory| memory.status == "pending")
+        .count()
+}
+
+fn dream_candidate_preview_response(
+    candidate: &NewDreamCandidate,
+    id: Option<String>,
+) -> DreamCandidateResponse {
+    DreamCandidateResponse {
+        id,
+        kind: candidate.kind.clone(),
+        claim: candidate.claim.clone(),
+        confidence: candidate.confidence,
+        status: candidate.status.clone(),
+        evidence_refs: candidate.evidence_refs.clone(),
+        counterevidence_refs: candidate.counterevidence_refs.clone(),
+    }
+}
+
+fn dream_learned_memory_preview_response(
+    memory: &NewLearnedMemory,
+    id: Option<String>,
+) -> DreamLearnedMemoryResponse {
+    DreamLearnedMemoryResponse {
+        id,
+        kind: memory.kind.clone(),
+        claim: memory.claim.clone(),
+        confidence: memory.confidence,
+        status: memory.status.clone(),
+        evidence_refs: memory.evidence_refs.clone(),
+        counterevidence_refs: memory.counterevidence_refs.clone(),
+    }
+}
+
+fn dream_candidate_record_response(candidate: &DreamCandidateRecord) -> DreamCandidateResponse {
+    DreamCandidateResponse {
+        id: Some(candidate.id.clone()),
+        kind: candidate.kind.clone(),
+        claim: candidate.claim.clone(),
+        confidence: candidate.confidence,
+        status: candidate.status.clone(),
+        evidence_refs: candidate.evidence_refs.clone(),
+        counterevidence_refs: candidate.counterevidence_refs.clone(),
+    }
+}
+
+fn dream_learned_memory_record_response(
+    memory: &LearnedMemoryRecord,
+) -> DreamLearnedMemoryResponse {
+    DreamLearnedMemoryResponse {
+        id: Some(memory.id.clone()),
+        kind: memory.kind.clone(),
+        claim: memory.claim.clone(),
+        confidence: memory.confidence,
+        status: memory.status.clone(),
+        evidence_refs: memory.evidence_refs.clone(),
+        counterevidence_refs: memory.counterevidence_refs.clone(),
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct SearchResponse {
     query: String,
     total_results: usize,
@@ -1199,6 +1775,38 @@ fn search_project(
                 before: line_match.before,
                 after: line_match.after,
             });
+        }
+    }
+    if source_filter.is_none() && session.is_none() {
+        for memory in store.learned_memory_for_project(&project.id)? {
+            if memory.status != "active" {
+                continue;
+            }
+            if role.is_some_and(|role| role != "memory") {
+                continue;
+            }
+            if event_type.is_some_and(|event_type| event_type != "learned_memory") {
+                continue;
+            }
+            for line_match in find_line_matches(&memory.claim, query, ignore_case, context) {
+                results.push(SearchResult {
+                    project_id: memory.project_id.clone(),
+                    source: "learned_memory".to_string(),
+                    session_id: memory
+                        .dream_run_id
+                        .clone()
+                        .unwrap_or_else(|| "learned_memory".to_string()),
+                    event_id: memory.id.clone(),
+                    event_type: "learned_memory".to_string(),
+                    role: "memory".to_string(),
+                    timestamp: memory.created_at.clone(),
+                    citation: format!("mmr://learned-memory/{}", memory.id),
+                    line_number: line_match.line_number,
+                    snippet: line_match.snippet,
+                    before: line_match.before,
+                    after: line_match.after,
+                });
+            }
         }
     }
 

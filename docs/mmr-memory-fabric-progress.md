@@ -2,11 +2,13 @@
 
 ## Current State
 
-- Branch: `codex/nhl-278-dream-runner`
-- Last green commit: `5201842` (`add dream runner abstraction`)
-- Active Linear ticket: none; next is NHL-279
+- Branch: `codex/nhl-279-dream-assimilation`
+- Last green commit: `b0b3b8b` (`update memory fabric progress after dream runner`)
+- Last verified state: uncommitted NHL-279 worktree changes passed the full
+  verification loop.
+- Active Linear ticket: NHL-279 (`Implement lean mmr dream assimilation workflow`)
 - Completed tickets: NHL-268, NHL-269, NHL-270, NHL-271, NHL-272, NHL-273, NHL-274, NHL-275, NHL-276, NHL-277, NHL-278
-- Current work: prepare NHL-279 `mmr dream` assimilation workflow
+- Current work: commit, push, and close NHL-279.
 
 ## Current Architecture Decisions
 
@@ -94,15 +96,37 @@
 - Dream output evidence refs are validated against the submitted evidence bundle,
   not all project events. Command runners reject raw evidence requests even if a
   caller manually constructs one.
+- NHL-279 wires the public `mmr dream` assimilation command. It supports
+  project-scoped analysis, `--dry-run`, `--review`, `--runner`, `--model`,
+  `--evidence-mode`, and `--allow-raw-evidence`.
+- Mutating dream runs create a `dream_runs` audit row, persist internal
+  `dream_candidates`, and write `learned_memory` only for high-confidence,
+  non-sensitive, counterevidence-free claims with valid project-scoped evidence
+  refs.
+- Top-level counterevidence and per-claim counterevidence keep proposed memory
+  pending instead of active. Sensitive/identity-like or PII-bearing claims are
+  rejected.
+- Active learned memory is discoverable through existing `search` results as
+  `source: learned_memory`; no public learn/context/candidates/knowledge/promote
+  or reject command was added.
+- Sync uploads active learned-memory payloads only after remapping local evidence
+  refs to redacted remote event refs. Remote learned-memory payloads are
+  validated against the remote event set during hydration, then remapped to the
+  local hydrated event refs.
+- Plain dream `observations` are internal candidates/audit material and are not
+  promoted directly to active learned memory. Active learned memory must come
+  from `learned_memory_updates` or explicit `claims`.
+- Replaying the same learned-memory claim/evidence tuple is idempotent: the
+  existing row is preserved rather than overwritten by a later dream run.
 
 ## Verification Commands And Results
 
 - `cargo fmt`: passed
-- `cargo test`: passed, including 44 unit tests, 65 CLI contract tests, and
-  `memory_fabric_contract` with 6 active tests passed and 14 pending tests
-  ignored
+- `cargo test`: passed, including 68 unit tests, 65 CLI contract tests, and
+  `memory_fabric_contract` with 29 active tests passed and 2 pending NHL-282
+  tests ignored
 - `cargo test --test cli_benchmark -- --ignored --nocapture`: passed
-  (`elapsed_ms=633` after NHL-269 fixes)
+  (`elapsed_ms=759`)
 - `cargo clippy --all-targets --all-features -- -D warnings`: passed
 - `cargo build --release`: passed
 - Adversarial review found issues in `rg` stdout semantics, downstream gate
@@ -324,12 +348,12 @@
 
 ## Open Blockers
 
-- None for NHL-278.
+- None for NHL-279.
 
 ## Known Risks
 
-- The remaining pending contract tests are intentionally ignored until downstream
-  tickets implement the referenced summary and dream modules.
+- The remaining pending contract tests are intentionally ignored until NHL-282
+  implements the referenced summary command/contracts.
 - NHL-269 locks the initial SQL schema, but future migrations must stay additive
   unless an ADR explicitly approves a breaking change.
 - NHL-277 ships a file-backed GitHub-layout adapter for deterministic local/E2E
@@ -363,15 +387,19 @@
 - Cursor import accepts current no-leading-dash Cursor project aliases, legacy
   dash aliases, and direct custom flat roots. Cursor tool-call path-like content
   is sanitized in normalized/search text.
-- NHL-278 does not write `dream_runs`, `dream_candidates`, or `learned_memory`;
-  NHL-279 must apply validated output transactionally and leave no partial
-  learned memory on provider failure.
+- `mmr dream` uses the deterministic mock runner by default for offline local
+  use. Real provider behavior is available through the local `command` runner
+  configured with `MMR_DREAM_COMMAND`.
+- Pending/rejected dream candidates remain internal for MVP. There is
+  intentionally no public candidate review/promote/reject surface.
+- Learned-memory sync uploads active rows only; pending/rejected/superseded rows
+  remain local until a future governance ticket defines remote behavior.
 
 ## Next Exact Action
 
-Create a branch for NHL-279, mark the Linear ticket In Progress, read the
-acceptance criteria, then implement `mmr dream` assimilation on top of the
-validated runner output.
+Stage the NHL-279 files, commit `implement dream assimilation workflow`, push
+`codex/nhl-279-dream-assimilation`, update Linear with verification evidence,
+and mark NHL-279 Done. Then fetch NHL-280.
 
 ## Do Not Redo
 
@@ -387,6 +415,8 @@ validated runner output.
 - NHL-276 is already marked `Done` in Linear.
 - NHL-277 is committed, pushed, commented in Linear, and marked `Done`.
 - NHL-278 is committed, pushed, commented in Linear, and marked `Done`.
+- NHL-279 implementation and verification have been completed locally; only the
+  commit/push/Linear boundary remains.
 - The dependency graph has already been reconciled with the Linear document.
 - The explorer review has already been incorporated into the contract harness.
 - The Codex importer adversarial review findings have already been fixed and
@@ -399,6 +429,14 @@ validated runner output.
   verified.
 - The dream runner adversarial review findings have already been fixed and
   verified.
+- The dream assimilation adversarial review findings have already been fixed and
+  verified: sensitive `kind` values are blocked before local application/remote
+  sync, duplicate learned memory cannot silently overwrite prior rows, plain
+  observations are not directly promoted to active learned memory, top-level
+  counterevidence keeps memory pending, project-scoped evidence is validated,
+  remote hydration binds learned-memory refs to the remote event set, active-only
+  learned-memory sync is implemented, and no public reserved execution flags are
+  exposed.
 
 ## Watch-Outs
 

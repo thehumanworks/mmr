@@ -7,7 +7,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub const LATEST_SCHEMA_VERSION: i64 = 1;
+pub const LATEST_SCHEMA_VERSION: i64 = 2;
 pub const DEFAULT_REDACTION_POLICY_ID: &str = "redaction-policy:v1:default";
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +156,75 @@ pub struct NewSyncManifestEntry {
     pub sync_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DreamRunRecord {
+    pub id: String,
+    pub project_id: String,
+    pub provider: String,
+    pub model: String,
+    pub status: String,
+    pub input_evidence_hash: String,
+    pub output_hash: Option<String>,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DreamCandidateRecord {
+    pub id: String,
+    pub dream_run_id: String,
+    pub project_id: String,
+    pub kind: String,
+    pub claim: String,
+    pub confidence: f64,
+    pub evidence_refs: Vec<String>,
+    pub counterevidence_refs: Vec<String>,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LearnedMemoryRecord {
+    pub id: String,
+    pub project_id: String,
+    pub kind: String,
+    pub claim: String,
+    pub confidence: f64,
+    pub status: String,
+    pub evidence_refs: Vec<String>,
+    pub counterevidence_refs: Vec<String>,
+    pub dream_run_id: Option<String>,
+    pub created_at: String,
+    pub superseded_by: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewDreamCandidate {
+    pub kind: String,
+    pub claim: String,
+    pub confidence: f64,
+    pub evidence_refs: Vec<String>,
+    pub counterevidence_refs: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewLearnedMemory {
+    pub kind: String,
+    pub claim: String,
+    pub confidence: f64,
+    pub evidence_refs: Vec<String>,
+    pub counterevidence_refs: Vec<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DreamAssimilationRecord {
+    pub run: DreamRunRecord,
+    pub candidates: Vec<DreamCandidateRecord>,
+    pub learned_memory: Vec<LearnedMemoryRecord>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewEvent {
     pub source: String,
@@ -236,11 +305,18 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: LATEST_SCHEMA_VERSION,
-    name: "initial_memory_fabric_schema",
-    sql: INITIAL_SCHEMA,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial_memory_fabric_schema",
+        sql: INITIAL_SCHEMA,
+    },
+    Migration {
+        version: 2,
+        name: "dream_counterevidence_refs",
+        sql: DREAM_COUNTEREVIDENCE_REFS_SCHEMA,
+    },
+];
 
 const INITIAL_SCHEMA: &str = r#"
 PRAGMA foreign_keys = ON;
@@ -498,6 +574,16 @@ INSERT INTO redaction_policies (id, version, description, created_at)
 VALUES ('redaction-policy:v1:default', 'v1', 'Default deterministic redaction policy placeholder', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 PRAGMA user_version = 1;
+"#;
+
+const DREAM_COUNTEREVIDENCE_REFS_SCHEMA: &str = r#"
+ALTER TABLE dream_candidates
+ADD COLUMN counterevidence_refs_json TEXT NOT NULL DEFAULT '[]';
+
+ALTER TABLE learned_memory
+ADD COLUMN counterevidence_refs_json TEXT NOT NULL DEFAULT '[]';
+
+PRAGMA user_version = 2;
 "#;
 
 #[derive(Debug)]
@@ -1259,6 +1345,283 @@ impl Store {
             .ok_or_else(|| anyhow!("sync manifest not found: {manifest_id}"))
     }
 
+    pub fn start_dream_run(
+        &mut self,
+        project_id: &str,
+        provider: &str,
+        model: &str,
+        input_evidence_hash: &str,
+    ) -> Result<DreamRunRecord> {
+        let now = now_rfc3339()?;
+        let id = dream_run_id(project_id, provider, model, input_evidence_hash, &now);
+        self.conn.execute(
+            "INSERT INTO dream_runs
+                (id, project_id, provider, model, status, input_evidence_hash, output_hash, created_at, completed_at)
+             VALUES (?1, ?2, ?3, ?4, 'running', ?5, NULL, ?6, NULL)",
+            params![id, project_id, provider, model, input_evidence_hash, now],
+        )?;
+        self.dream_run_by_id(&id)
+    }
+
+    pub fn fail_dream_run(
+        &mut self,
+        dream_run_id: &str,
+        output_hash: Option<&str>,
+    ) -> Result<DreamRunRecord> {
+        let now = now_rfc3339()?;
+        let updated = self.conn.execute(
+            "UPDATE dream_runs
+             SET status = 'failed', output_hash = ?2, completed_at = ?3
+             WHERE id = ?1 AND status = 'running'",
+            params![dream_run_id, output_hash, now],
+        )?;
+        if updated == 0 {
+            bail!("dream run is not running or does not exist: {dream_run_id}");
+        }
+        self.dream_run_by_id(dream_run_id)
+    }
+
+    pub fn complete_dream_run(
+        &mut self,
+        dream_run_id: &str,
+        output_hash: &str,
+        candidates: &[NewDreamCandidate],
+        learned_memory: &[NewLearnedMemory],
+    ) -> Result<DreamAssimilationRecord> {
+        let now = now_rfc3339()?;
+        let tx = self.conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE dream_runs
+             SET status = 'completed', output_hash = ?2, completed_at = ?3
+             WHERE id = ?1 AND status = 'running'",
+            params![dream_run_id, output_hash, now],
+        )?;
+        if updated == 0 {
+            bail!("dream run is not running or does not exist: {dream_run_id}");
+        }
+
+        let project_id: String = tx.query_row(
+            "SELECT project_id FROM dream_runs WHERE id = ?1",
+            params![dream_run_id],
+            |row| row.get(0),
+        )?;
+
+        for candidate in candidates {
+            validate_dream_candidate_status(&candidate.status)?;
+            validate_required_evidence_refs_on_conn(
+                &tx,
+                "dream candidate",
+                &project_id,
+                &candidate.evidence_refs,
+            )?;
+            validate_optional_evidence_refs_on_conn(
+                &tx,
+                &project_id,
+                &candidate.counterevidence_refs,
+            )?;
+            let candidate_id = dream_candidate_id(dream_run_id, candidate);
+            let evidence_refs_json = refs_json(&candidate.evidence_refs)?;
+            let counterevidence_refs_json = refs_json(&candidate.counterevidence_refs)?;
+            tx.execute(
+                "INSERT INTO dream_candidates
+                    (id, dream_run_id, project_id, kind, claim, confidence, evidence_refs_json,
+                     status, created_at, counterevidence_refs_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(id) DO UPDATE SET
+                    confidence = excluded.confidence,
+                    evidence_refs_json = excluded.evidence_refs_json,
+                    counterevidence_refs_json = excluded.counterevidence_refs_json,
+                    status = excluded.status",
+                params![
+                    candidate_id,
+                    dream_run_id,
+                    project_id,
+                    candidate.kind,
+                    candidate.claim,
+                    candidate.confidence,
+                    evidence_refs_json,
+                    candidate.status,
+                    now,
+                    counterevidence_refs_json,
+                ],
+            )?;
+        }
+
+        for memory in learned_memory {
+            validate_learned_memory_status(&memory.status)?;
+            let memory_id = learned_memory_id(&project_id, memory);
+            validate_required_evidence_refs_on_conn(
+                &tx,
+                "learned memory",
+                &project_id,
+                &memory.evidence_refs,
+            )?;
+            validate_optional_evidence_refs_on_conn(
+                &tx,
+                &project_id,
+                &memory.counterevidence_refs,
+            )?;
+            let evidence_refs_json = refs_json(&memory.evidence_refs)?;
+            let counterevidence_refs_json = refs_json(&memory.counterevidence_refs)?;
+            tx.execute(
+                "INSERT INTO learned_memory
+                    (id, project_id, kind, claim, confidence, status, evidence_refs_json,
+                     dream_run_id, created_at, superseded_by, counterevidence_refs_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10)
+                 ON CONFLICT(id) DO NOTHING",
+                params![
+                    memory_id,
+                    project_id,
+                    memory.kind,
+                    memory.claim,
+                    memory.confidence,
+                    memory.status,
+                    evidence_refs_json,
+                    dream_run_id,
+                    now,
+                    counterevidence_refs_json,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(DreamAssimilationRecord {
+            run: self.dream_run_by_id(dream_run_id)?,
+            candidates: self.dream_candidates_for_run(dream_run_id)?,
+            learned_memory: self.learned_memory_for_dream_run(dream_run_id)?,
+        })
+    }
+
+    pub fn upsert_learned_memory_from_sync(
+        &self,
+        memory_id: &str,
+        project_id: &str,
+        memory: &NewLearnedMemory,
+        created_at: &str,
+    ) -> Result<LearnedMemoryRecord> {
+        validate_learned_memory_status(&memory.status)?;
+        validate_required_evidence_refs_on_conn(
+            &self.conn,
+            "learned memory",
+            project_id,
+            &memory.evidence_refs,
+        )?;
+        validate_optional_evidence_refs_on_conn(
+            &self.conn,
+            project_id,
+            &memory.counterevidence_refs,
+        )?;
+        let evidence_refs_json = refs_json(&memory.evidence_refs)?;
+        let counterevidence_refs_json = refs_json(&memory.counterevidence_refs)?;
+        self.conn.execute(
+            "INSERT INTO learned_memory
+                (id, project_id, kind, claim, confidence, status, evidence_refs_json,
+                 dream_run_id, created_at, superseded_by, counterevidence_refs_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, NULL, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                confidence = excluded.confidence,
+                status = excluded.status,
+                evidence_refs_json = excluded.evidence_refs_json,
+                counterevidence_refs_json = excluded.counterevidence_refs_json",
+            params![
+                memory_id,
+                project_id,
+                memory.kind,
+                memory.claim,
+                memory.confidence,
+                memory.status,
+                evidence_refs_json,
+                created_at,
+                counterevidence_refs_json,
+            ],
+        )?;
+        self.learned_memory_by_id(memory_id)
+    }
+
+    pub fn dream_run_by_id(&self, dream_run_id: &str) -> Result<DreamRunRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, project_id, provider, model, status, input_evidence_hash,
+                        output_hash, created_at, completed_at
+                 FROM dream_runs WHERE id = ?1",
+                params![dream_run_id],
+                dream_run_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("dream run not found: {dream_run_id}"))
+    }
+
+    pub fn dream_runs_for_project(&self, project_id: &str) -> Result<Vec<DreamRunRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, provider, model, status, input_evidence_hash,
+                    output_hash, created_at, completed_at
+             FROM dream_runs
+             WHERE project_id = ?1
+             ORDER BY created_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map(params![project_id], dream_run_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read dream runs")
+    }
+
+    pub fn dream_candidates_for_run(
+        &self,
+        dream_run_id: &str,
+    ) -> Result<Vec<DreamCandidateRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, dream_run_id, project_id, kind, claim, confidence,
+                    evidence_refs_json, status, created_at, counterevidence_refs_json
+             FROM dream_candidates
+             WHERE dream_run_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![dream_run_id], dream_candidate_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read dream candidates")
+    }
+
+    pub fn learned_memory_for_project(&self, project_id: &str) -> Result<Vec<LearnedMemoryRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, kind, claim, confidence, status, evidence_refs_json,
+                    dream_run_id, created_at, superseded_by, counterevidence_refs_json
+             FROM learned_memory
+             WHERE project_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![project_id], learned_memory_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read learned memory")
+    }
+
+    pub fn learned_memory_by_id(&self, memory_id: &str) -> Result<LearnedMemoryRecord> {
+        self.conn
+            .query_row(
+                "SELECT id, project_id, kind, claim, confidence, status, evidence_refs_json,
+                        dream_run_id, created_at, superseded_by, counterevidence_refs_json
+                 FROM learned_memory WHERE id = ?1",
+                params![memory_id],
+                learned_memory_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("learned memory not found: {memory_id}"))
+    }
+
+    pub fn learned_memory_for_dream_run(
+        &self,
+        dream_run_id: &str,
+    ) -> Result<Vec<LearnedMemoryRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, kind, claim, confidence, status, evidence_refs_json,
+                    dream_run_id, created_at, superseded_by, counterevidence_refs_json
+             FROM learned_memory
+             WHERE dream_run_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![dream_run_id], learned_memory_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read learned memory for dream run")
+    }
+
     pub fn event_count(&self) -> Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
@@ -1386,6 +1749,58 @@ fn sync_manifest_entry_from_row(
         content_hash: row.get(4)?,
         sync_path: row.get(5)?,
         created_at: row.get(6)?,
+    })
+}
+
+fn dream_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DreamRunRecord> {
+    Ok(DreamRunRecord {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        provider: row.get(2)?,
+        model: row.get(3)?,
+        status: row.get(4)?,
+        input_evidence_hash: row.get(5)?,
+        output_hash: row.get(6)?,
+        created_at: row.get(7)?,
+        completed_at: row.get(8)?,
+    })
+}
+
+fn dream_candidate_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DreamCandidateRecord> {
+    Ok(DreamCandidateRecord {
+        id: row.get(0)?,
+        dream_run_id: row.get(1)?,
+        project_id: row.get(2)?,
+        kind: row.get(3)?,
+        claim: row.get(4)?,
+        confidence: row.get(5)?,
+        evidence_refs: refs_from_row(row, 6)?,
+        status: row.get(7)?,
+        created_at: row.get(8)?,
+        counterevidence_refs: refs_from_row(row, 9)?,
+    })
+}
+
+fn learned_memory_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LearnedMemoryRecord> {
+    Ok(LearnedMemoryRecord {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        kind: row.get(2)?,
+        claim: row.get(3)?,
+        confidence: row.get(4)?,
+        status: row.get(5)?,
+        evidence_refs: refs_from_row(row, 6)?,
+        dream_run_id: row.get(7)?,
+        created_at: row.get(8)?,
+        superseded_by: row.get(9)?,
+        counterevidence_refs: refs_from_row(row, 10)?,
+    })
+}
+
+fn refs_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Vec<String>> {
+    let json: String = row.get(index)?;
+    serde_json::from_str(&json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(err))
     })
 }
 
@@ -1519,6 +1934,122 @@ fn sync_manifest_entry_id(manifest_id: &str, entry: &NewSyncManifestEntry) -> St
             .as_bytes()
         )
     )
+}
+
+fn dream_run_id(
+    project_id: &str,
+    provider: &str,
+    model: &str,
+    input_evidence_hash: &str,
+    created_at: &str,
+) -> String {
+    format!(
+        "dream-run:v1:{}",
+        hash_hex(
+            format!("{project_id}:{provider}:{model}:{input_evidence_hash}:{created_at}")
+                .as_bytes()
+        )
+    )
+}
+
+fn dream_candidate_id(dream_run_id: &str, candidate: &NewDreamCandidate) -> String {
+    format!(
+        "dream-candidate:v1:{}",
+        hash_hex(
+            format!(
+                "{}:{}:{}:{}:{}",
+                dream_run_id,
+                candidate.kind,
+                candidate.claim,
+                refs_material(&candidate.evidence_refs),
+                refs_material(&candidate.counterevidence_refs)
+            )
+            .as_bytes()
+        )
+    )
+}
+
+fn learned_memory_id(project_id: &str, memory: &NewLearnedMemory) -> String {
+    format!(
+        "learned-memory:v1:{}",
+        hash_hex(
+            format!(
+                "{}:{}:{}:{}:{}",
+                project_id,
+                memory.kind,
+                memory.claim,
+                refs_material(&memory.evidence_refs),
+                refs_material(&memory.counterevidence_refs)
+            )
+            .as_bytes()
+        )
+    )
+}
+
+fn refs_material(refs: &[String]) -> String {
+    sorted_refs(refs).join("\n")
+}
+
+fn sorted_refs(refs: &[String]) -> Vec<String> {
+    let mut refs = refs.to_vec();
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+fn refs_json(refs: &[String]) -> Result<String> {
+    serde_json::to_string(&sorted_refs(refs)).context("serialize evidence refs")
+}
+
+fn validate_dream_candidate_status(status: &str) -> Result<()> {
+    if matches!(status, "pending" | "accepted" | "rejected") {
+        Ok(())
+    } else {
+        bail!("invalid dream candidate status: {status}")
+    }
+}
+
+fn validate_learned_memory_status(status: &str) -> Result<()> {
+    if matches!(status, "active" | "pending" | "superseded" | "rejected") {
+        Ok(())
+    } else {
+        bail!("invalid learned memory status: {status}")
+    }
+}
+
+fn validate_required_evidence_refs_on_conn(
+    conn: &Connection,
+    label: &str,
+    project_id: &str,
+    refs: &[String],
+) -> Result<()> {
+    if refs.is_empty() {
+        bail!("{label} requires at least one evidence ref");
+    }
+    validate_optional_evidence_refs_on_conn(conn, project_id, refs)
+}
+
+fn validate_optional_evidence_refs_on_conn(
+    conn: &Connection,
+    project_id: &str,
+    refs: &[String],
+) -> Result<()> {
+    for evidence_ref in refs {
+        let event_id = evidence_ref
+            .strip_prefix("mmr://event/")
+            .ok_or_else(|| anyhow!("invalid evidence ref scheme: {evidence_ref}"))?;
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE id = ?1 AND project_id = ?2)",
+                params![event_id, project_id],
+                |row| row.get(0),
+            )
+            .context("validate evidence ref")?;
+        if !exists {
+            bail!("references missing evidence: {evidence_ref}");
+        }
+    }
+    Ok(())
 }
 
 fn now_rfc3339() -> Result<String> {
