@@ -31,10 +31,50 @@ use crate::sync::{
     HydrationReport, RemoteSummary, SyncReport, hydrate_project, remote_for_operations,
     remote_for_status, safe_projection_blocker, sync_project,
 };
+use crate::teleport::{
+    ApplyOptions, ExportOptions, InspectOptions, PackOptions, ReceiveOptions, ResumeOptions,
+    SendOptions, SendTransport, ServeError, ServeOptions, TeleportFailure, TeleportFidelity,
+    TeleportOutputFormat, TeleportStatus, apply_bundle, export_bundle, inspect_bundle,
+    pack_session, parse_export_as, parse_resume_agent_as, receive_bundle, resolve_bundle_locator,
+    resolve_receive_locator, resume_bundle, send_session, serve_session,
+};
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
     SortBy, SortOptions, SortOrder, SourceFilter,
 };
+
+#[derive(Debug, Clone)]
+pub struct CliFailure {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl CliFailure {
+    pub fn new(exit_code: i32, stdout: impl Into<String>, stderr: impl Into<String>) -> Self {
+        Self {
+            exit_code,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+
+    pub fn from_teleport(failure: crate::teleport::TeleportFailure, pretty: bool) -> Result<Self> {
+        Ok(Self {
+            exit_code: failure.exit_code,
+            stdout: failure.to_stdout_json(pretty)?,
+            stderr: failure.message,
+        })
+    }
+}
+
+impl std::fmt::Display for CliFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.stderr)
+    }
+}
+
+impl std::error::Error for CliFailure {}
 
 const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
 const ENV_DEFAULT_REMEMBER_AGENT: &str = "MMR_DEFAULT_REMEMBER_AGENT";
@@ -179,6 +219,8 @@ pub enum Commands {
         #[arg(long)]
         smoke_event: bool,
     },
+    /// Move a selected coding-agent session between machines
+    Teleport(TeleportArgs),
 }
 
 #[derive(Args, Debug)]
@@ -371,6 +413,285 @@ pub struct ImportArgs {
     source_root: Option<PathBuf>,
 }
 
+#[derive(Args, Debug)]
+#[command(
+    after_help = "Current release: native Codex session handoff only (not mmr sync).\n\
+See docs/mmr-teleport.md for workflows and safety.\n\
+Examples:\n  \
+mmr teleport serve --session sess-abc\n  \
+mmr teleport receive mmtp://100.x.x.x:PORT/TOKEN\n  \
+mmr teleport send --session sess-abc --to user@host\n  \
+mmr teleport send --session sess-abc --to file:///path/to/inbox"
+)]
+pub struct TeleportArgs {
+    #[command(subcommand)]
+    command: TeleportCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TeleportCommand {
+    /// Pack a native Codex session into a .mmr bundle (local handoff artifact)
+    Pack(TeleportPackArgs),
+    /// Validate bundle hashes and manifest without writing agent files
+    Inspect(TeleportInspectArgs),
+    /// Install a native Codex bundle into ~/.codex and optional mmr store
+    Apply(TeleportApplyArgs),
+    /// Pack and transfer a session over SSH (user@host) or file:// inbox
+    Send(TeleportSendArgs),
+    /// Download mmtp:// URL or apply a local bundle / ready inbox entry
+    Receive(TeleportReceiveArgs),
+    /// Apply a bundle and report Codex resume steps (--as same|codex)
+    Resume(TeleportResumeArgs),
+    /// Write a native transcript artifact from a bundle (--as same|codex)
+    Export(TeleportExportArgs),
+    /// Pack one session and serve it on a one-shot mmtp:// URL until downloaded
+    Serve(TeleportServeArgs),
+}
+
+#[derive(Args, Debug)]
+#[command(
+    after_help = "Native Codex bundles only; stderr warns that bundles may contain secrets.\n\
+Example: mmr teleport pack --session sess-abc --to ./handoff.mmr"
+)]
+pub struct TeleportPackArgs {
+    /// Session ID to pack (omit for latest Codex session in scope)
+    #[arg(long)]
+    session: Option<String>,
+    /// Select the latest session in scope (default when --session is omitted)
+    #[arg(long)]
+    latest: bool,
+    /// Project name or path
+    #[arg(long)]
+    project: Option<String>,
+    /// Output path for the bundle artifact
+    #[arg(long)]
+    to: Option<PathBuf>,
+    /// Bundle fidelity (default: native). NHL-322 supports native Codex bundles only.
+    #[arg(long = "as")]
+    fidelity: Option<String>,
+    /// Show what would be packed without writing a bundle
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct TeleportInspectArgs {
+    /// Bundle path to inspect
+    #[arg(value_name = "BUNDLE_PATH")]
+    bundle_path: Option<PathBuf>,
+    /// Bundle path or inbox directory to read
+    #[arg(long)]
+    to: Option<PathBuf>,
+    /// Output format
+    #[arg(
+        short = 'O',
+        long = "output-format",
+        value_enum,
+        default_value = "json"
+    )]
+    output_format: TeleportOutputFormatArg,
+    /// Include extra manifest diagnostics
+    #[arg(long)]
+    verbose: bool,
+    /// Not valid for inspect; use -O for output format
+    #[arg(long = "as", hide = true)]
+    as_flag: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct TeleportApplyArgs {
+    /// Bundle path to apply
+    #[arg(value_name = "BUNDLE_PATH")]
+    bundle_path: Option<PathBuf>,
+    /// Bundle path or inbox directory to read
+    #[arg(long)]
+    to: Option<PathBuf>,
+    /// Target project path override
+    #[arg(long)]
+    project: Option<String>,
+    /// Show what would be applied without writing files
+    #[arg(long)]
+    dry_run: bool,
+    /// Replace existing native files and re-import store events
+    #[arg(long)]
+    force: bool,
+    /// Skip importing normalized events into the linked mmr store
+    #[arg(long)]
+    skip_store_import: bool,
+    /// Not valid for apply; use -O for output format
+    #[arg(long = "as", hide = true)]
+    as_flag: Option<String>,
+}
+
+#[derive(Args, Debug)]
+#[command(after_help = "Examples:\n  \
+mmr teleport send --session sess-abc --to user@host\n  \
+mmr teleport send --session sess-abc --to file:///Users/me/Sync/mmr-inbox\n\
+HTTP one-shot URLs use `teleport serve`, not send.")]
+pub struct TeleportSendArgs {
+    /// Session ID to send (omit for latest Codex session in scope)
+    #[arg(long)]
+    session: Option<String>,
+    /// Select the latest session in scope (default when --session is omitted)
+    #[arg(long)]
+    latest: bool,
+    /// Project name or path
+    #[arg(long)]
+    project: Option<String>,
+    /// SSH destination (user@host) or file inbox directory (file:///path/to/inbox)
+    #[arg(long)]
+    to: Option<String>,
+    /// Transport selector (default: auto; inferred from --to)
+    #[arg(long)]
+    transport: Option<TeleportTransportArg>,
+    /// Show planned transport steps without writing files or contacting remote hosts
+    #[arg(long)]
+    dry_run: bool,
+    /// Not valid for send in NHL-322; native fidelity only
+    #[arg(long = "as", hide = true)]
+    as_flag: Option<String>,
+}
+
+#[derive(Args, Debug)]
+#[command(after_help = "Examples:\n  \
+mmr teleport receive mmtp://100.x.x.x:8765/TOKEN\n  \
+mmr teleport receive ./handoff.mmr --project /path/to/project\n  \
+mmr teleport receive --to ~/.mmr/teleport/inbox/tp:v1:...\n\
+Incomplete inbox entries (no ready marker) return ok with empty staged.")]
+pub struct TeleportReceiveArgs {
+    /// Bundle path, inbox directory, or HTTP locator (mmtp://host:port/token)
+    #[arg(value_name = "LOCATOR")]
+    bundle_path: Option<String>,
+    /// Bundle path, inbox directory, or HTTP locator (mmtp://host:port/token)
+    #[arg(long)]
+    to: Option<String>,
+    /// Show what would be received without applying
+    #[arg(long)]
+    dry_run: bool,
+    /// Target project path override for apply
+    #[arg(long)]
+    project: Option<String>,
+    /// Replace existing native files when applying
+    #[arg(long)]
+    force: bool,
+    /// Not valid for receive; use -O for output format
+    #[arg(long = "as", hide = true)]
+    as_flag: Option<String>,
+}
+
+#[derive(Args, Debug)]
+#[command(after_help = "Examples:\n  \
+mmr teleport resume ./handoff.mmr --project /path/to/project\n  \
+mmr teleport resume ./handoff.mmr --as codex --no-agent-exec\n\
+Cross-agent --as values return status unsupported (exit 3).")]
+pub struct TeleportResumeArgs {
+    /// Bundle path to resume
+    #[arg(value_name = "REF")]
+    bundle_path: Option<PathBuf>,
+    /// Bundle path or inbox directory to read
+    #[arg(long)]
+    to: Option<PathBuf>,
+    /// Target agent (--as same uses bundle source; cross-agent may return unsupported)
+    #[arg(long = "as")]
+    agent: Option<String>,
+    /// Target project path override
+    #[arg(long)]
+    project: Option<String>,
+    /// Show what would be applied without writing files
+    #[arg(long)]
+    dry_run: bool,
+    /// Replace existing native files when applying
+    #[arg(long)]
+    force: bool,
+    /// Do not invoke the provider resume CLI after apply
+    #[arg(long)]
+    no_agent_exec: bool,
+}
+
+#[derive(Args, Debug)]
+#[command(
+    after_help = "Example: mmr teleport export ./handoff.mmr --to ./out.jsonl --as codex\n\
+Distinct from top-level `mmr export` (local history query)."
+)]
+pub struct TeleportExportArgs {
+    /// Bundle path or inbox locator to export
+    #[arg(value_name = "REF")]
+    bundle_path: Option<PathBuf>,
+    /// Destination path for the exported artifact
+    #[arg(long)]
+    to: Option<PathBuf>,
+    /// Output representation (--as same|codex; cross-agent returns unsupported exit 3)
+    #[arg(long = "as")]
+    format: Option<String>,
+    /// Show what would be exported without writing files
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Args, Debug)]
+#[command(
+    after_help = "Prints one startup JSON object (listen_url, token, expires_at) then blocks.\n\
+Example: mmr teleport serve --session sess-abc --bind 100.x.x.x:0\n\
+Receiver: mmr teleport receive mmtp://100.x.x.x:PORT/TOKEN"
+)]
+pub struct TeleportServeArgs {
+    /// Session ID to serve (omit for latest Codex session in scope)
+    #[arg(long)]
+    session: Option<String>,
+    /// Select the latest session in scope (default when --session is omitted)
+    #[arg(long)]
+    latest: bool,
+    /// Project name or path
+    #[arg(long)]
+    project: Option<String>,
+    /// Bind address host:port (alias for --bind)
+    #[arg(long)]
+    to: Option<String>,
+    /// Bind address host:port
+    #[arg(long)]
+    bind: Option<String>,
+    /// Seconds to wait for one successful download before exiting
+    #[arg(long, default_value_t = 600)]
+    timeout: u64,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "kebab-case")]
+enum TeleportTransportArg {
+    Auto,
+    Ssh,
+    Http,
+    File,
+}
+
+impl From<TeleportTransportArg> for SendTransport {
+    fn from(value: TeleportTransportArg) -> Self {
+        match value {
+            TeleportTransportArg::Auto => SendTransport::Auto,
+            TeleportTransportArg::Ssh => SendTransport::Ssh,
+            TeleportTransportArg::File => SendTransport::File,
+            TeleportTransportArg::Http => SendTransport::Auto,
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[clap(rename_all = "kebab-case")]
+enum TeleportOutputFormatArg {
+    #[default]
+    Json,
+    Md,
+}
+
+impl From<TeleportOutputFormatArg> for TeleportOutputFormat {
+    fn from(value: TeleportOutputFormatArg) -> Self {
+        match value {
+            TeleportOutputFormatArg::Json => TeleportOutputFormat::Json,
+            TeleportOutputFormatArg::Md => TeleportOutputFormat::Md,
+        }
+    }
+}
+
 pub async fn run_cli(cli: Cli) -> Result<String> {
     let source_filter = effective_source(cli.source);
     if let Commands::Note { text } = &cli.command {
@@ -410,6 +731,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             cli.pretty,
         );
     }
+    if let Commands::Teleport(args) = &cli.command {
+        return teleport_command_response(args, source_filter, cli.pretty);
+    }
 
     let service = QueryService::load()?;
 
@@ -442,7 +766,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                 Some(limit),
                 offset,
                 SortOptions::new(sort_by, order),
-            ),
+            )?,
             cli.pretty,
         )?,
         Commands::Messages {
@@ -479,7 +803,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     source_filter,
                     latest.get(),
                     message_index_range,
-                )
+                )?
             } else {
                 service.messages(
                     session.as_deref(),
@@ -487,7 +811,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     source_filter,
                     MessageQueryOptions::new(Some(limit), offset, SortOptions::new(sort_by, order))
                         .with_message_index_range(message_index_range),
-                )
+                )?
             };
             if latest.is_none() && response.next_page {
                 response.next_command = Some(build_next_messages_command(
@@ -521,7 +845,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         Some(proj.as_str()),
                         source_filter,
                         MessageQueryOptions::new(None, 0, sort),
-                    );
+                    )?;
                     serialize(&response, cli.pretty)?
                 } else {
                     let (codex_path, claude_name) =
@@ -534,7 +858,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                             Some(&codex_path),
                             Some(SourceFilter::Codex),
                             MessageQueryOptions::new(None, 0, sort),
-                        );
+                        )?;
                         messages.extend(codex.messages);
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Claude) {
@@ -543,7 +867,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                             Some(&claude_name),
                             Some(SourceFilter::Claude),
                             MessageQueryOptions::new(None, 0, sort),
-                        );
+                        )?;
                         messages.extend(claude.messages);
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Cursor) {
@@ -552,7 +876,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                             Some(&cursor_name),
                             Some(SourceFilter::Cursor),
                             MessageQueryOptions::new(None, 0, sort),
-                        );
+                        )?;
                         messages.extend(cursor.messages);
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Grok) {
@@ -561,7 +885,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                             Some(&codex_path),
                             Some(SourceFilter::Grok),
                             MessageQueryOptions::new(None, 0, sort),
-                        );
+                        )?;
                         messages.extend(grok.messages);
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Pi) {
@@ -570,7 +894,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                             Some(&codex_path),
                             Some(SourceFilter::Pi),
                             MessageQueryOptions::new(None, 0, sort),
-                        );
+                        )?;
                         messages.extend(pi.messages);
                     }
                     messages.sort_by(|a, b| {
@@ -611,6 +935,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             project,
             smoke_event,
         } => serialize(&db_info_response(project, smoke_event)?, cli.pretty)?,
+        Commands::Teleport(_) => unreachable!("teleport handled before QueryService load"),
     };
 
     Ok(response)
@@ -641,6 +966,365 @@ async fn remember_command_response(
     )
     .await?;
     format_remember_response(&response, remember.output_format, pretty)
+}
+
+fn teleport_command_response(
+    args: &TeleportArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    match &args.command {
+        TeleportCommand::Pack(pack) => {
+            if pack.session.is_some() && pack.latest {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/pack",
+                        "pass either --session or --latest, not both",
+                    ),
+                    pretty,
+                );
+            }
+            let fidelity = match parse_pack_fidelity(pack.fidelity.as_deref()) {
+                Ok(fidelity) => fidelity,
+                Err(failure) => return teleport_fail(failure, pretty),
+            };
+            let service = QueryService::load()?;
+            let project = pack.project.clone().or_else(|| {
+                if pack.session.is_some() {
+                    None
+                } else {
+                    effective_project_scope(None, false)
+                }
+            });
+            match pack_session(
+                &service,
+                PackOptions {
+                    session_id: pack.session.clone(),
+                    project,
+                    source_filter,
+                    output_path: pack.to.clone(),
+                    fidelity,
+                    dry_run: pack.dry_run,
+                },
+            ) {
+                Ok(response) => serialize(&response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
+        TeleportCommand::Inspect(inspect) => {
+            if inspect.as_flag.is_some() {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/inspect",
+                        "--as is not valid for teleport inspect; use -O for output format",
+                    ),
+                    pretty,
+                );
+            }
+            let bundle_path = match resolve_bundle_locator(
+                inspect.bundle_path.clone(),
+                inspect.to.clone(),
+                "inspect",
+            ) {
+                Ok(path) => path,
+                Err(error) => return teleport_fail(error.into(), pretty),
+            };
+            match inspect_bundle(InspectOptions {
+                bundle_path,
+                output_format: inspect.output_format.into(),
+                verbose: inspect.verbose,
+            }) {
+                Ok(response) => serialize(&response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
+        TeleportCommand::Apply(apply) => {
+            if apply.as_flag.is_some() {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/apply",
+                        "--as is not valid for teleport apply; use -O for output format",
+                    ),
+                    pretty,
+                );
+            }
+            let bundle_path = match resolve_bundle_locator(
+                apply.bundle_path.clone(),
+                apply.to.clone(),
+                "apply",
+            ) {
+                Ok(path) => path,
+                Err(error) => return teleport_fail(error.into(), pretty),
+            };
+            match apply_bundle(ApplyOptions {
+                bundle_path,
+                project: apply.project.clone(),
+                dry_run: apply.dry_run,
+                force: apply.force,
+                skip_store_import: apply.skip_store_import,
+            }) {
+                Ok(response) => serialize(&response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
+        TeleportCommand::Send(send) => {
+            if send.as_flag.is_some() {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/send",
+                        "--as is not valid for teleport send in this release; native fidelity is always used",
+                    ),
+                    pretty,
+                );
+            }
+            if send.session.is_some() && send.latest {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/send",
+                        "pass either --session or --latest, not both",
+                    ),
+                    pretty,
+                );
+            }
+            let to = match send.to.clone() {
+                Some(to) => to,
+                None => {
+                    return teleport_fail(
+                        TeleportFailure::usage(
+                            "teleport/send",
+                            "--to is required for teleport send",
+                        ),
+                        pretty,
+                    );
+                }
+            };
+            let transport = match send.transport {
+                Some(TeleportTransportArg::Http) => {
+                    return teleport_fail(
+                        TeleportFailure::usage(
+                            "teleport/send",
+                            "teleport send does not support HTTP transport yet",
+                        ),
+                        pretty,
+                    );
+                }
+                Some(TeleportTransportArg::Auto) => SendTransport::Auto,
+                Some(TeleportTransportArg::Ssh) => SendTransport::Ssh,
+                Some(TeleportTransportArg::File) => SendTransport::File,
+                None => SendTransport::from_env_or_default(),
+            };
+            let service = QueryService::load()?;
+            let project = send.project.clone().or_else(|| {
+                if send.session.is_some() {
+                    None
+                } else {
+                    effective_project_scope(None, false)
+                }
+            });
+            match send_session(
+                &service,
+                SendOptions {
+                    session_id: send.session.clone(),
+                    project,
+                    source_filter,
+                    to,
+                    transport,
+                    dry_run: send.dry_run,
+                },
+            ) {
+                Ok(response) => {
+                    let json = serialize(&response, pretty)?;
+                    if response.status == TeleportStatus::Partial {
+                        return Err(anyhow::Error::new(CliFailure::new(
+                            3,
+                            json,
+                            "teleport: remote mmr missing; bundle staged in remote inbox",
+                        )));
+                    }
+                    Ok(json)
+                }
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
+        TeleportCommand::Receive(receive) => {
+            if receive.as_flag.is_some() {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/receive",
+                        "--as is not valid for teleport receive; use -O for output format",
+                    ),
+                    pretty,
+                );
+            }
+            let locator =
+                match resolve_receive_locator(receive.bundle_path.clone(), receive.to.clone()) {
+                    Ok(path) => path,
+                    Err(failure) => return teleport_fail(failure, pretty),
+                };
+            match receive_bundle(ReceiveOptions {
+                locator,
+                dry_run: receive.dry_run,
+                project: receive.project.clone(),
+                force: receive.force,
+            }) {
+                Ok(response) => serialize(&response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
+        TeleportCommand::Resume(resume) => {
+            let (requested_as, requested_as_label) =
+                match parse_resume_agent_as(resume.agent.as_deref()) {
+                    Ok(parsed) => parsed,
+                    Err(failure) => return teleport_fail(failure, pretty),
+                };
+            let bundle_path = match resolve_bundle_locator(
+                resume.bundle_path.clone(),
+                resume.to.clone(),
+                "resume",
+            ) {
+                Ok(path) => path,
+                Err(error) => return teleport_fail(error.into(), pretty),
+            };
+            match resume_bundle(ResumeOptions {
+                bundle_path,
+                project: resume.project.clone(),
+                dry_run: resume.dry_run,
+                force: resume.force,
+                no_agent_exec: resume.no_agent_exec,
+                requested_as,
+                requested_as_label,
+            }) {
+                Ok(response) => teleport_success_or_unsupported(response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
+        TeleportCommand::Export(export) => {
+            let bundle_path = match export.bundle_path.clone() {
+                Some(path) => path,
+                None => {
+                    return teleport_fail(
+                        TeleportFailure::usage(
+                            "teleport/export",
+                            "teleport export: bundle ref is required as a positional argument",
+                        ),
+                        pretty,
+                    );
+                }
+            };
+            let to = match export.to.clone() {
+                Some(path) => path,
+                None => {
+                    return teleport_fail(
+                        TeleportFailure::usage(
+                            "teleport/export",
+                            "--to is required for teleport export",
+                        ),
+                        pretty,
+                    );
+                }
+            };
+            let (requested_as, requested_as_label) = match parse_export_as(export.format.as_deref())
+            {
+                Ok(parsed) => parsed,
+                Err(failure) => return teleport_fail(failure, pretty),
+            };
+            match export_bundle(ExportOptions {
+                bundle_path,
+                to,
+                requested_as,
+                requested_as_label,
+                dry_run: export.dry_run,
+            }) {
+                Ok(response) => teleport_success_or_unsupported(response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
+        TeleportCommand::Serve(serve) => {
+            if serve.session.is_some() && serve.latest {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/serve",
+                        "pass either --session or --latest, not both",
+                    ),
+                    pretty,
+                );
+            }
+            let service = QueryService::load()?;
+            let project = serve.project.clone().or_else(|| {
+                if serve.session.is_some() {
+                    None
+                } else {
+                    effective_project_scope(None, false)
+                }
+            });
+            let bind = serve.bind.clone().or(serve.to.clone());
+            match serve_session(
+                &service,
+                ServeOptions {
+                    session_id: serve.session.clone(),
+                    project,
+                    source_filter,
+                    bind,
+                    timeout_secs: serve.timeout,
+                },
+            ) {
+                Ok(()) => Ok(String::new()),
+                Err(ServeError::BeforeStartup(failure)) => teleport_fail(failure, pretty),
+                Err(ServeError::TimedOut) => Err(anyhow::Error::new(CliFailure::new(
+                    3,
+                    String::new(),
+                    "teleport serve: timed out waiting for bundle download",
+                ))),
+            }
+        }
+    }
+}
+
+fn teleport_fail(failure: TeleportFailure, pretty: bool) -> Result<String> {
+    Err(anyhow::Error::new(CliFailure::from_teleport(
+        failure, pretty,
+    )?))
+}
+
+fn teleport_success_or_unsupported<T: Serialize>(response: T, pretty: bool) -> Result<String> {
+    let status = serde_json::to_value(&response).ok().and_then(|value| {
+        value
+            .get("status")
+            .and_then(|status| status.as_str())
+            .map(str::to_string)
+    });
+    let json = serialize(&response, pretty)?;
+    if status.as_deref() == Some("unsupported") {
+        let stderr = response_message(&response).unwrap_or_else(|| {
+            "teleport: requested cross-agent transform is not supported".to_string()
+        });
+        return Err(anyhow::Error::new(CliFailure::new(3, json, stderr)));
+    }
+    Ok(json)
+}
+
+fn response_message<T: Serialize>(response: &T) -> Option<String> {
+    serde_json::to_value(response)
+        .ok()?
+        .get("message")?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn parse_pack_fidelity(as_flag: Option<&str>) -> Result<TeleportFidelity, TeleportFailure> {
+    match as_flag {
+        None | Some("") | Some("native") => Ok(TeleportFidelity::Native),
+        Some("shared-safe") => Err(TeleportFailure::runtime(
+            "teleport/pack",
+            "teleport pack supports native Codex bundles only; --as shared-safe is not supported",
+        )),
+        Some(other) => Err(TeleportFailure::usage(
+            "teleport/pack",
+            format!(
+                "unsupported --as value {other:?}; teleport pack supports native Codex bundles only (use --as native or omit --as)"
+            ),
+        )),
+    }
 }
 
 #[derive(Debug, Serialize)]

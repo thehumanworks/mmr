@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 
 use crate::source;
+use crate::teleport::project_aliases;
 use crate::types::query::{
     PreviewCandidate, ProjectAggregate, ProjectAggregateState, ResolvedProject, SessionAggregate,
     SessionAggregateState,
@@ -54,6 +56,12 @@ impl MessageQueryOptions {
         self.message_index_range = message_index_range;
         self
     }
+}
+
+#[derive(Debug)]
+pub struct TeleportSessionContext {
+    pub session: ApiSession,
+    pub source_file: PathBuf,
 }
 
 #[derive(Debug)]
@@ -211,9 +219,10 @@ impl QueryService {
         let projects = apply_pagination(filtered, limit, offset)
             .into_iter()
             .map(|project| ApiProject {
-                name: project.name,
+                name: project.name.clone(),
                 source: project.source.as_str().to_string(),
-                original_path: project.original_path,
+                original_path: project.original_path.clone(),
+                aliases: project_lookup_aliases(&project.name, &project.original_path),
                 session_count: project.session_count,
                 message_count: project.message_count,
                 last_activity: project.last_activity,
@@ -245,8 +254,11 @@ impl QueryService {
         limit: Option<usize>,
         offset: usize,
         sort: SortOptions,
-    ) -> ApiSessionsResponse {
-        let resolved_project = project.map(|p| resolve_project(&self.projects, source_filter, p));
+    ) -> Result<ApiSessionsResponse> {
+        let resolved_project = match project {
+            Some(project) => Some(resolve_project(&self.projects, source_filter, project)?),
+            None => None,
+        };
 
         let mut filtered = self
             .sessions
@@ -277,10 +289,10 @@ impl QueryService {
             })
             .collect::<Vec<_>>();
 
-        ApiSessionsResponse {
+        Ok(ApiSessionsResponse {
             sessions,
             total_sessions,
-        }
+        })
     }
 
     pub fn messages(
@@ -289,8 +301,11 @@ impl QueryService {
         project: Option<&str>,
         source_filter: Option<SourceFilter>,
         options: MessageQueryOptions,
-    ) -> ApiMessagesResponse {
-        let resolved_project = project.map(|p| resolve_project(&self.projects, source_filter, p));
+    ) -> Result<ApiMessagesResponse> {
+        let resolved_project = match project {
+            Some(project) => Some(resolve_project(&self.projects, source_filter, project)?),
+            None => None,
+        };
 
         let mut filtered = self
             .messages
@@ -348,13 +363,94 @@ impl QueryService {
             })
             .collect();
 
-        ApiMessagesResponse {
+        Ok(ApiMessagesResponse {
             messages,
             total_messages,
             next_page,
             next_offset,
             next_command: None,
+        })
+    }
+
+    pub fn resolve_teleport_session(
+        &self,
+        session_id: Option<&str>,
+        project: Option<&str>,
+        source_filter: Option<SourceFilter>,
+    ) -> Result<TeleportSessionContext> {
+        let resolved_project = match project {
+            Some(project) => Some(resolve_project(&self.projects, source_filter, project)?),
+            None => None,
+        };
+
+        let mut filtered = self
+            .sessions
+            .iter()
+            .filter(|session| {
+                matches_source_filter(session.source, source_filter)
+                    && matches_project_filter(session, resolved_project.as_ref())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        sort_sessions(&mut filtered, SortBy::Timestamp, SortOrder::Desc);
+
+        let mut candidates = filtered
+            .into_iter()
+            .map(|session| ApiSession {
+                session_id: session.session_id,
+                source: session.source.as_str().to_string(),
+                project_name: session.project_name,
+                project_path: session.project_path,
+                first_timestamp: session.first_timestamp,
+                last_timestamp: session.last_timestamp,
+                message_count: session.message_count,
+                user_messages: session.user_messages,
+                assistant_messages: session.assistant_messages,
+                preview: session.preview,
+            })
+            .collect::<Vec<_>>();
+        if let Some(session_id) = session_id {
+            candidates.retain(|session| session.session_id == session_id);
+            if candidates.is_empty() {
+                bail!("session {session_id} not found in scope");
+            }
+            if candidates.len() > 1 {
+                bail!(
+                    "multiple sessions matched session id {session_id}; pass --project or --source"
+                );
+            }
+        } else if candidates.is_empty() {
+            bail!("no sessions found in scope");
+        } else {
+            candidates.truncate(1);
         }
+
+        let session = candidates
+            .into_iter()
+            .next()
+            .expect("teleport session candidate");
+        let source_file = self
+            .messages
+            .iter()
+            .filter(|message| {
+                message.session_id == session.session_id
+                    && message.project_name == session.project_name
+                    && message.source.as_str() == session.source
+            })
+            .map(|message| message.source_file.clone())
+            .min()
+            .map(PathBuf::from)
+            .with_context(|| {
+                format!(
+                    "native transcript path missing for session {}",
+                    session.session_id
+                )
+            })?;
+
+        Ok(TeleportSessionContext {
+            session,
+            source_file,
+        })
     }
 
     pub fn latest_session_messages(
@@ -364,8 +460,11 @@ impl QueryService {
         source_filter: Option<SourceFilter>,
         window: usize,
         message_index_range: Option<MessageIndexRange>,
-    ) -> ApiMessagesResponse {
-        let resolved_project = project.map(|p| resolve_project(&self.projects, source_filter, p));
+    ) -> Result<ApiMessagesResponse> {
+        let resolved_project = match project {
+            Some(project) => Some(resolve_project(&self.projects, source_filter, project)?),
+            None => None,
+        };
 
         let scoped = self
             .messages
@@ -381,13 +480,13 @@ impl QueryService {
             .iter()
             .max_by(|a, b| latest_session_message_cmp(a, b))
         else {
-            return ApiMessagesResponse {
+            return Ok(ApiMessagesResponse {
                 messages: Vec::new(),
                 total_messages: 0,
                 next_page: false,
                 next_offset: 0,
                 next_command: None,
-            };
+            });
         };
         let latest_key = (
             latest.source,
@@ -413,28 +512,72 @@ impl QueryService {
         windowed.reverse();
         let next_offset = windowed.len() as i64;
 
-        ApiMessagesResponse {
+        Ok(ApiMessagesResponse {
             messages: windowed.into_iter().map(api_message_from_record).collect(),
             total_messages,
             next_page: false,
             next_offset,
             next_command: None,
-        }
+        })
     }
 }
 
-/// Resolve a project identifier against known projects, handling Codex path normalization.
+fn path_basename(value: &str) -> Option<&str> {
+    Path::new(value.trim())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+}
+
+fn project_lookup_aliases(name: &str, original_path: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+    let mut push_alias = |alias: &str| {
+        if alias.is_empty() || alias == name {
+            return;
+        }
+        if !aliases.iter().any(|existing| existing == alias) {
+            aliases.push(alias.to_string());
+        }
+    };
+
+    if let Some(basename) = path_basename(name) {
+        push_alias(basename);
+    }
+    if original_path != name
+        && let Some(basename) = path_basename(original_path)
+    {
+        push_alias(basename);
+    }
+
+    let canonical = if name.starts_with('/') {
+        name
+    } else {
+        original_path
+    };
+    if canonical.starts_with('/') {
+        for alias in project_aliases(canonical) {
+            push_alias(&alias);
+        }
+    }
+
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+/// Resolve a project identifier against known projects, handling Codex path normalization
+/// and deterministic basename aliases for read commands and teleport.
 /// When source_filter is None, searches all sources.
 fn resolve_project(
     projects: &[ProjectAggregate],
     source_filter: Option<SourceFilter>,
     project: &str,
-) -> ResolvedProject {
+) -> Result<ResolvedProject> {
     let trimmed = project.trim();
     if trimmed.is_empty() {
-        return ResolvedProject {
+        return Ok(ResolvedProject {
             names: vec![trimmed.to_string()],
-        };
+        });
     }
 
     let mut candidates = vec![trimmed.to_string()];
@@ -534,15 +677,56 @@ fn resolve_project(
         }
     }
 
-    if matched_names.is_empty() {
-        ResolvedProject {
-            names: vec![project.to_string()],
-        }
-    } else {
-        ResolvedProject {
+    if !matched_names.is_empty() {
+        return Ok(ResolvedProject {
             names: matched_names,
+        });
+    }
+
+    let basename = path_basename(trimmed).unwrap_or(trimmed);
+    let mut alias_matches = Vec::new();
+    let mut alias_identities = Vec::new();
+
+    for item in projects {
+        if !matches_source_filter(item.source, source_filter) {
+            continue;
+        }
+        for candidate in [&item.name, &item.original_path] {
+            if candidate.is_empty() {
+                continue;
+            }
+            let matches_basename = path_basename(candidate) == Some(basename);
+            let matches_literal = candidate == trimmed;
+            if (matches_basename || matches_literal) && !alias_matches.contains(&item.name) {
+                alias_matches.push(item.name.clone());
+                let identity = if item.original_path.is_empty() {
+                    item.name.clone()
+                } else {
+                    item.original_path.clone()
+                };
+                alias_identities.push(identity);
+            }
         }
     }
+
+    alias_matches.sort();
+    alias_matches.dedup();
+    alias_identities.sort();
+    alias_identities.dedup();
+
+    if alias_identities.len() > 1 {
+        bail!("multiple projects matched alias {basename:?}; pass an exact project path");
+    }
+
+    if !alias_matches.is_empty() {
+        return Ok(ResolvedProject {
+            names: alias_matches,
+        });
+    }
+
+    Ok(ResolvedProject {
+        names: vec![project.to_string()],
+    })
 }
 
 fn matches_project_filter(session: &SessionAggregate, resolved: Option<&ResolvedProject>) -> bool {
@@ -830,16 +1014,18 @@ mod tests {
             ),
         ]);
 
-        let response = service.messages(
-            Some("session-1"),
-            None,
-            None,
-            MessageQueryOptions::new(
-                Some(1),
-                1,
-                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-            ),
-        );
+        let response = service
+            .messages(
+                Some("session-1"),
+                None,
+                None,
+                MessageQueryOptions::new(
+                    Some(1),
+                    1,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )
+            .expect("query");
         assert_eq!(response.messages.len(), 1);
         assert_eq!(response.messages[0].content, "second");
     }
@@ -885,13 +1071,15 @@ mod tests {
             ),
         ]);
 
-        let response = service.latest_session_messages(
-            None,
-            Some("/Users/test/proj"),
-            Some(SourceFilter::Codex),
-            2,
-            None,
-        );
+        let response = service
+            .latest_session_messages(
+                None,
+                Some("/Users/test/proj"),
+                Some(SourceFilter::Codex),
+                2,
+                None,
+            )
+            .expect("query");
 
         assert_eq!(response.total_messages, 3);
         assert_eq!(response.messages.len(), 2);
@@ -915,13 +1103,15 @@ mod tests {
             0,
         )]);
 
-        let response = service.sessions(
-            Some("Users/test/codex-proj"),
-            Some(SourceFilter::Codex),
-            None,
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-        );
+        let response = service
+            .sessions(
+                Some("Users/test/codex-proj"),
+                Some(SourceFilter::Codex),
+                None,
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+            )
+            .expect("query");
         assert_eq!(response.sessions.len(), 1);
         assert_eq!(response.sessions[0].project_name, "/Users/test/codex-proj");
     }
@@ -949,13 +1139,15 @@ mod tests {
             ),
         ]);
 
-        let response = service.sessions(
-            None,
-            None,
-            None,
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-        );
+        let response = service
+            .sessions(
+                None,
+                None,
+                None,
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+            )
+            .expect("query");
         assert_eq!(response.total_sessions, 2);
         assert_eq!(response.sessions.len(), 2);
     }
@@ -983,13 +1175,15 @@ mod tests {
             ),
         ]);
 
-        let response = service.sessions(
-            None,
-            Some(SourceFilter::Codex),
-            None,
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-        );
+        let response = service
+            .sessions(
+                None,
+                Some(SourceFilter::Codex),
+                None,
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+            )
+            .expect("query");
         assert_eq!(response.total_sessions, 1);
         assert_eq!(response.sessions[0].source, "codex");
     }
@@ -1017,12 +1211,18 @@ mod tests {
             ),
         ]);
 
-        let response = service.messages(
-            None,
-            None,
-            None,
-            MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-        );
+        let response = service
+            .messages(
+                None,
+                None,
+                None,
+                MessageQueryOptions::new(
+                    None,
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )
+            .expect("query");
         assert_eq!(response.total_messages, 2);
         assert_eq!(response.messages.len(), 2);
     }
@@ -1050,12 +1250,18 @@ mod tests {
             ),
         ]);
 
-        let response = service.messages(
-            None,
-            Some("-Users-test-proj"),
-            Some(SourceFilter::Claude),
-            MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-        );
+        let response = service
+            .messages(
+                None,
+                Some("-Users-test-proj"),
+                Some(SourceFilter::Claude),
+                MessageQueryOptions::new(
+                    None,
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )
+            .expect("query");
         assert_eq!(response.total_messages, 1);
         assert_eq!(response.messages[0].project_name, "-Users-test-proj");
     }
@@ -1084,13 +1290,15 @@ mod tests {
         ]);
 
         // Without source filter, searching by codex project path should find it
-        let response = service.sessions(
-            Some("Users/test/codex-proj"),
-            None,
-            None,
-            0,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-        );
+        let response = service
+            .sessions(
+                Some("Users/test/codex-proj"),
+                None,
+                None,
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+            )
+            .expect("query");
         assert_eq!(response.sessions.len(), 1);
         assert_eq!(response.sessions[0].source, "codex");
     }
@@ -1193,13 +1401,15 @@ mod tests {
             ),
         ]);
 
-        let response = service.sessions(
-            None,
-            Some(SourceFilter::Codex),
-            None,
-            0,
-            SortOptions::new(SortBy::MessageCount, SortOrder::Desc),
-        );
+        let response = service
+            .sessions(
+                None,
+                Some(SourceFilter::Codex),
+                None,
+                0,
+                SortOptions::new(SortBy::MessageCount, SortOrder::Desc),
+            )
+            .expect("query");
         let ids = response
             .sessions
             .iter()
@@ -1306,13 +1516,15 @@ mod tests {
             ),
         ]);
 
-        let response = service.sessions(
-            None,
-            Some(SourceFilter::Codex),
-            None,
-            0,
-            SortOptions::new(SortBy::MessageCount, SortOrder::Asc),
-        );
+        let response = service
+            .sessions(
+                None,
+                Some(SourceFilter::Codex),
+                None,
+                0,
+                SortOptions::new(SortBy::MessageCount, SortOrder::Asc),
+            )
+            .expect("query");
         let ids = response
             .sessions
             .iter()
@@ -1437,16 +1649,18 @@ mod tests {
             ),
         ]);
 
-        let response = service.messages(
-            None,
-            None,
-            None,
-            MessageQueryOptions::new(
-                Some(2),
-                0,
-                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-            ),
-        );
+        let response = service
+            .messages(
+                None,
+                None,
+                None,
+                MessageQueryOptions::new(
+                    Some(2),
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )
+            .expect("query");
         assert_eq!(response.messages.len(), 2);
         assert_eq!(response.total_messages, 5);
         assert!(response.next_page);
@@ -1485,16 +1699,18 @@ mod tests {
             ),
         ]);
 
-        let response = service.messages(
-            None,
-            None,
-            None,
-            MessageQueryOptions::new(
-                Some(2),
-                2,
-                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-            ),
-        );
+        let response = service
+            .messages(
+                None,
+                None,
+                None,
+                MessageQueryOptions::new(
+                    Some(2),
+                    2,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )
+            .expect("query");
         assert_eq!(response.messages.len(), 1);
         assert_eq!(response.total_messages, 3);
         assert!(!response.next_page);
@@ -1524,14 +1740,204 @@ mod tests {
             ),
         ]);
 
-        let response = service.messages(
-            None,
-            None,
-            None,
-            MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-        );
+        let response = service
+            .messages(
+                None,
+                None,
+                None,
+                MessageQueryOptions::new(
+                    None,
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )
+            .expect("query");
         assert_eq!(response.messages.len(), 2);
         assert!(!response.next_page);
         assert_eq!(response.next_offset, 2);
+    }
+
+    #[test]
+    fn resolve_project_matches_basename_alias() {
+        let service = QueryService::from_messages(vec![record(
+            SourceKind::Codex,
+            "/Users/alice/dev/mmr",
+            "sess-1",
+            "user",
+            "hello",
+            "2025-01-01T00:00:00",
+            0,
+        )]);
+
+        let resolved = resolve_project(&service.projects, Some(SourceFilter::Codex), "mmr")
+            .expect("basename alias should resolve");
+
+        assert_eq!(resolved.names, vec!["/Users/alice/dev/mmr".to_string()]);
+    }
+
+    #[test]
+    fn resolve_project_rejects_ambiguous_basename_alias() {
+        let service = QueryService::from_messages(vec![
+            record(
+                SourceKind::Codex,
+                "/Users/alice/dev/mmr",
+                "sess-1",
+                "user",
+                "hello",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/bob/work/mmr",
+                "sess-2",
+                "user",
+                "hello",
+                "2025-01-01T00:01:00",
+                0,
+            ),
+        ]);
+
+        let error = resolve_project(&service.projects, Some(SourceFilter::Codex), "mmr")
+            .expect_err("ambiguous basename should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("multiple projects matched alias")
+        );
+    }
+
+    #[test]
+    fn resolve_project_basename_alias_can_match_same_path_across_sources() {
+        let mut claude = record(
+            SourceKind::Claude,
+            "-Users-alice-dev-mmr",
+            "sess-claude",
+            "user",
+            "hello",
+            "2025-01-01T00:01:00",
+            0,
+        );
+        claude.project_path = "/Users/alice/dev/mmr".to_string();
+        let service = QueryService::from_messages(vec![
+            record(
+                SourceKind::Codex,
+                "/Users/alice/dev/mmr",
+                "sess-codex",
+                "user",
+                "hello",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            claude,
+        ]);
+
+        let resolved =
+            resolve_project(&service.projects, None, "mmr").expect("same-path aliases resolve");
+
+        assert_eq!(
+            resolved.names,
+            vec![
+                "-Users-alice-dev-mmr".to_string(),
+                "/Users/alice/dev/mmr".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn project_lookup_aliases_exposes_basename_and_hyphen_aliases() {
+        let aliases =
+            project_lookup_aliases("/Users/test/remapped-proj", "/Users/test/remapped-proj");
+        assert!(aliases.contains(&"remapped-proj".to_string()));
+        assert!(aliases.contains(&"-Users-test-remapped-proj".to_string()));
+    }
+
+    #[test]
+    fn sessions_resolve_basename_project_alias_for_read_commands() {
+        let service = QueryService::from_messages(vec![record(
+            SourceKind::Codex,
+            "/Users/test/remapped-proj",
+            "sess-codex-1",
+            "user",
+            "hello",
+            "2025-01-01T00:00:00",
+            0,
+        )]);
+
+        let response = service
+            .sessions(
+                Some("remapped-proj"),
+                Some(SourceFilter::Codex),
+                None,
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+            )
+            .expect("basename alias should resolve for sessions");
+
+        assert_eq!(response.sessions.len(), 1);
+        assert_eq!(response.sessions[0].session_id, "sess-codex-1");
+    }
+
+    #[test]
+    fn resolve_teleport_session_selects_latest_in_project_scope() {
+        let service = QueryService::from_messages(vec![
+            record(
+                SourceKind::Codex,
+                "/Users/test/codex-proj",
+                "sess-older",
+                "user",
+                "older",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/codex-proj",
+                "sess-latest",
+                "user",
+                "latest",
+                "2025-01-02T00:00:00",
+                0,
+            ),
+        ]);
+
+        let context = service
+            .resolve_teleport_session(
+                None,
+                Some("/Users/test/codex-proj"),
+                Some(SourceFilter::Codex),
+            )
+            .expect("latest session in scope");
+
+        assert_eq!(context.session.session_id, "sess-latest");
+    }
+
+    #[test]
+    fn resolve_teleport_session_rejects_ambiguous_session_id() {
+        let service = QueryService::from_messages(vec![
+            record(
+                SourceKind::Codex,
+                "/Users/test/one",
+                "sess-dup",
+                "user",
+                "one",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/two",
+                "sess-dup",
+                "user",
+                "two",
+                "2025-01-01T00:01:00",
+                0,
+            ),
+        ]);
+
+        let error = service
+            .resolve_teleport_session(Some("sess-dup"), None, Some(SourceFilter::Codex))
+            .expect_err("duplicate session ids should fail");
+        assert!(error.to_string().contains("multiple sessions matched"));
     }
 }

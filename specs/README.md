@@ -12,6 +12,9 @@ When implementing or reviewing behavior:
 ## Index
 
 - [Messages command](messages.md)
+- [Teleport command](teleport.md)
+- [Teleport user guide](../docs/mmr-teleport.md)
+- [Teleport E2E validation](../docs/mmr-teleport-validation.md)
 - [Memory Fabric MVP contract](../docs/mmr-memory-fabric-mvp.md)
 - [Memory Fabric quickstart and recovery](../docs/mmr-memory-fabric-quickstart.md)
 - [Memory Fabric release gate](../docs/mmr-memory-fabric-release-gate.md)

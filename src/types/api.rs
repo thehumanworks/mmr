@@ -7,6 +7,8 @@ pub struct ApiProject {
     pub name: String,
     pub source: String,
     pub original_path: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     pub session_count: i32,
     pub message_count: i32,
     pub last_activity: String,

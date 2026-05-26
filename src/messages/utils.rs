@@ -22,7 +22,7 @@ pub(crate) fn load_session_transcripts(
         None,
         0,
         SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-    );
+    )?;
 
     let selected = select_sessions(&sessions.sessions, selection);
     let mut transcripts = selected
@@ -37,13 +37,13 @@ pub(crate) fn load_session_transcripts(
                     0,
                     SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
                 ),
-            );
-            SessionTranscript {
+            )?;
+            Ok::<_, anyhow::Error>(SessionTranscript {
                 session_id: selection.session_id.clone(),
                 messages: response.messages,
-            }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
 
     transcripts.sort_by_key(|transcript| {
         Reverse(
