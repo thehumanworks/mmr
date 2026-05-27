@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use super::TeleportOutputFormat;
 use super::TeleportStatus;
 use super::bundle::{
-    TeleportBundleFile, bundle_sha256, cache_dir, load_bundle_from_locator, verify_artifact_hashes,
-    write_bundle,
+    TeleportBundleFile, bundle_sha256, cache_dir, load_bundle_from_locator, messages_from_bundle,
+    verify_artifact_hashes, write_bundle,
 };
 use super::error::TeleportFailure;
 use super::file::{
@@ -15,11 +16,13 @@ use super::file::{
 };
 use super::http::{fetch_and_cache_http_bundle, is_http_locator, parse_http_locator};
 use super::receive::{ReceiveStagedSummary, resolve_teleport_locator};
+use crate::types::api::ApiMessage;
 
 #[derive(Debug, Clone)]
 pub struct ReadOptions {
     pub locator: String,
     pub dry_run: bool,
+    pub output_format: TeleportOutputFormat,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,9 +44,10 @@ pub struct ReadResponse {
     pub bundle_path: String,
     pub session: ReadSessionSummary,
     pub message_count: u64,
+    pub messages: Vec<ApiMessage>,
     pub dry_run: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_command: Option<String>,
+    pub text: Option<String>,
 }
 
 pub fn read_bundle(options: ReadOptions) -> Result<ReadResponse, TeleportFailure> {
@@ -56,10 +60,10 @@ pub fn read_bundle(options: ReadOptions) -> Result<ReadResponse, TeleportFailure
 
     match kind {
         ReceiveLocatorKind::DirectBundle(bundle_path) => {
-            read_direct_bundle(&options.locator, bundle_path, options.dry_run)
+            read_direct_bundle(&options.locator, bundle_path, &options)
         }
         ReceiveLocatorKind::InboxEntry(entry_dir) => {
-            read_inbox_entry(&options.locator, &entry_dir, options.dry_run)
+            read_inbox_entry(&options.locator, &entry_dir, &options)
         }
     }
 }
@@ -81,13 +85,14 @@ fn read_http(options: &ReadOptions) -> Result<ReadResponse, TeleportFailure> {
         options.dry_run,
         None,
         None,
+        options.output_format,
     )
 }
 
 fn read_direct_bundle(
     locator: &str,
     bundle_path: PathBuf,
-    dry_run: bool,
+    options: &ReadOptions,
 ) -> Result<ReadResponse, TeleportFailure> {
     let bundle = load_bundle_from_locator(&bundle_path)
         .map_err(|error| TeleportFailure::runtime("teleport/read", error.to_string()))?;
@@ -95,45 +100,35 @@ fn read_direct_bundle(
         .map_err(|error| TeleportFailure::runtime("teleport/read", error.to_string()))?;
     let sha256 = bundle_sha256(&bundle_path)
         .map_err(|error| TeleportFailure::runtime("teleport/read", error.to_string()))?;
-    let (cached, status) = stage_bundle_in_cache(&bundle, &bundle_path, sha256, dry_run)?;
+    let (cached, status) = stage_bundle_in_cache(&bundle, &bundle_path, sha256, options.dry_run)?;
     build_read_response(
         locator.to_string(),
         "file",
         vec![cached],
-        dry_run,
+        options.dry_run,
         Some(status),
         Some(&bundle),
+        options.output_format,
     )
 }
 
 fn read_inbox_entry(
     locator: &str,
     entry_dir: &Path,
-    dry_run: bool,
+    options: &ReadOptions,
 ) -> Result<ReadResponse, TeleportFailure> {
     match inbox_entry_state(entry_dir) {
-        InboxEntryState::Waiting => Ok(ReadResponse {
-            command: "teleport/read",
-            status: TeleportStatus::Ok,
-            transport: "file",
-            locator: locator.to_string(),
-            cached: Vec::new(),
-            bundle_id: String::new(),
-            bundle_path: String::new(),
-            session: ReadSessionSummary {
-                source: String::new(),
-                source_session_id: String::new(),
-                project_name: None,
-            },
-            message_count: 0,
-            dry_run,
-            next_command: None,
-        }),
+        InboxEntryState::Waiting => Ok(empty_read_response(
+            locator,
+            "file",
+            options.dry_run,
+            options.output_format,
+        )),
         InboxEntryState::Ready => {
             let bundle_path = entry_dir.join(BUNDLE_FILENAME);
             let sha256_path = entry_dir.join(SHA256_FILENAME);
             verify_ready_inbox_bundle(&bundle_path, &sha256_path)?;
-            read_direct_bundle(locator, bundle_path, dry_run)
+            read_direct_bundle(locator, bundle_path, options)
         }
     }
 }
@@ -200,28 +195,18 @@ fn build_read_response(
     dry_run: bool,
     explicit_status: Option<TeleportStatus>,
     preloaded: Option<&TeleportBundleFile>,
+    output_format: TeleportOutputFormat,
 ) -> Result<ReadResponse, TeleportFailure> {
     let entry = cached.first().ok_or_else(|| {
         TeleportFailure::runtime("teleport/read", "read produced no cached bundle entry")
     })?;
     if entry.bundle_id.is_empty() && dry_run {
-        return Ok(ReadResponse {
-            command: "teleport/read",
-            status: TeleportStatus::Ok,
+        return Ok(empty_read_response(
+            &locator,
             transport,
-            locator,
-            cached,
-            bundle_id: String::new(),
-            bundle_path: String::new(),
-            session: ReadSessionSummary {
-                source: String::new(),
-                source_session_id: String::new(),
-                project_name: None,
-            },
-            message_count: 0,
             dry_run,
-            next_command: None,
-        });
+            output_format,
+        ));
     }
 
     let loaded;
@@ -235,7 +220,13 @@ fn build_read_response(
         }
     };
     let status = explicit_status.unwrap_or(TeleportStatus::Ok);
-    let bundle_path_display = entry.bundle_path.clone();
+    let messages = messages_from_bundle(bundle)
+        .map_err(|error| TeleportFailure::runtime("teleport/read", error))?;
+    let text = match output_format {
+        TeleportOutputFormat::Md => Some(read_markdown(bundle, &messages)),
+        TeleportOutputFormat::Json => None,
+    };
+    let bundle_path = entry.bundle_path.clone();
     Ok(ReadResponse {
         command: "teleport/read",
         status,
@@ -243,16 +234,63 @@ fn build_read_response(
         locator,
         cached,
         bundle_id: bundle.manifest.bundle_id.clone(),
-        bundle_path: bundle_path_display.clone(),
+        bundle_path,
         session: ReadSessionSummary {
             source: bundle.manifest.source.clone(),
             source_session_id: bundle.manifest.session.source_session_id.clone(),
             project_name: Some(bundle.metadata.project_name.clone()),
         },
-        message_count: bundle.manifest.session.message_count as u64,
+        message_count: messages.len() as u64,
+        messages,
         dry_run,
-        next_command: Some(format!(
-            "mmr teleport export {bundle_path_display} --to - --as same"
-        )),
+        text,
     })
+}
+
+fn empty_read_response(
+    locator: &str,
+    transport: &'static str,
+    dry_run: bool,
+    output_format: TeleportOutputFormat,
+) -> ReadResponse {
+    ReadResponse {
+        command: "teleport/read",
+        status: TeleportStatus::Ok,
+        transport,
+        locator: locator.to_string(),
+        cached: Vec::new(),
+        bundle_id: String::new(),
+        bundle_path: String::new(),
+        session: ReadSessionSummary {
+            source: String::new(),
+            source_session_id: String::new(),
+            project_name: None,
+        },
+        message_count: 0,
+        messages: Vec::new(),
+        dry_run,
+        text: match output_format {
+            TeleportOutputFormat::Md => {
+                Some("# Teleport read\n\n(no session content)\n".to_string())
+            }
+            TeleportOutputFormat::Json => None,
+        },
+    }
+}
+
+fn read_markdown(bundle: &TeleportBundleFile, messages: &[ApiMessage]) -> String {
+    let mut parts = vec![format!(
+        "# Teleport read\n\n- source: {}\n- session_id: {}\n- project: {}\n- messages: {}\n",
+        bundle.manifest.source,
+        bundle.manifest.session.source_session_id,
+        bundle.metadata.project_name,
+        messages.len()
+    )];
+    for message in messages {
+        parts.push(format!(
+            "\n## {} ({}) — {}\n\n{}\n",
+            message.role, message.timestamp, message.msg_type, message.content
+        ));
+    }
+    parts.join("")
 }

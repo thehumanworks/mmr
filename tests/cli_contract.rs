@@ -3689,12 +3689,13 @@ fn teleport_serve_read_http_loopback_caches_without_apply() {
             .expect("bundle_path")
             .contains("/.mmr/teleport/cache/")
     );
-    assert!(
-        read_json["next_command"]
-            .as_str()
-            .expect("next_command")
-            .contains("teleport export")
+    let messages = read_json["messages"].as_array().expect("messages");
+    assert!(!messages.is_empty());
+    assert_eq!(
+        read_json["message_count"].as_u64().expect("message_count"),
+        messages.len() as u64
     );
+    assert!(read_json.get("next_command").is_none());
 
     let native_after = fs::read(&native_path).ok();
     assert_eq!(
@@ -3725,6 +3726,12 @@ fn teleport_read_local_bundle_caches_and_second_read_is_skipped() {
     let first_json = parse_stdout_json(&first_output);
     assert_eq!(first_json["command"], "teleport/read");
     assert_eq!(first_json["status"], "ok");
+    assert!(
+        !first_json["messages"]
+            .as_array()
+            .expect("messages")
+            .is_empty()
+    );
     let cache_path = first_json["bundle_path"].as_str().expect("bundle_path");
     assert!(Path::new(cache_path).exists());
 
@@ -3732,6 +3739,10 @@ fn teleport_read_local_bundle_caches_and_second_read_is_skipped() {
     assert!(second_output.status.success());
     let second_json = parse_stdout_json(&second_output);
     assert_eq!(second_json["status"], "skipped");
+    assert_eq!(
+        second_json["messages"].as_array().expect("messages").len(),
+        first_json["messages"].as_array().expect("messages").len()
+    );
 }
 
 #[test]
@@ -3763,7 +3774,11 @@ fn teleport_read_dry_run_does_not_write_cache() {
     );
     assert_eq!(json["session"]["source"], "codex");
     assert_eq!(json["session"]["source_session_id"], "sess-codex-1");
-    assert!(json["message_count"].as_u64().expect("message_count") > 0);
+    assert!(!json["messages"].as_array().expect("messages").is_empty());
+    assert_eq!(
+        json["message_count"].as_u64().expect("message_count"),
+        json["messages"].as_array().expect("messages").len() as u64
+    );
     let cache_path = json["bundle_path"].as_str().expect("bundle_path");
     assert!(
         cache_path.contains("/.mmr/teleport/cache/"),
@@ -4287,6 +4302,12 @@ fn teleport_provider_matrix_file_send_read_receive() {
         );
         let read_json = parse_stdout_json(&read_output);
         assert_eq!(read_json["session"]["source"], case.source);
+        assert!(
+            !read_json["messages"]
+                .as_array()
+                .expect("messages")
+                .is_empty()
+        );
         assert!(read_json.get("apply").is_none());
 
         let receive_output = fixture.run_cli(&[

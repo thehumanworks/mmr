@@ -85,9 +85,11 @@ mmr teleport read 'mmtp://100.x.x.x:54321/<token>'
 ```
 
 `read` downloads the bundle, verifies `X-MMR-Bundle-Sha256`, caches under
-`~/.mmr/teleport/cache/<bundle_id>/bundle.mmr`, and returns session metadata plus a
-suggested `teleport export` command. Re-reading the same cached path is idempotent
-(`status: "skipped"`). It does not write native provider session files.
+`~/.mmr/teleport/cache/<bundle_id>/bundle.mmr`, and returns session metadata plus
+the normalized `messages` array (same shape as `mmr messages`). Use `-O md` for a
+Markdown `text` field. Re-reading the same cached path is idempotent
+(`status: "skipped"`) and still returns messages from cache. It does not write native
+provider session files.
 
 **Machine B (handoff / resume on this host):**
 

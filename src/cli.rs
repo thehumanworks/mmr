@@ -560,8 +560,9 @@ pub struct TeleportSendArgs {
 #[command(after_help = "Examples:\n  \
 mmr teleport read mmtp://100.x.x.x:8765/TOKEN\n  \
 mmr teleport read ./handoff.mmr\n  \
-mmr teleport read ~/.mmr/teleport/cache/tp:v1:.../bundle.mmr\n\
-Caches under ~/.mmr/teleport/cache/<bundle_id>/; does not write provider session files.")]
+mmr teleport read ~/.mmr/teleport/cache/tp:v1:.../bundle.mmr\n  \
+mmr teleport read ./handoff.mmr -O md\n\
+Caches under ~/.mmr/teleport/cache/<bundle_id>/ and prints session messages on stdout.")]
 pub struct TeleportReadArgs {
     /// Bundle path, inbox directory, or HTTP locator (mmtp://host:port/token)
     #[arg(value_name = "LOCATOR")]
@@ -569,6 +570,14 @@ pub struct TeleportReadArgs {
     /// Bundle path, inbox directory, or HTTP locator (mmtp://host:port/token)
     #[arg(long)]
     to: Option<String>,
+    /// Output format
+    #[arg(
+        short = 'O',
+        long = "output-format",
+        value_enum,
+        default_value = "json"
+    )]
+    output_format: TeleportOutputFormatArg,
     /// Show what would be cached without writing files or downloading
     #[arg(long)]
     dry_run: bool,
@@ -1189,6 +1198,7 @@ fn teleport_command_response(
             match read_bundle(ReadOptions {
                 locator,
                 dry_run: read.dry_run,
+                output_format: read.output_format.into(),
             }) {
                 Ok(response) => serialize(&response, pretty),
                 Err(failure) => teleport_fail(failure, pretty),

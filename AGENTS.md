@@ -113,6 +113,13 @@ Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMI
 
 ## Learned User Preferences
 
+- Expect `mmr teleport read` to print session messages on stdout (JSON `messages` array; `-O md` for readable text); caching must not require a separate export step.
+- Prefer stateless one-shot CLI flows for `remember` (no continuation or follow-up parameters).
+- For GitHub-backed mmr features, use standard `GITHUB_TOKEN` or `GH_TOKEN` plus gh user config rather than `MMR_`-prefixed credential env vars.
+- `mmr dream` should be a real assimilation command (not mocked); default to Codex CLI headless with `gpt-5.4` when available.
+
 ## Learned Workspace Facts
 
+- On macOS/BSD, TCP sockets accepted from a non-blocking `teleport serve` listener inherit non-blocking mode; set accepted streams to blocking before large bundle writes to avoid EAGAIN.
+- `mmr teleport read` response includes a `messages` array with the same shape as `mmr messages`; re-reading a cached bundle returns the same messages with `status: "skipped"`.
 - When invoking the mmr CLI from scripts (e.g. Python subprocess), pass `--project` and the project value as two separate arguments so the CLI receives the value correctly; avoid a single argument like `--project="value"` which can pass the quotes literally and break matching.

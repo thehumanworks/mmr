@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::domain::Agent;
 
@@ -41,7 +41,7 @@ pub struct ApiSessionsResponse {
     pub total_sessions: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ApiMessage {
     pub session_id: String,
     pub source: String,

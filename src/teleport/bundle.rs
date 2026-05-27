@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::manifest::{BundleMetadata, TeleportManifest};
+use crate::types::api::ApiMessage;
 
 pub const BUNDLE_FORMAT_VERSION: u32 = 1;
 pub const METADATA_PATH: &str = "metadata.json";
@@ -150,6 +151,37 @@ pub fn artifact_content<'a>(bundle: &'a TeleportBundleFile, path: &str) -> Resul
         .find_map(|legacy| bundle.files.get(*legacy).map(String::as_str)))
 }
 
+pub fn normalized_transcript_content(bundle: &TeleportBundleFile) -> Option<&str> {
+    artifact_content(bundle, NORMALIZED_TRANSCRIPT_PATH)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            bundle
+                .manifest
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.kind == "normalized_transcript")
+                .and_then(|artifact| artifact_content(bundle, &artifact.path).ok().flatten())
+        })
+}
+
+pub fn messages_from_bundle(bundle: &TeleportBundleFile) -> Result<Vec<ApiMessage>, String> {
+    let content = normalized_transcript_content(bundle)
+        .ok_or_else(|| "bundle missing normalized transcript".to_string())?;
+    parse_normalized_messages(content)
+}
+
+fn parse_normalized_messages(content: &str) -> Result<Vec<ApiMessage>, String> {
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line)
+                .map_err(|error| format!("parse normalized transcript line as ApiMessage: {error}"))
+        })
+        .collect()
+}
+
 pub fn metadata_json(bundle: &TeleportBundleFile) -> Result<String> {
     serde_json::to_string(&bundle.metadata).context("serialize bundle metadata")
 }
@@ -276,8 +308,8 @@ fn legacy_artifact_paths(path: &str) -> &'static [&'static str] {
 mod tests {
     use super::*;
     use crate::teleport::manifest::{
-        ManifestArtifact, ManifestProject, ManifestRestore, ManifestSession, TeleportFidelity,
-        TeleportManifest,
+        BundleMetadata, ManifestArtifact, ManifestProject, ManifestRestore, ManifestSession,
+        TeleportFidelity, TeleportManifest,
     };
     use crate::teleport::provider::profiles::codex::{
         NATIVE_TRANSCRIPT as CODEX_NATIVE_TRANSCRIPT_PATH, RESTORE_PATH as RESTORE_CODEX_PATH,
@@ -477,5 +509,34 @@ mod tests {
             "2025-01-02T00:05:00",
             "2025-01-02T00:05:00"
         ));
+    }
+
+    #[test]
+    fn messages_from_bundle_parses_normalized_transcript_lines() {
+        let normalized = r#"{"session_id":"sess-codex-1","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"hello","model":"","timestamp":"2025-01-01T00:00:00Z","is_subagent":false,"msg_type":"message","input_tokens":0,"output_tokens":0}
+{"session_id":"sess-codex-1","source":"codex","project_name":"/Users/test/codex-proj","role":"assistant","content":"hi","model":"gpt","timestamp":"2025-01-01T00:00:01Z","is_subagent":false,"msg_type":"message","input_tokens":1,"output_tokens":2}"#;
+        let mut files = BTreeMap::new();
+        files.insert(
+            NORMALIZED_TRANSCRIPT_PATH.to_string(),
+            normalized.to_string(),
+        );
+        let bundle = TeleportBundleFile {
+            mmr_teleport_bundle_version: BUNDLE_FORMAT_VERSION,
+            manifest: sample_manifest("sha256:unused"),
+            metadata: BundleMetadata {
+                source: "codex".to_string(),
+                source_session_id: "sess-codex-1".to_string(),
+                project_name: "/Users/test/codex-proj".to_string(),
+                project_path: "/Users/test/codex-proj".to_string(),
+                native_source_file: "/Users/test/.codex/sessions/sess-codex-1.jsonl".to_string(),
+                packed_at: "2025-01-01T00:00:00Z".to_string(),
+                notes: None,
+            },
+            files,
+        };
+        let messages = messages_from_bundle(&bundle).expect("messages");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].role, "assistant");
     }
 }

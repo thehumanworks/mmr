@@ -228,6 +228,14 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
     while Instant::now() < deadline {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // Accepted sockets inherit the listener's non-blocking mode on macOS/BSD.
+                // Large bundle bodies need blocking writes or write_all fails with EAGAIN.
+                stream.set_nonblocking(false).map_err(|error| {
+                    ServeError::BeforeStartup(TeleportFailure::runtime(
+                        "teleport/serve",
+                        format!("set accepted stream blocking: {error}"),
+                    ))
+                })?;
                 if handle_serve_connection(
                     &mut stream,
                     &token,
@@ -694,5 +702,51 @@ mod tests {
         assert!(constant_time_eq(b"abc", b"abc"));
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"ab"));
+    }
+
+    #[test]
+    fn serve_writes_large_bundle_over_nonblocking_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let addr = listener.local_addr().expect("local addr");
+        let token = "abc123";
+        let sha256 = "sha256:deadbeef";
+        let body = vec![b'x'; 512 * 1024];
+
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).expect("connect");
+            let request = format!("GET /{token} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+            stream.write_all(request.as_bytes()).expect("write request");
+            stream.flush().expect("flush request");
+            let mut response = Vec::new();
+            stream
+                .read_to_end(&mut response)
+                .expect("read large response");
+            response
+        });
+
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(pair) => break pair,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept: {error}"),
+            }
+        };
+        stream.set_nonblocking(false).expect("set stream blocking");
+        let mut consumed = false;
+        handle_serve_connection(&mut stream, token, sha256, &body, &mut consumed)
+            .expect("serve large bundle");
+        assert!(consumed);
+        drop(stream);
+
+        let response = client.join().expect("client thread");
+        let (header_block, header_end) = split_http_header(&response).expect("response headers");
+        let header_text = std::str::from_utf8(header_block).expect("header utf8");
+        assert!(header_text.contains("HTTP/1.1 200"));
+        assert_eq!(&response[header_end..], body.as_slice());
     }
 }
