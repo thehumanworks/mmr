@@ -11,9 +11,7 @@ use super::manifest::{BundleMetadata, TeleportManifest};
 
 pub const BUNDLE_FORMAT_VERSION: u32 = 1;
 pub const METADATA_PATH: &str = "metadata.json";
-pub const NATIVE_TRANSCRIPT_PATH: &str = "transcript.native.jsonl";
 pub const NORMALIZED_TRANSCRIPT_PATH: &str = "transcript.normalized.jsonl";
-pub const RESTORE_CODEX_PATH: &str = "restore/codex.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeleportBundleFile {
@@ -64,36 +62,6 @@ pub fn compute_bundle_id(artifact_hashes: &[(String, String)]) -> String {
         .collect::<Vec<_>>()
         .join("|");
     format!("tp:v1:{}", hash_hex(identity.as_bytes()))
-}
-
-pub fn content_identity_entries(
-    native_hash: &str,
-    normalized_hash: &str,
-    restore_hash: Option<&str>,
-) -> Vec<(String, String)> {
-    let mut entries = vec![
-        (NATIVE_TRANSCRIPT_PATH.to_string(), native_hash.to_string()),
-        (
-            NORMALIZED_TRANSCRIPT_PATH.to_string(),
-            normalized_hash.to_string(),
-        ),
-    ];
-    if let Some(restore_hash) = restore_hash {
-        entries.push((RESTORE_CODEX_PATH.to_string(), restore_hash.to_string()));
-    }
-    entries
-}
-
-pub fn compute_content_bundle_id(
-    native_hash: &str,
-    normalized_hash: &str,
-    restore_hash: Option<&str>,
-) -> String {
-    compute_bundle_id(&content_identity_entries(
-        native_hash,
-        normalized_hash,
-        restore_hash,
-    ))
 }
 
 pub fn manifest_content_identity(manifest: &TeleportManifest) -> Vec<(String, String)> {
@@ -174,7 +142,12 @@ pub fn artifact_content<'a>(bundle: &'a TeleportBundleFile, path: &str) -> Resul
     if path == METADATA_PATH {
         return Ok(None);
     }
-    Ok(bundle.files.get(path).map(String::as_str))
+    if let Some(content) = bundle.files.get(path) {
+        return Ok(Some(content.as_str()));
+    }
+    Ok(legacy_artifact_paths(path)
+        .iter()
+        .find_map(|legacy| bundle.files.get(*legacy).map(String::as_str)))
 }
 
 pub fn metadata_json(bundle: &TeleportBundleFile) -> Result<String> {
@@ -233,28 +206,6 @@ pub fn remap_text(content: &str, replacements: &BTreeMap<String, String>) -> Str
     updated
 }
 
-pub fn codex_native_destination_path(
-    home: &Path,
-    native_source_file: &str,
-    session_id: &str,
-) -> PathBuf {
-    const MARKER: &str = "/.codex/";
-    if let Some(index) = native_source_file.find(MARKER) {
-        let relative = &native_source_file[index + MARKER.len()..];
-        return home.join(".codex").join(relative);
-    }
-
-    const MARKER_NO_SLASH: &str = ".codex/";
-    if let Some(index) = native_source_file.find(MARKER_NO_SLASH) {
-        let relative = &native_source_file[index + MARKER_NO_SLASH.len()..];
-        return home.join(".codex").join(relative);
-    }
-
-    home.join(".codex")
-        .join("sessions")
-        .join(format!("{session_id}.jsonl"))
-}
-
 pub fn transcript_latest_timestamp(content: &str) -> Option<String> {
     let mut latest: Option<String> = None;
     for line in content.lines() {
@@ -310,12 +261,27 @@ fn hash_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn legacy_artifact_paths(path: &str) -> &'static [&'static str] {
+    match path {
+        "native/codex/transcript.jsonl"
+        | "native/claude/transcript.jsonl"
+        | "native/cursor/transcript.jsonl"
+        | "native/grok/updates.jsonl"
+        | "native/pi/transcript.jsonl" => &["transcript.native.jsonl"],
+        _ => &[],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::teleport::manifest::{
         ManifestArtifact, ManifestProject, ManifestRestore, ManifestSession, TeleportFidelity,
         TeleportManifest,
+    };
+    use crate::teleport::provider::profiles::codex::{
+        NATIVE_TRANSCRIPT as CODEX_NATIVE_TRANSCRIPT_PATH, RESTORE_PATH as RESTORE_CODEX_PATH,
+        codex_native_destination_path,
     };
 
     fn sample_manifest(artifact_hash: &str) -> TeleportManifest {
@@ -352,7 +318,7 @@ mod tests {
                     kind: "metadata".to_string(),
                 },
                 ManifestArtifact {
-                    path: NATIVE_TRANSCRIPT_PATH.to_string(),
+                    path: CODEX_NATIVE_TRANSCRIPT_PATH.to_string(),
                     required: true,
                     sha256: artifact_hash.to_string(),
                     kind: "native_transcript".to_string(),
@@ -412,10 +378,19 @@ mod tests {
             sha256: restore_hash.clone(),
             kind: "restore_hints".to_string(),
         });
-        manifest.bundle_id =
-            compute_content_bundle_id(&native_hash, &normalized_hash, Some(&restore_hash));
+        manifest.bundle_id = compute_bundle_id(&[
+            (
+                CODEX_NATIVE_TRANSCRIPT_PATH.to_string(),
+                native_hash.clone(),
+            ),
+            (
+                NORMALIZED_TRANSCRIPT_PATH.to_string(),
+                normalized_hash.clone(),
+            ),
+            (RESTORE_CODEX_PATH.to_string(), restore_hash.clone()),
+        ]);
         let files = BTreeMap::from([
-            (NATIVE_TRANSCRIPT_PATH.to_string(), native.to_string()),
+            (CODEX_NATIVE_TRANSCRIPT_PATH.to_string(), native.to_string()),
             (
                 NORMALIZED_TRANSCRIPT_PATH.to_string(),
                 normalized.to_string(),
@@ -436,8 +411,19 @@ mod tests {
         let native_hash = hash_text("native");
         let normalized_hash = hash_text("normalized");
         let restore_hash = hash_text("restore");
-        let first = compute_content_bundle_id(&native_hash, &normalized_hash, Some(&restore_hash));
-        let second = compute_content_bundle_id(&native_hash, &normalized_hash, Some(&restore_hash));
+        let entries = [
+            (
+                CODEX_NATIVE_TRANSCRIPT_PATH.to_string(),
+                native_hash.clone(),
+            ),
+            (
+                NORMALIZED_TRANSCRIPT_PATH.to_string(),
+                normalized_hash.clone(),
+            ),
+            (RESTORE_CODEX_PATH.to_string(), restore_hash.clone()),
+        ];
+        let first = compute_bundle_id(&entries);
+        let second = compute_bundle_id(&entries);
         assert_eq!(first, second);
     }
 

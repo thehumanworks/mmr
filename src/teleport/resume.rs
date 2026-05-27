@@ -7,8 +7,7 @@ use super::apply::{ApplyOptions, ApplyResponse, apply_bundle};
 use super::bundle::{load_bundle_from_locator, verify_artifact_hashes};
 use super::error::TeleportFailure;
 use super::manifest::TeleportFidelity;
-
-const SUPPORTED_SOURCE: &str = "codex";
+use super::provider::profile_for;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResumeAgentAs {
@@ -93,7 +92,7 @@ pub fn parse_resume_agent_as(
 pub fn resolve_target_agent(requested: ResumeAgentAs, bundle_source: &str) -> String {
     match requested {
         ResumeAgentAs::Same => bundle_source.to_string(),
-        ResumeAgentAs::Codex => SUPPORTED_SOURCE.to_string(),
+        ResumeAgentAs::Codex => "codex".to_string(),
         ResumeAgentAs::Claude => "claude".to_string(),
         ResumeAgentAs::Cursor => "cursor".to_string(),
         ResumeAgentAs::Grok => "grok".to_string(),
@@ -109,8 +108,9 @@ pub fn resume_bundle(options: ResumeOptions) -> Result<ResumeResponse, TeleportF
 
     let bundle_id = bundle.manifest.bundle_id.clone();
     let target_agent = resolve_target_agent(options.requested_as, &bundle.manifest.source);
+    let profile = profile_for(&bundle.manifest.source)?;
 
-    if !resume_transform_supported(&bundle.manifest.source, &target_agent) {
+    if !profile.supports_resume_transform(&bundle.manifest.source, &target_agent) {
         return Ok(unsupported_resume_response(
             bundle_id,
             &options.requested_as_label,
@@ -153,10 +153,6 @@ pub fn resume_bundle(options: ResumeOptions) -> Result<ResumeResponse, TeleportF
         apply: Some(apply),
         agent: Some(agent),
     })
-}
-
-fn resume_transform_supported(bundle_source: &str, target_agent: &str) -> bool {
-    bundle_source == SUPPORTED_SOURCE && target_agent == SUPPORTED_SOURCE
 }
 
 fn unsupported_transform_message(bundle_source: &str, target_agent: &str) -> String {

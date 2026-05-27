@@ -32,11 +32,12 @@ use crate::sync::{
     remote_for_status, safe_projection_blocker, sync_project,
 };
 use crate::teleport::{
-    ApplyOptions, ExportOptions, InspectOptions, PackOptions, ReceiveOptions, ResumeOptions,
-    SendOptions, SendTransport, ServeError, ServeOptions, TeleportFailure, TeleportFidelity,
-    TeleportOutputFormat, TeleportStatus, apply_bundle, export_bundle, inspect_bundle,
-    pack_session, parse_export_as, parse_resume_agent_as, receive_bundle, resolve_bundle_locator,
-    resolve_receive_locator, resume_bundle, send_session, serve_session,
+    ApplyOptions, ExportOptions, InspectOptions, PackOptions, ReadOptions, ReceiveOptions,
+    ResumeOptions, SendOptions, SendTransport, ServeError, ServeOptions, TeleportFailure,
+    TeleportFidelity, TeleportOutputFormat, TeleportStatus, apply_bundle, export_bundle,
+    inspect_bundle, pack_session, parse_export_as, parse_resume_agent_as, read_bundle,
+    receive_bundle, resolve_bundle_locator, resolve_read_locator, resolve_receive_locator,
+    resume_bundle, send_session, serve_session,
 };
 use crate::types::{
     Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
@@ -415,12 +416,13 @@ pub struct ImportArgs {
 
 #[derive(Args, Debug)]
 #[command(
-    after_help = "Current release: native Codex session handoff only (not mmr sync).\n\
-See docs/mmr-teleport.md for workflows and safety.\n\
+    after_help = "Current release: native session handoff for codex, claude, cursor, grok, and pi (not mmr sync).\n\
+See docs/mmr-teleport.md for provider matrix and workflows.\n\
 Examples:\n  \
-mmr teleport serve --session sess-abc\n  \
+mmr teleport serve --source grok --session sess-abc\n  \
+mmr teleport read mmtp://100.x.x.x:PORT/TOKEN\n  \
 mmr teleport receive mmtp://100.x.x.x:PORT/TOKEN\n  \
-mmr teleport send --session sess-abc --to user@host\n  \
+mmr teleport send --source claude --session sess-abc --to user@host\n  \
 mmr teleport send --session sess-abc --to file:///path/to/inbox"
 )]
 pub struct TeleportArgs {
@@ -430,19 +432,21 @@ pub struct TeleportArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum TeleportCommand {
-    /// Pack a native Codex session into a .mmr bundle (local handoff artifact)
+    /// Pack a native provider session into a .mmr bundle (local handoff artifact)
     Pack(TeleportPackArgs),
     /// Validate bundle hashes and manifest without writing agent files
     Inspect(TeleportInspectArgs),
-    /// Install a native Codex bundle into ~/.codex and optional mmr store
+    /// Install a native provider bundle into the target agent storage layout
     Apply(TeleportApplyArgs),
     /// Pack and transfer a session over SSH (user@host) or file:// inbox
     Send(TeleportSendArgs),
+    /// Download or cache a bundle for read-only access (no native apply)
+    Read(TeleportReadArgs),
     /// Download mmtp:// URL or apply a local bundle / ready inbox entry
     Receive(TeleportReceiveArgs),
-    /// Apply a bundle and report Codex resume steps (--as same|codex)
+    /// Apply a bundle and report provider resume steps (--as same|codex|claude|cursor|grok|pi)
     Resume(TeleportResumeArgs),
-    /// Write a native transcript artifact from a bundle (--as same|codex)
+    /// Write native artifact(s) from a bundle (--as same|<provider>)
     Export(TeleportExportArgs),
     /// Pack one session and serve it on a one-shot mmtp:// URL until downloaded
     Serve(TeleportServeArgs),
@@ -450,11 +454,11 @@ pub enum TeleportCommand {
 
 #[derive(Args, Debug)]
 #[command(
-    after_help = "Native Codex bundles only; stderr warns that bundles may contain secrets.\n\
-Example: mmr teleport pack --session sess-abc --to ./handoff.mmr"
+    after_help = "Native bundles for codex, claude, cursor, grok, and pi; stderr warns that bundles may contain secrets.\n\
+Example: mmr teleport pack --source codex --session sess-abc --to ./handoff.mmr"
 )]
 pub struct TeleportPackArgs {
-    /// Session ID to pack (omit for latest Codex session in scope)
+    /// Session ID to pack (omit for latest session in scope; default source is codex)
     #[arg(long)]
     session: Option<String>,
     /// Select the latest session in scope (default when --session is omitted)
@@ -466,7 +470,7 @@ pub struct TeleportPackArgs {
     /// Output path for the bundle artifact
     #[arg(long)]
     to: Option<PathBuf>,
-    /// Bundle fidelity (default: native). NHL-322 supports native Codex bundles only.
+    /// Bundle fidelity (default: native; only native bundles are supported).
     #[arg(long = "as")]
     fidelity: Option<String>,
     /// Show what would be packed without writing a bundle
@@ -529,7 +533,7 @@ mmr teleport send --session sess-abc --to user@host\n  \
 mmr teleport send --session sess-abc --to file:///Users/me/Sync/mmr-inbox\n\
 HTTP one-shot URLs use `teleport serve`, not send.")]
 pub struct TeleportSendArgs {
-    /// Session ID to send (omit for latest Codex session in scope)
+    /// Session ID to send (omit for latest session in scope; default source is codex)
     #[arg(long)]
     session: Option<String>,
     /// Select the latest session in scope (default when --session is omitted)
@@ -547,7 +551,28 @@ pub struct TeleportSendArgs {
     /// Show planned transport steps without writing files or contacting remote hosts
     #[arg(long)]
     dry_run: bool,
-    /// Not valid for send in NHL-322; native fidelity only
+    /// Not valid for send; native fidelity only
+    #[arg(long = "as", hide = true)]
+    as_flag: Option<String>,
+}
+
+#[derive(Args, Debug)]
+#[command(after_help = "Examples:\n  \
+mmr teleport read mmtp://100.x.x.x:8765/TOKEN\n  \
+mmr teleport read ./handoff.mmr\n  \
+mmr teleport read ~/.mmr/teleport/cache/tp:v1:.../bundle.mmr\n\
+Caches under ~/.mmr/teleport/cache/<bundle_id>/; does not write provider session files.")]
+pub struct TeleportReadArgs {
+    /// Bundle path, inbox directory, or HTTP locator (mmtp://host:port/token)
+    #[arg(value_name = "LOCATOR")]
+    bundle_path: Option<String>,
+    /// Bundle path, inbox directory, or HTTP locator (mmtp://host:port/token)
+    #[arg(long)]
+    to: Option<String>,
+    /// Show what would be cached without writing files or downloading
+    #[arg(long)]
+    dry_run: bool,
+    /// Not valid for read; use -O for output format
     #[arg(long = "as", hide = true)]
     as_flag: Option<String>,
 }
@@ -582,7 +607,7 @@ pub struct TeleportReceiveArgs {
 #[derive(Args, Debug)]
 #[command(after_help = "Examples:\n  \
 mmr teleport resume ./handoff.mmr --project /path/to/project\n  \
-mmr teleport resume ./handoff.mmr --as codex --no-agent-exec\n\
+mmr teleport resume ./handoff.mmr --as same --no-agent-exec\n\
 Cross-agent --as values return status unsupported (exit 3).")]
 pub struct TeleportResumeArgs {
     /// Bundle path to resume
@@ -609,10 +634,10 @@ pub struct TeleportResumeArgs {
 }
 
 #[derive(Args, Debug)]
-#[command(
-    after_help = "Example: mmr teleport export ./handoff.mmr --to ./out.jsonl --as codex\n\
-Distinct from top-level `mmr export` (local history query)."
-)]
+#[command(after_help = "Examples:\n  \
+mmr teleport export ./handoff.mmr --to ./out.jsonl --as same\n  \
+mmr teleport export ./grok.mmr --to ./grok-export-dir --as grok\n\
+Distinct from top-level `mmr export` (local history query).")]
 pub struct TeleportExportArgs {
     /// Bundle path or inbox locator to export
     #[arg(value_name = "REF")]
@@ -620,7 +645,7 @@ pub struct TeleportExportArgs {
     /// Destination path for the exported artifact
     #[arg(long)]
     to: Option<PathBuf>,
-    /// Output representation (--as same|codex; cross-agent returns unsupported exit 3)
+    /// Output representation (--as same|codex|claude|cursor|grok|pi; cross-agent returns unsupported exit 3)
     #[arg(long = "as")]
     format: Option<String>,
     /// Show what would be exported without writing files
@@ -632,10 +657,11 @@ pub struct TeleportExportArgs {
 #[command(
     after_help = "Prints one startup JSON object (listen_url, token, expires_at) then blocks.\n\
 Example: mmr teleport serve --session sess-abc --bind 100.x.x.x:0\n\
-Receiver: mmr teleport receive mmtp://100.x.x.x:PORT/TOKEN"
+Reader: mmr teleport read mmtp://100.x.x.x:PORT/TOKEN\n\
+Receiver (handoff): mmr teleport receive mmtp://100.x.x.x:PORT/TOKEN"
 )]
 pub struct TeleportServeArgs {
-    /// Session ID to serve (omit for latest Codex session in scope)
+    /// Session ID to serve (omit for latest session in scope; default source is codex)
     #[arg(long)]
     session: Option<String>,
     /// Select the latest session in scope (default when --session is omitted)
@@ -1146,6 +1172,28 @@ fn teleport_command_response(
                 Err(failure) => teleport_fail(failure, pretty),
             }
         }
+        TeleportCommand::Read(read) => {
+            if read.as_flag.is_some() {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/read",
+                        "--as is not valid for teleport read; use -O for output format",
+                    ),
+                    pretty,
+                );
+            }
+            let locator = match resolve_read_locator(read.bundle_path.clone(), read.to.clone()) {
+                Ok(path) => path,
+                Err(failure) => return teleport_fail(failure, pretty),
+            };
+            match read_bundle(ReadOptions {
+                locator,
+                dry_run: read.dry_run,
+            }) {
+                Ok(response) => serialize(&response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
         TeleportCommand::Receive(receive) => {
             if receive.as_flag.is_some() {
                 return teleport_fail(
@@ -1316,12 +1364,12 @@ fn parse_pack_fidelity(as_flag: Option<&str>) -> Result<TeleportFidelity, Telepo
         None | Some("") | Some("native") => Ok(TeleportFidelity::Native),
         Some("shared-safe") => Err(TeleportFailure::runtime(
             "teleport/pack",
-            "teleport pack supports native Codex bundles only; --as shared-safe is not supported",
+            "teleport pack supports native bundles only; --as shared-safe is not supported",
         )),
         Some(other) => Err(TeleportFailure::usage(
             "teleport/pack",
             format!(
-                "unsupported --as value {other:?}; teleport pack supports native Codex bundles only (use --as native or omit --as)"
+                "unsupported --as value {other:?}; teleport pack supports native fidelity only (use --as native or omit --as)"
             ),
         )),
     }

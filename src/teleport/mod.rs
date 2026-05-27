@@ -7,6 +7,9 @@ mod http;
 mod inspect;
 mod manifest;
 mod pack;
+mod provider;
+pub use provider::profiles as providers;
+mod read;
 mod receive;
 mod resume;
 mod send;
@@ -14,15 +17,16 @@ mod ssh;
 
 pub use apply::{ApplyOptions, apply_bundle};
 pub use bundle::{
-    BundleLocatorError, METADATA_PATH, NATIVE_TRANSCRIPT_PATH, load_bundle,
-    load_bundle_from_locator, write_bundle,
+    BundleLocatorError, METADATA_PATH, load_bundle, load_bundle_from_locator, write_bundle,
 };
 pub use error::TeleportFailure;
 pub use export::{ExportOptions, ExportResponse, export_bundle, parse_export_as};
-pub use http::{ServeError, ServeOptions, serve_session};
+pub use http::{ServeError, ServeOptions, fetch_and_cache_http_bundle, serve_session};
 pub use inspect::{InspectOptions, inspect_bundle};
 pub use manifest::{BundleMetadata, TeleportFidelity, TeleportManifest, project_aliases};
 pub use pack::{PackOptions, pack_session};
+pub use provider::{profile_for, supported_sources};
+pub use read::{ReadOptions, ReadResponse, read_bundle, resolve_read_locator};
 pub use receive::{ReceiveOptions, receive_bundle, resolve_receive_locator};
 pub use resume::{
     ResumeAgentAs, ResumeOptions, ResumeResponse, parse_resume_agent_as, resolve_target_agent,

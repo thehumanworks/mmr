@@ -66,26 +66,39 @@ pub fn resolve_receive_locator(
     positional: Option<String>,
     to: Option<String>,
 ) -> Result<String, TeleportFailure> {
+    resolve_teleport_locator("teleport/receive", "receive", positional, to)
+}
+
+pub fn resolve_teleport_locator(
+    command: &'static str,
+    subcommand: &str,
+    positional: Option<String>,
+    to: Option<String>,
+) -> Result<String, TeleportFailure> {
     match (positional, to) {
         (Some(_), Some(_)) => Err(TeleportFailure::usage(
-            "teleport/receive",
-            "teleport receive: only one bundle locator is allowed; use either a positional path or --to, not both",
+            command,
+            format!(
+                "teleport {subcommand}: only one bundle locator is allowed; use either a positional path or --to, not both"
+            ),
         )),
         (None, None) => Err(TeleportFailure::usage(
-            "teleport/receive",
-            "teleport receive: bundle path is required; pass a positional path or --to",
+            command,
+            format!(
+                "teleport {subcommand}: bundle path is required; pass a positional path or --to"
+            ),
         )),
-        (Some(path), None) | (None, Some(path)) => normalize_receive_locator(&path),
+        (Some(path), None) | (None, Some(path)) => normalize_teleport_locator(command, &path),
     }
 }
 
-fn normalize_receive_locator(value: &str) -> Result<String, TeleportFailure> {
+fn normalize_teleport_locator(
+    command: &'static str,
+    value: &str,
+) -> Result<String, TeleportFailure> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(TeleportFailure::usage(
-            "teleport/receive",
-            "locator path is required",
-        ));
+        return Err(TeleportFailure::usage(command, "locator path is required"));
     }
     if is_http_locator(trimmed) {
         return Ok(trimmed.to_string());

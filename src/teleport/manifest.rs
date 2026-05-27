@@ -97,9 +97,18 @@ pub fn path_remap_for_project(canonical_path: &str) -> std::collections::BTreeMa
     map
 }
 
-pub fn restore_hints_for_codex(session_id: &str) -> Value {
+pub fn restore_hints_for_provider(
+    provider: &str,
+    session_id: &str,
+    command_prefix: &str,
+    agent_resume: &str,
+    artifact_paths: Vec<&str>,
+) -> Value {
     serde_json::json!({
-        "session_file": format!("{session_id}.jsonl"),
-        "documented_command": format!("codex exec resume {session_id}")
+        "provider": provider,
+        "session_id": session_id,
+        "artifact_paths": artifact_paths,
+        "documented_command": format!("{command_prefix} resume {session_id}"),
+        "agent_resume": agent_resume,
     })
 }

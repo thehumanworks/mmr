@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::BufRead;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
@@ -33,6 +34,10 @@ fn create_source_home(base: &Path) -> PathBuf {
 
 fn parse_stdout_json(output: &std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("stdout JSON")
+}
+
+fn loopback_bind_available() -> bool {
+    TcpListener::bind("127.0.0.1:0").is_ok()
 }
 
 fn build_codex_session(session_id: &str, cwd: &str, pair_count: usize, start: usize) -> String {
@@ -331,6 +336,11 @@ fn benchmark_teleport_file_send_receive_two_machine() {
 #[test]
 #[ignore = "benchmark test: run explicitly"]
 fn benchmark_teleport_http_loopback_receive() {
+    if !loopback_bind_available() {
+        eprintln!("BENCH teleport.http_loopback_receive skipped: loopback bind unavailable");
+        return;
+    }
+
     let tmp = tempfile::tempdir().expect("temp dir");
     let source_home = create_source_home(tmp.path());
     let target_home = empty_target_home(tmp.path());

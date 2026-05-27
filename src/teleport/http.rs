@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -133,7 +133,7 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
             dry_run: false,
         },
     )
-    .map_err(ServeError::BeforeStartup)?;
+    .map_err(|failure| ServeError::BeforeStartup(map_pack_failure_for_serve(failure)))?;
 
     let bundle_path = Path::new(pack.bundle_path.as_ref().ok_or_else(|| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
@@ -259,28 +259,26 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
     }
 }
 
-pub fn receive_http_bundle(
+pub fn fetch_and_cache_http_bundle(
     target: &HttpReceiveTarget,
     dry_run: bool,
-    project: Option<String>,
-    force: bool,
-) -> Result<(Vec<ReceiveStagedSummary>, Option<ApplyResponse>), TeleportFailure> {
-    let (body, header_sha256) = fetch_bundle_http(target)?;
+    command: &'static str,
+) -> Result<Vec<ReceiveStagedSummary>, TeleportFailure> {
+    let (body, header_sha256) = fetch_bundle_http(target, command)?;
     if dry_run {
-        let staged = vec![ReceiveStagedSummary {
+        return Ok(vec![ReceiveStagedSummary {
             bundle_id: String::new(),
             inbox_path: String::new(),
             bundle_path: String::new(),
-            sha256: header_sha256.clone(),
-        }];
-        return Ok((staged, None));
+            sha256: header_sha256,
+        }]);
     }
 
     let download_dir = cache_dir("http-downloads")
-        .map_err(|error| TeleportFailure::runtime("teleport/receive", error.to_string()))?;
+        .map_err(|error| TeleportFailure::runtime(command, error.to_string()))?;
     fs::create_dir_all(&download_dir).map_err(|error| {
         TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             format!(
                 "create HTTP download cache {}: {error}",
                 download_dir.display()
@@ -290,7 +288,7 @@ pub fn receive_http_bundle(
     let partial_path = download_dir.join(format!("{}.partial", target.token));
     fs::write(&partial_path, &body).map_err(|error| {
         TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             format!(
                 "write downloaded bundle {}: {error}",
                 partial_path.display()
@@ -298,11 +296,11 @@ pub fn receive_http_bundle(
         )
     })?;
     let actual_sha256 = bundle_sha256(&partial_path)
-        .map_err(|error| TeleportFailure::runtime("teleport/receive", error.to_string()))?;
+        .map_err(|error| TeleportFailure::runtime(command, error.to_string()))?;
     if actual_sha256 != header_sha256 {
         let _ = fs::remove_file(&partial_path);
         return Err(TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             format!(
                 "bundle hash mismatch: header expected {}, computed {}",
                 header_sha256, actual_sha256
@@ -312,22 +310,21 @@ pub fn receive_http_bundle(
     }
 
     let bundle = super::bundle::load_bundle(&partial_path).map_err(|error| {
-        TeleportFailure::runtime("teleport/receive", error.to_string())
-            .with_error_kind("bundle_corrupt")
+        TeleportFailure::runtime(command, error.to_string()).with_error_kind("bundle_corrupt")
     })?;
     let bundle_id = bundle.manifest.bundle_id.clone();
     let final_dir = cache_dir(&bundle_id)
-        .map_err(|error| TeleportFailure::runtime("teleport/receive", error.to_string()))?;
+        .map_err(|error| TeleportFailure::runtime(command, error.to_string()))?;
     fs::create_dir_all(&final_dir).map_err(|error| {
         TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             format!("create bundle cache {}: {error}", final_dir.display()),
         )
     })?;
     let bundle_path = final_dir.join(super::file::BUNDLE_FILENAME);
     fs::rename(&partial_path, &bundle_path).map_err(|error| {
         TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             format!(
                 "move downloaded bundle to {}: {error}",
                 bundle_path.display()
@@ -335,28 +332,47 @@ pub fn receive_http_bundle(
         )
     })?;
 
+    Ok(vec![ReceiveStagedSummary {
+        bundle_id,
+        inbox_path: final_dir.display().to_string(),
+        bundle_path: bundle_path.display().to_string(),
+        sha256: actual_sha256,
+    }])
+}
+
+pub fn receive_http_bundle(
+    target: &HttpReceiveTarget,
+    dry_run: bool,
+    project: Option<String>,
+    force: bool,
+) -> Result<(Vec<ReceiveStagedSummary>, Option<ApplyResponse>), TeleportFailure> {
+    let staged = fetch_and_cache_http_bundle(target, dry_run, "teleport/receive")?;
+    if dry_run {
+        return Ok((staged, None));
+    }
+
+    let cached = staged.first().ok_or_else(|| {
+        TeleportFailure::runtime("teleport/receive", "HTTP receive produced no staged bundle")
+    })?;
+    let bundle_path = PathBuf::from(&cached.bundle_path);
     let apply = apply_bundle(ApplyOptions {
-        bundle_path: bundle_path.clone(),
+        bundle_path,
         project,
         dry_run: false,
         force,
         skip_store_import: true,
     })
     .map_err(map_apply_failure)?;
-
-    let staged = vec![ReceiveStagedSummary {
-        bundle_id: apply.bundle_id.clone(),
-        inbox_path: final_dir.display().to_string(),
-        bundle_path: bundle_path.display().to_string(),
-        sha256: actual_sha256,
-    }];
     Ok((staged, Some(apply)))
 }
 
-fn fetch_bundle_http(target: &HttpReceiveTarget) -> Result<(Vec<u8>, String), TeleportFailure> {
+fn fetch_bundle_http(
+    target: &HttpReceiveTarget,
+    command: &'static str,
+) -> Result<(Vec<u8>, String), TeleportFailure> {
     let addr = format!("{}:{}", target.host, target.port);
     let mut stream = TcpStream::connect(&addr).map_err(|error| {
-        TeleportFailure::runtime("teleport/receive", format!("connect to {addr}: {error}"))
+        TeleportFailure::runtime(command, format!("connect to {addr}: {error}"))
             .with_error_kind("http_connect_failed")
     })?;
     let request = format!(
@@ -367,42 +383,34 @@ fn fetch_bundle_http(target: &HttpReceiveTarget) -> Result<(Vec<u8>, String), Te
         .write_all(request.as_bytes())
         .and_then(|_| stream.flush())
         .map_err(|error| {
-            TeleportFailure::runtime(
-                "teleport/receive",
-                format!("write HTTP request to {addr}: {error}"),
-            )
-            .with_error_kind("http_transfer")
+            TeleportFailure::runtime(command, format!("write HTTP request to {addr}: {error}"))
+                .with_error_kind("http_transfer")
         })?;
 
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw).map_err(|error| {
-        TeleportFailure::runtime(
-            "teleport/receive",
-            format!("read HTTP response from {addr}: {error}"),
-        )
-        .with_error_kind("http_transfer")
+        TeleportFailure::runtime(command, format!("read HTTP response from {addr}: {error}"))
+            .with_error_kind("http_transfer")
     })?;
 
-    parse_http_bundle_response(&raw)
+    parse_http_bundle_response(&raw, command)
 }
 
-fn parse_http_bundle_response(raw: &[u8]) -> Result<(Vec<u8>, String), TeleportFailure> {
+fn parse_http_bundle_response(
+    raw: &[u8],
+    command: &'static str,
+) -> Result<(Vec<u8>, String), TeleportFailure> {
     if raw.is_empty() {
-        return Err(
-            TeleportFailure::runtime("teleport/receive", "HTTP response was empty")
-                .with_error_kind("http_transfer"),
-        );
+        return Err(TeleportFailure::runtime(command, "HTTP response was empty")
+            .with_error_kind("http_transfer"));
     }
     let (header_block, header_end) = split_http_header(raw).ok_or_else(|| {
-        TeleportFailure::runtime(
-            "teleport/receive",
-            "HTTP response missing header terminator",
-        )
-        .with_error_kind("http_transfer")
+        TeleportFailure::runtime(command, "HTTP response missing header terminator")
+            .with_error_kind("http_transfer")
     })?;
     let header_text = std::str::from_utf8(header_block).map_err(|error| {
         TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             format!("HTTP response headers are not valid UTF-8: {error}"),
         )
         .with_error_kind("http_transfer")
@@ -424,7 +432,7 @@ fn parse_http_bundle_response(raw: &[u8]) -> Result<(Vec<u8>, String), TeleportF
         }
     }
     let status_code = status_code.ok_or_else(|| {
-        TeleportFailure::runtime("teleport/receive", "HTTP response missing status line")
+        TeleportFailure::runtime(command, "HTTP response missing status line")
             .with_error_kind("http_transfer")
     })?;
     let body = raw[header_end..].to_vec();
@@ -432,7 +440,7 @@ fn parse_http_bundle_response(raw: &[u8]) -> Result<(Vec<u8>, String), TeleportF
         200 => {
             let header_sha256 = header_sha256.ok_or_else(|| {
                 TeleportFailure::runtime(
-                    "teleport/receive",
+                    command,
                     format!("HTTP response missing {SHA256_HEADER} header"),
                 )
                 .with_error_kind("http_transfer")
@@ -440,17 +448,17 @@ fn parse_http_bundle_response(raw: &[u8]) -> Result<(Vec<u8>, String), TeleportF
             Ok((body, header_sha256))
         }
         403 => Err(TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             "HTTP bundle download rejected: invalid token",
         )
         .with_error_kind("http_invalid_token")),
         410 => Err(TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             "HTTP bundle download rejected: bundle already consumed or expired",
         )
         .with_error_kind("http_bundle_consumed")),
         other => Err(TeleportFailure::runtime(
-            "teleport/receive",
+            command,
             format!("HTTP bundle download failed with status {other}"),
         )
         .with_error_kind("http_transfer")),
@@ -639,6 +647,13 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         diff |= left_byte ^ right_byte;
     }
     diff == 0
+}
+
+fn map_pack_failure_for_serve(failure: TeleportFailure) -> TeleportFailure {
+    let mut mapped = TeleportFailure::runtime("teleport/serve", failure.message);
+    mapped.exit_code = failure.exit_code;
+    mapped.error_kind = failure.error_kind;
+    mapped
 }
 
 fn map_apply_failure(failure: TeleportFailure) -> TeleportFailure {

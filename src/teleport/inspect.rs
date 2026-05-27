@@ -6,8 +6,7 @@ use super::TeleportStatus;
 use super::bundle::{load_bundle_from_locator, verify_artifact_hashes};
 use super::error::TeleportFailure;
 use super::manifest::TeleportFidelity;
-
-const SUPPORTED_SOURCE: &str = "codex";
+use super::provider::profile_for;
 
 #[derive(Debug, Clone)]
 pub struct InspectOptions {
@@ -54,6 +53,17 @@ pub fn inspect_bundle(options: InspectOptions) -> Result<InspectResponse, Telepo
         ));
     }
 
+    let profile = profile_for(&bundle.manifest.source).ok();
+    let native_ready = bundle.manifest.fidelity == TeleportFidelity::Native
+        && profile.is_some_and(|profile| profile.supports_native_apply())
+        && bundle
+            .manifest
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.kind.contains("native"));
+    let restore_ready = native_ready;
+    let apply_ready = native_ready;
+
     let artifacts = bundle
         .manifest
         .artifacts
@@ -65,16 +75,6 @@ pub fn inspect_bundle(options: InspectOptions) -> Result<InspectResponse, Telepo
             verified: true,
         })
         .collect::<Vec<_>>();
-
-    let codex_native = bundle.manifest.source == SUPPORTED_SOURCE
-        && bundle.manifest.fidelity == TeleportFidelity::Native
-        && bundle
-            .manifest
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.kind == "native_transcript");
-    let restore_ready = codex_native;
-    let apply_ready = codex_native;
 
     let response = InspectResponse {
         command: "teleport/inspect",

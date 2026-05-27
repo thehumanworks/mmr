@@ -8,8 +8,8 @@
 - `src/cli.rs`: clap command surface and command routing.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
+- `src/teleport/`: provider-profile native bundle pack/apply/resume/export (`provider.rs`, `providers/{codex,claude,cursor,grok,pi}.rs`); artifact paths are provider-qualified (`native/<provider>/…`); legacy flat `transcript.native.jsonl` bundles still verify on read.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
-- `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
 - `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
@@ -17,8 +17,10 @@
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock Gemini server tests for `remember`).
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
 - `tests/common/mod.rs`: fixture + temp `HOME` helpers.
+- `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and the `remember()` entry point.
 - `.cursor/rules/`: persistent repo rules for workflow, contract, ingestion, and tests.
-- `.agents/skills/mmr-clap-colored-cli/`: local reusable workflow references.
+- `.agents/skills/mmr-clap-colored-cli/`: local reusable CLI workflow references.
+- `.agents/skills/mmr-teleport-providers/`: provider-profile native teleport layouts and verification notes.
 
 ## Cursor Rules
 

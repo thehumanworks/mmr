@@ -11,6 +11,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+fn loopback_bind_available() -> bool {
+    std::net::TcpListener::bind("127.0.0.1:0").is_ok()
+}
+
 const FIXTURES: &[(&str, &str)] = &[
     (
         "codex_session",
@@ -1366,6 +1370,9 @@ fn mvp_quickstart_flow_smoke_test() {
 
 #[test]
 fn mvp_release_gate_e2e_fixture_scenario() {
+    if !loopback_bind_available() {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("temp dir");
     let home = tmp.path().join("home");
     let fresh_home = tmp.path().join("fresh-home");
@@ -3622,6 +3629,9 @@ fn cursor_import_cli_contract_is_implemented() {
 
 #[test]
 fn summary_generation_contract_is_implemented() {
+    if !loopback_bind_available() {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("temp dir");
     let home = tmp.path().join("home");
     std::fs::create_dir_all(

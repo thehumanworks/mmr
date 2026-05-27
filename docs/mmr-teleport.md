@@ -1,6 +1,6 @@
 # mmr teleport
 
-Status: documented for NHL-330 (TELEPORT-009)
+Status: documented for NHL-340 / NHL-341 (multi-provider teleport)
 Date: 2026-05-26
 
 `mmr teleport` moves **exactly one selected coding-agent session** between your
@@ -8,15 +8,42 @@ machines so you can continue work on another host. It is **selected-session
 handoff**, not ongoing sync (`mmr sync`), store setup (`mmr link`), or
 host-wide history export (`mmr export`).
 
-**Current release scope (NHL-322 through NHL-329):**
+**Current release scope (provider-capable native teleport):**
 
-- Native **Codex** bundles only (`.mmr` JSON artifacts)
+- Native bundles for **codex**, **claude**, **cursor**, **grok**, and **pi**
+  (`.mmr` JSON artifacts with provider-qualified paths such as
+  `native/codex/transcript.jsonl`, `native/grok/summary.json`, …)
 - Transports: one-shot HTTP (`serve` / `receive mmtp://...`), SSH (`send
-  --to user@host`), and `file://` inbox (`send` / `receive`)
-- `teleport resume` and `teleport export --as ...` for apply + provider guidance
-  and artifact export
+  `--to user@host`), and `file://` inbox (`send` / `receive`) — provider-neutral
+- `teleport resume --as same|<provider>` and `teleport export --as same|<provider>`
+  for same-provider apply/guidance/artifact export; cross-provider transforms return
+  `status: "unsupported"` (exit 3)
 - **`shared-safe` fidelity is not implemented**; native bundles may contain
   secrets, tool output, private paths, and raw transcript content
+
+### Provider support matrix
+
+| Provider | pack / apply | resume | export primary artifact | notes |
+|----------|--------------|--------|-------------------------|-------|
+| codex | yes | best_effort (`codex exec resume`) | `native/codex/transcript.jsonl` | baseline |
+| claude | yes | manual (`claude --resume`) | `native/claude/transcript.jsonl` | cwd remapped in JSONL |
+| cursor | yes | manual (open transcript in IDE) | `native/cursor/transcript.jsonl` | directory layout preserved |
+| grok | yes (multi-file) | best_effort | `native/grok/updates.jsonl` | also bundles `summary.json` |
+| pi | yes | manual | `native/pi/transcript.jsonl` | session cwd remapped in JSONL |
+
+#### Cursor limitations (NHL-337)
+
+Cursor native teleport is **pack / apply / export** with **manual resume only**:
+
+- One session maps to a single agent transcript JSONL under
+  `~/.cursor/projects/<slash-hyphen-project>/agent-transcripts/<session>/<session>.jsonl`
+  (or preserves relative layout from source metadata when available).
+- `teleport resume --as cursor` applies the bundle then reports manual IDE guidance;
+  mmr does **not** invoke a Cursor CLI resume command.
+- Cross-provider resume/export (`--as` other than bundle source) returns
+  `status: "unsupported"` (exit 3).
+- Path remap rewrites transcript path strings; Cursor project directory names use the
+  slash-to-hyphen encoding (same as `mmr export` / Cursor loader).
 
 Canonical contract: [specs/teleport.md](../specs/teleport.md).
 
@@ -28,8 +55,9 @@ mmr messages --session sess-abc --project /path/to/project
 ```
 
 Omit `--project` to use cwd auto-discovery (same as `mmr sessions` / `mmr
-messages`). Omit `--session` on teleport commands to select the latest Codex
-session in scope.
+messages`). Omit `--session` on teleport commands to select the latest session in scope
+(default source filter is codex when `--session` is omitted; pass `--source` for
+other providers).
 
 ## Workflow 1: Same Tailnet / LAN (one-shot HTTP)
 
@@ -50,14 +78,25 @@ Stderr warns that native transfers may contain secrets.
 Bind address resolution: `--bind host:port` or `--to host:port`, else
 `MMR_TELEPORT_BIND`, else Tailscale IPv4 when available, else `127.0.0.1:0`.
 
-**Machine B (receiver):**
+**Machine B (read-only, no native apply):**
+
+```bash
+mmr teleport read 'mmtp://100.x.x.x:54321/<token>'
+```
+
+`read` downloads the bundle, verifies `X-MMR-Bundle-Sha256`, caches under
+`~/.mmr/teleport/cache/<bundle_id>/bundle.mmr`, and returns session metadata plus a
+suggested `teleport export` command. Re-reading the same cached path is idempotent
+(`status: "skipped"`). It does not write native provider session files.
+
+**Machine B (handoff / resume on this host):**
 
 ```bash
 mmr teleport receive 'mmtp://100.x.x.x:54321/<token>' --project /path/to/project
 ```
 
 `receive` downloads the bundle, verifies `X-MMR-Bundle-Sha256`, caches locally,
-and applies native Codex files. Use `--force` if a newer local transcript already
+and applies native provider session files. Use `--force` if a newer local transcript already
 exists.
 
 **Resume after apply (optional):**
@@ -158,28 +197,31 @@ mmr teleport inspect ./handoff.mmr
 
 ## Workflow 5: Resume and export (`--as` convention)
 
-**Resume** applies a bundle and reports Codex continuation guidance:
+**Resume** applies a bundle and reports provider continuation guidance:
 
 ```bash
 mmr teleport resume ./handoff.mmr --project /path/to/project
 mmr teleport resume ./handoff.mmr --as codex --no-agent-exec
+mmr teleport resume ./handoff.mmr --as grok --no-agent-exec
 ```
 
-- `--as same` (default) resolves to the bundle manifest source (Codex today).
-- Cross-agent targets such as `--as claude` return stdout
+- `--as same` (default) resolves to the bundle manifest source.
+- Cross-provider targets (for example `--as claude` on a codex bundle) return stdout
   `status: "unsupported"` with exit code **3** (structured JSON, no apply).
 - Fidelity tokens `--as native`, `--as shared-safe`, or `--as json` are usage
   errors (exit **2**).
 
-**Export** writes a native transcript artifact from a bundle (distinct from
+**Export** writes native transcript artifact(s) from a bundle (distinct from
 top-level `mmr export`, which queries local history):
 
 ```bash
 mmr teleport export ./handoff.mmr --to ./exported.jsonl --as codex
+mmr teleport export ./handoff.mmr --to ./exported-dir --as grok
 mmr teleport export ./handoff.mmr --to ./exported.jsonl --as same
 ```
 
-Unsupported cross-agent `--as` values return `status: "unsupported"` with exit
+Grok export writes a directory (`summary.json` + `updates.jsonl`). Unsupported
+cross-provider `--as` values return `status: "unsupported"` with exit
 code **3**.
 
 ## Safety
@@ -187,7 +229,7 @@ code **3**.
 | Topic | Behavior |
 |-------|----------|
 | Scope | One selected session per invocation; not project-wide sync |
-| Fidelity | Native Codex only; includes secrets, tool I/O, private paths, raw transcript |
+| Fidelity | Native provider bundles only; includes secrets, tool I/O, private paths, raw transcript |
 | `shared-safe` | **Not implemented** for pack, send, or native resume |
 | Transport | User-controlled (SSH keys, tailnet, or folder ACLs); HTTP uses single-use token |
 | Warnings | `pack`, `send`, and `serve` print stderr warnings for native sensitivity |
@@ -217,7 +259,7 @@ mmr teleport inspect ./handoff.mmr
 
 ### Duplicate session or newer local transcript (`--force`)
 
-If local Codex files already exist:
+If local native session files already exist:
 
 - Identical content hashes -> `status: "skipped"` (exit 0)
 - Newer local transcript than bundle `last_timestamp` -> apply fails (exit **3**)
@@ -275,7 +317,7 @@ Wait for the sender to finish and sync to complete, then:
 mmr teleport receive --to '/path/to/inbox/tp:v1:...'
 ```
 
-## Fresh-session handoff (Linear NHL-321 - NHL-331)
+## Fresh-session handoff (Linear NHL-321 - NHL-341)
 
 When continuing teleport work in a **new agent session**, use this ticket
 sequence to verify status before changing behavior:
@@ -293,6 +335,16 @@ sequence to verify status before changing behavior:
 | NHL-329 | TELEPORT-008 | `resume`, `export --as`, unsupported exit 3 |
 | NHL-330 | TELEPORT-009 | This guide + CLI help alignment |
 | NHL-331 | TELEPORT-010 | End-to-end validation, benchmarks, final QA, version bump, artifact build |
+| NHL-332 | Multi-provider profile registry | Provider dispatch, provider-qualified artifact paths, unknown-provider errors |
+| NHL-333 | Codex profile parity | Codex transcript remap, restore hints, destination paths moved behind profile |
+| NHL-334 | Grok profile | Multi-file `summary.json` + `updates.jsonl`, `info.cwd` remap |
+| NHL-335 | Claude profile | JSONL under `~/.claude/projects/<encoded>/<session-id>.jsonl` |
+| NHL-336 | Pi profile | JSONL under `~/.pi/agent/sessions/<encoded-project>/...` |
+| NHL-337 | Cursor profile | JSONL under `~/.cursor/projects/<encoded>/agent-transcripts/<session>/...`, manual resume |
+| NHL-338 | Provider-aware resume/export | Same-provider only; cross-provider remains unsupported exit 3 |
+| NHL-339 | Provider-neutral transports/read/inspect | `send`, `serve`, `receive`, `read`, and `inspect` preserve source provider |
+| NHL-340 | Docs/help | Provider matrix, examples, and CLI help updated |
+| NHL-341 | Provider matrix E2E | Table-driven pack/apply/latest/file/read/resume/export tests for all providers |
 
 See [mmr-teleport-validation.md](mmr-teleport-validation.md) for proof surfaces and rerun commands.
 

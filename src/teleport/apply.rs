@@ -1,25 +1,23 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
-use serde_json::Value;
 
 use super::TeleportStatus;
 use super::bundle::{
-    NATIVE_TRANSCRIPT_PATH, TeleportBundleFile, apply_path_remap, cache_dir,
-    codex_native_destination_path, load_bundle_from_locator, remap_text, timestamp_is_newer_than,
-    transcript_latest_timestamp, verify_artifact_hashes, write_bundle,
+    TeleportBundleFile, apply_path_remap, cache_dir, load_bundle_from_locator,
+    timestamp_is_newer_than, transcript_latest_timestamp, verify_artifact_hashes, write_bundle,
 };
 use super::error::TeleportFailure;
 use super::manifest::{TeleportFidelity, TeleportManifest};
+use super::provider::{native_write_targets, profile_for, resolve_bundle_native_path};
 
-const SUPPORTED_SOURCE: &str = "codex";
 const RESUME_STATUS_VISIBLE_BUT_NOT_RESUMABLE: &str = "visible_but_not_resumable";
 
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
-    pub bundle_path: PathBuf,
+    pub bundle_path: std::path::PathBuf,
     pub project: Option<String>,
     pub dry_run: bool,
     pub force: bool,
@@ -65,11 +63,14 @@ pub fn apply_bundle(options: ApplyOptions) -> Result<ApplyResponse, TeleportFail
     verify_artifact_hashes(&bundle)
         .map_err(|error| TeleportFailure::runtime("teleport/apply", error.to_string()))?;
 
-    if bundle.manifest.source != SUPPORTED_SOURCE {
+    let profile = profile_for(&bundle.manifest.source)?;
+
+    if !profile.supports_native_apply() {
         return Err(TeleportFailure::runtime(
             "teleport/apply",
             format!(
-                "teleport apply supports native Codex bundles only; bundle source is {}",
+                "teleport apply does not support native apply for {}; bundle source is {}",
+                profile.source_name(),
                 bundle.manifest.source
             ),
         ));
@@ -78,37 +79,54 @@ pub fn apply_bundle(options: ApplyOptions) -> Result<ApplyResponse, TeleportFail
     if bundle.manifest.fidelity != TeleportFidelity::Native {
         return Err(TeleportFailure::runtime(
             "teleport/apply",
-            "teleport apply supports native Codex bundles only",
+            "teleport apply requires a native fidelity bundle",
         ));
     }
+
+    let home = dirs::home_dir().ok_or_else(|| {
+        TeleportFailure::runtime("teleport/apply", "resolve HOME for native apply")
+    })?;
 
     let target_project = resolve_target_project(&bundle.manifest.project.canonical_path, &options);
     let replacements = apply_path_remap(&bundle, &target_project);
     let path_remap_applied = path_remap_was_applied(&bundle, &target_project, &replacements);
     let resume = build_resume_summary(&bundle.manifest);
 
-    let native_transcript = bundle.files.get(NATIVE_TRANSCRIPT_PATH).ok_or_else(|| {
-        TeleportFailure::runtime("teleport/apply", "native transcript missing from bundle")
-    })?;
-    let remapped_transcript = remap_codex_native_transcript(
-        native_transcript,
-        &replacements,
-        &target_project,
-        &bundle.manifest.project.canonical_path,
-        &bundle.manifest.project.aliases,
-    );
+    let write_targets = native_write_targets(profile, &bundle, &home, &target_project)?;
+    let mut remapped_contents = BTreeMap::new();
+    for (bundle_path, _) in &write_targets {
+        let native_content =
+            resolve_bundle_native_path(profile, &bundle, bundle_path).ok_or_else(|| {
+                TeleportFailure::runtime(
+                    "teleport/apply",
+                    format!("native artifact missing from bundle: {bundle_path}"),
+                )
+            })?;
+        remapped_contents.insert(
+            bundle_path.clone(),
+            profile.remap_native_content(
+                bundle_path,
+                &native_content,
+                &replacements,
+                &target_project,
+                &bundle.manifest.project.canonical_path,
+                &bundle.manifest.project.aliases,
+            ),
+        );
+    }
 
     let cache_root = cache_dir(&bundle.manifest.bundle_id)
         .map_err(|error| TeleportFailure::runtime("teleport/apply", error.to_string()))?;
     let cache_marker = cache_root.join("applied.json");
     let cache_bundle = cache_root.join("bundle.mmr");
 
-    let native_paths = vec![native_destination_path(&bundle)?];
+    let native_paths: Vec<_> = write_targets.iter().map(|(_, path)| path.clone()).collect();
 
     if !native_paths.is_empty()
-        && native_paths.iter().all(|path| {
-            path.exists()
-                && fs::read_to_string(path).ok().as_deref() == Some(remapped_transcript.as_str())
+        && write_targets.iter().all(|(bundle_path, path)| {
+            remapped_contents.get(bundle_path).is_some_and(|content| {
+                path.exists() && fs::read_to_string(path).ok().as_deref() == Some(content.as_str())
+            })
         })
         && !options.force
     {
@@ -158,16 +176,21 @@ pub fn apply_bundle(options: ApplyOptions) -> Result<ApplyResponse, TeleportFail
         .map_err(|error| TeleportFailure::runtime("teleport/apply", error.to_string()))?;
 
     let mut written = false;
-    for path in &native_paths {
+    for (bundle_path, path) in &write_targets {
+        let remapped = remapped_contents
+            .get(bundle_path)
+            .expect("remapped content for write target");
         if path.exists() {
             let existing = fs::read_to_string(path)
                 .map_err(|error| TeleportFailure::runtime("teleport/apply", error.to_string()))?;
-            if existing == remapped_transcript {
+            if existing == *remapped {
                 continue;
             }
-            reject_newer_existing_transcript(
+            reject_newer_existing_artifact(
+                profile,
+                &bundle,
+                bundle_path,
                 &existing,
-                &bundle.manifest.session.last_timestamp,
                 path,
                 options.force,
             )?;
@@ -176,7 +199,7 @@ pub fn apply_bundle(options: ApplyOptions) -> Result<ApplyResponse, TeleportFail
             fs::create_dir_all(parent)
                 .map_err(|error| TeleportFailure::runtime("teleport/apply", error.to_string()))?;
         }
-        fs::write(path, &remapped_transcript)
+        fs::write(path, remapped)
             .map_err(|error| TeleportFailure::runtime("teleport/apply", error.to_string()))?;
         written = true;
     }
@@ -217,17 +240,6 @@ fn resolve_target_project(default: &str, options: &ApplyOptions) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-fn native_destination_path(bundle: &TeleportBundleFile) -> Result<PathBuf, TeleportFailure> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        TeleportFailure::runtime("teleport/apply", "resolve HOME for native apply")
-    })?;
-    Ok(codex_native_destination_path(
-        &home,
-        &bundle.metadata.native_source_file,
-        &bundle.manifest.session.source_session_id,
-    ))
-}
-
 fn path_remap_was_applied(
     bundle: &TeleportBundleFile,
     target_project: &str,
@@ -236,43 +248,11 @@ fn path_remap_was_applied(
     !replacements.is_empty() && target_project != bundle.manifest.project.canonical_path
 }
 
-fn remap_codex_native_transcript(
-    content: &str,
-    replacements: &BTreeMap<String, String>,
-    target_project: &str,
-    source_canonical: &str,
-    aliases: &[String],
-) -> String {
-    let mut lines = Vec::new();
-    for line in remap_text(content, replacements).lines() {
-        if line.trim().is_empty() {
-            lines.push(String::new());
-            continue;
-        }
-        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
-            lines.push(line.to_string());
-            continue;
-        };
-        if value.get("type").and_then(Value::as_str) == Some("session_meta")
-            && let Some(payload) = value.get_mut("payload").and_then(Value::as_object_mut)
-            && let Some(cwd) = payload.get("cwd").and_then(Value::as_str)
-            && (cwd == source_canonical || aliases.iter().any(|alias| alias == cwd))
-        {
-            payload.insert("cwd".to_string(), Value::String(target_project.to_string()));
-        }
-        lines.push(value.to_string());
-    }
-
-    let mut updated = lines.join("\n");
-    if content.ends_with('\n') && !updated.is_empty() && !updated.ends_with('\n') {
-        updated.push('\n');
-    }
-    updated
-}
-
-fn reject_newer_existing_transcript(
+fn reject_newer_existing_artifact(
+    profile: &dyn super::provider::TeleportProviderProfile,
+    bundle: &TeleportBundleFile,
+    bundle_path: &str,
     existing: &str,
-    bundle_last_timestamp: &str,
     path: &Path,
     force: bool,
 ) -> Result<(), TeleportFailure> {
@@ -280,8 +260,9 @@ fn reject_newer_existing_transcript(
         return Ok(());
     }
 
-    let existing_timestamp = transcript_latest_timestamp(existing);
-    if let Some(existing_timestamp) = &existing_timestamp
+    let bundle_last_timestamp = &bundle.manifest.session.last_timestamp;
+    let existing_timestamp = conflict_timestamp_for(profile, bundle, bundle_path, existing);
+    if let Some(ref existing_timestamp) = existing_timestamp
         && timestamp_is_newer_than(existing_timestamp, bundle_last_timestamp)
     {
         return Err(TeleportFailure::runtime(
@@ -306,6 +287,30 @@ fn reject_newer_existing_transcript(
     }
 
     Ok(())
+}
+
+fn conflict_timestamp_for(
+    profile: &dyn super::provider::TeleportProviderProfile,
+    bundle: &TeleportBundleFile,
+    bundle_path: &str,
+    existing: &str,
+) -> Option<String> {
+    let _ = profile.conflict_check_path(bundle);
+    transcript_latest_timestamp(existing).or_else(|| {
+        if profile.source_name() == "grok" && bundle_path.ends_with("summary.json") {
+            grok_summary_timestamp(existing)
+        } else {
+            None
+        }
+    })
+}
+
+fn grok_summary_timestamp(content: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(content).ok()?;
+    value
+        .get("updated_at")
+        .and_then(|entry| entry.as_str())
+        .map(str::to_string)
 }
 
 fn build_resume_summary(manifest: &TeleportManifest) -> ApplyResumeSummary {
@@ -351,7 +356,8 @@ fn skipped_apply_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use crate::teleport::manifest::ManifestRestore;
+    use crate::teleport::provider::profiles::codex::remap_codex_native_transcript;
 
     #[test]
     fn remap_codex_native_transcript_rewrites_session_meta_cwd() {
@@ -397,7 +403,7 @@ mod tests {
             },
             artifacts: Vec::new(),
             capabilities: Vec::new(),
-            restore: super::super::manifest::ManifestRestore {
+            restore: ManifestRestore {
                 agent_resume: "best_effort".to_string(),
                 documented_command: "codex exec resume sess-codex-1".to_string(),
                 adapters: Vec::new(),

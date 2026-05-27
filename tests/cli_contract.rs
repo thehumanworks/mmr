@@ -29,6 +29,10 @@ fn stdout_text(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout UTF-8")
 }
 
+fn loopback_bind_available() -> bool {
+    TcpListener::bind("127.0.0.1:0").is_ok()
+}
+
 fn first_input_text(body: &serde_json::Value) -> &str {
     body["input"]
         .as_array()
@@ -1549,6 +1553,9 @@ fn export_without_project_can_read_grok_cwd() {
 
 #[test]
 fn remember_all_includes_claude_and_codex_messages() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let codex_session = fixture
         .home
@@ -1618,6 +1625,9 @@ fn remember_all_includes_claude_and_codex_messages() {
 
 #[test]
 fn remember_without_selector_uses_latest_session() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let codex_session = fixture
         .home
@@ -1668,6 +1678,9 @@ fn remember_without_selector_uses_latest_session() {
 
 #[test]
 fn remember_defaults_to_gemini_when_env_sets_it() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (base_url, _captured, handle) = start_mock_gemini_server(
         r#"{"id":"interaction-env-default","outputs":[{"text":"gemini env default"}]}"#,
@@ -1696,6 +1709,9 @@ fn remember_defaults_to_gemini_when_env_sets_it() {
 
 #[test]
 fn remember_explicit_agent_overrides_default_env() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (base_url, _captured, handle) = start_mock_gemini_server(
         r#"{"id":"interaction-env-override","outputs":[{"text":"explicit override"}]}"#,
@@ -1732,6 +1748,9 @@ fn remember_explicit_agent_overrides_default_env() {
 
 #[test]
 fn remember_with_source_filter_only_includes_requested_source() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let codex_session = fixture
         .home
@@ -1783,6 +1802,9 @@ fn remember_with_source_filter_only_includes_requested_source() {
 
 #[test]
 fn remember_session_selector_uses_requested_session() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (base_url, captured, handle) = start_mock_gemini_server(
         r#"{"id":"interaction-3","outputs":[{"text":"session summary"}]}"#,
@@ -1825,6 +1847,9 @@ fn remember_session_selector_uses_requested_session() {
 
 #[test]
 fn remember_output_format_md_transforms_json_response_to_markdown() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (base_url, _captured, handle) = start_mock_gemini_server(
         r#"{"id":"interaction-md","outputs":[{"text":"Status\n- Item one"}]}"#,
@@ -1865,6 +1890,9 @@ fn remember_output_format_md_transforms_json_response_to_markdown() {
 
 #[test]
 fn remember_output_format_md_trims_summary_and_interaction_id() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (base_url, _captured, handle) = start_mock_gemini_server(
         r#"{"id":"  interaction-trim  ","outputs":[{"text":"  status line\nnext line  "}]}"#,
@@ -1900,6 +1928,9 @@ fn remember_output_format_md_trims_summary_and_interaction_id() {
 
 #[test]
 fn remember_custom_instructions_replace_default_output_section_in_system_prompt() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (base_url, captured, handle) = start_mock_gemini_server(
         r#"{"id":"interaction-custom","outputs":[{"text":"custom output"}]}"#,
@@ -1958,6 +1989,9 @@ fn remember_custom_instructions_replace_default_output_section_in_system_prompt(
 
 #[test]
 fn remember_without_instructions_includes_default_purpose_and_output_sections() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (base_url, captured, handle) = start_mock_gemini_server(
         r#"{"id":"interaction-default","outputs":[{"text":"default output"}]}"#,
@@ -2501,8 +2535,8 @@ fn teleport_pack_help_does_not_advertise_shared_safe() {
     assert!(output.status.success());
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(
-        help.contains("native Codex"),
-        "help should describe native Codex scope: {help}"
+        help.contains("codex, claude, cursor, grok, and pi"),
+        "help should describe multi-provider native scope: {help}"
     );
     assert!(
         !help.contains("shared-safe"),
@@ -2511,7 +2545,7 @@ fn teleport_pack_help_does_not_advertise_shared_safe() {
 }
 
 #[test]
-fn teleport_pack_rejects_non_codex_source_with_json() {
+fn teleport_pack_claude_session_via_provider_profile() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[
         "teleport",
@@ -2523,7 +2557,65 @@ fn teleport_pack_rejects_non_codex_source_with_json() {
         "--project=-Users-test-proj",
         "--dry-run",
     ]);
-    assert_teleport_failure(&output, 3, "teleport/pack");
+    assert!(
+        output.status.success(),
+        "pack stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "teleport/pack");
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["session"]["source"], "claude");
+    assert!(
+        json["artifacts"]
+            .as_array()
+            .expect("artifacts")
+            .iter()
+            .any(|artifact| artifact["path"] == "native/claude/transcript.jsonl")
+    );
+}
+
+#[test]
+fn teleport_serve_grok_session_packs_and_starts() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "teleport",
+            "serve",
+            "--source",
+            "grok",
+            "--session",
+            "sess-grok-1",
+            "--project",
+            "/Users/test/grok-proj",
+            "--bind",
+            "127.0.0.1:0",
+            "--timeout",
+            "30",
+        ])
+        .env("HOME", &fixture.home)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn teleport serve for grok");
+
+    let stdout = child.stdout.take().expect("serve stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .expect("read serve startup json");
+    let startup: serde_json::Value =
+        serde_json::from_str(line.trim()).expect("parse serve startup json");
+    assert_eq!(startup["command"], "teleport/serve");
+    assert_eq!(startup["status"], "ok");
+    assert_eq!(startup["session"]["source"], "grok");
+    assert_eq!(startup["session"]["source_session_id"], "sess-grok-1");
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]
@@ -3437,6 +3529,9 @@ fn spawn_teleport_serve(
 
 #[test]
 fn teleport_serve_receive_http_loopback_applies_and_serve_exits() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (mut serve_child, startup) = spawn_teleport_serve(&fixture, &[]);
 
@@ -3493,6 +3588,9 @@ fn teleport_serve_receive_http_loopback_applies_and_serve_exits() {
 
 #[test]
 fn teleport_serve_invalid_token_does_not_consume_bundle() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (mut serve_child, startup) = spawn_teleport_serve(&fixture, &[]);
     let listen_url = startup["listen_url"].as_str().expect("listen_url");
@@ -3527,6 +3625,9 @@ fn teleport_serve_invalid_token_does_not_consume_bundle() {
 
 #[test]
 fn teleport_serve_second_receive_fails_after_bundle_consumed() {
+    if !loopback_bind_available() {
+        return;
+    }
     let fixture = TestFixture::seeded();
     let (mut serve_child, startup) = spawn_teleport_serve(&fixture, &[]);
     let listen_url = startup["listen_url"].as_str().expect("listen_url");
@@ -3552,6 +3653,126 @@ fn teleport_serve_second_receive_fails_after_bundle_consumed() {
     assert_teleport_failure(&second_output, 3, "teleport/receive");
     let second_json = parse_stdout_json(&second_output);
     assert_eq!(second_json["error_kind"], "http_connect_failed");
+}
+
+#[test]
+fn teleport_serve_read_http_loopback_caches_without_apply() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let native_path = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-1.jsonl");
+    let native_before = fs::read(&native_path).ok();
+
+    let (mut serve_child, startup) = spawn_teleport_serve(&fixture, &[]);
+    let listen_url = startup["listen_url"].as_str().expect("listen_url");
+
+    let read_output = fixture.run_cli(&["teleport", "read", listen_url]);
+    assert!(
+        read_output.status.success(),
+        "read stderr={}",
+        String::from_utf8_lossy(&read_output.stderr)
+    );
+    let read_json = parse_stdout_json(&read_output);
+    assert_eq!(read_json["command"], "teleport/read");
+    assert_eq!(read_json["status"], "ok");
+    assert_eq!(read_json["transport"], "http");
+    assert!(read_json.get("apply").is_none());
+    assert!(!read_json["cached"].as_array().expect("cached").is_empty());
+    assert!(
+        read_json["bundle_path"]
+            .as_str()
+            .expect("bundle_path")
+            .contains("/.mmr/teleport/cache/")
+    );
+    assert!(
+        read_json["next_command"]
+            .as_str()
+            .expect("next_command")
+            .contains("teleport export")
+    );
+
+    let native_after = fs::read(&native_path).ok();
+    assert_eq!(
+        native_before, native_after,
+        "read must not modify native Codex files"
+    );
+
+    let serve_status = serve_child.wait().expect("wait for serve");
+    assert!(serve_status.success());
+}
+
+#[test]
+fn teleport_read_local_bundle_caches_and_second_read_is_skipped() {
+    let fixture = TestFixture::seeded();
+    let bundle_path = fixture.home.join("read-handoff.mmr");
+    pack_codex_teleport_bundle(&fixture, &bundle_path);
+
+    let first_output = fixture.run_cli(&[
+        "teleport",
+        "read",
+        bundle_path.to_str().expect("bundle path"),
+    ]);
+    assert!(
+        first_output.status.success(),
+        "first read stderr={}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    let first_json = parse_stdout_json(&first_output);
+    assert_eq!(first_json["command"], "teleport/read");
+    assert_eq!(first_json["status"], "ok");
+    let cache_path = first_json["bundle_path"].as_str().expect("bundle_path");
+    assert!(Path::new(cache_path).exists());
+
+    let second_output = fixture.run_cli(&["teleport", "read", cache_path]);
+    assert!(second_output.status.success());
+    let second_json = parse_stdout_json(&second_output);
+    assert_eq!(second_json["status"], "skipped");
+}
+
+#[test]
+fn teleport_read_dry_run_does_not_write_cache() {
+    let fixture = TestFixture::seeded();
+    let bundle_path = fixture.home.join("read-dry-run.mmr");
+    pack_codex_teleport_bundle(&fixture, &bundle_path);
+
+    let output = fixture.run_cli(&[
+        "teleport",
+        "read",
+        bundle_path.to_str().expect("bundle path"),
+        "--dry-run",
+    ]);
+    assert!(
+        output.status.success(),
+        "read dry-run stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "teleport/read");
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["dry_run"], true);
+    assert!(
+        json["bundle_id"]
+            .as_str()
+            .expect("bundle_id")
+            .starts_with("tp:v1:")
+    );
+    assert_eq!(json["session"]["source"], "codex");
+    assert_eq!(json["session"]["source_session_id"], "sess-codex-1");
+    assert!(json["message_count"].as_u64().expect("message_count") > 0);
+    let cache_path = json["bundle_path"].as_str().expect("bundle_path");
+    assert!(
+        cache_path.contains("/.mmr/teleport/cache/"),
+        "bundle_path should be a planned cache path"
+    );
+    assert!(
+        !Path::new(cache_path).exists(),
+        "dry-run must not write cache file"
+    );
 }
 
 fn pack_codex_teleport_bundle(fixture: &TestFixture, bundle_path: &Path) {
@@ -3764,4 +3985,386 @@ fn teleport_export_missing_to_is_usage_error() {
         bundle_path.to_str().expect("bundle path"),
     ]);
     assert_teleport_failure(&output, 2, "teleport/export");
+}
+
+#[test]
+fn teleport_provider_profile_dispatch_unknown_provider() {
+    match mmr::teleport::profile_for("unknown-provider") {
+        Err(err) => assert!(err.message.contains("unsupported teleport provider")),
+        Ok(_) => panic!("expected unknown provider to fail"),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TeleportProviderCase {
+    source: &'static str,
+    session_id: &'static str,
+    project: &'static str,
+    target_project: &'static str,
+    query_project: &'static str,
+}
+
+fn teleport_provider_cases() -> [TeleportProviderCase; 5] {
+    [
+        TeleportProviderCase {
+            source: "codex",
+            session_id: "sess-codex-1",
+            project: "/Users/test/codex-proj",
+            target_project: "/Users/test/target-codex-proj",
+            query_project: "target-codex-proj",
+        },
+        TeleportProviderCase {
+            source: "claude",
+            session_id: "sess-claude-1",
+            project: "/Users/test/proj",
+            target_project: "/Users/test/target-claude-proj",
+            query_project: "target-claude-proj",
+        },
+        TeleportProviderCase {
+            source: "cursor",
+            session_id: "sess-cursor-1",
+            project: "-Users-test-cursor-proj",
+            target_project: "/Users/test/target-cursor-proj",
+            query_project: "-Users-test-target-cursor-proj",
+        },
+        TeleportProviderCase {
+            source: "grok",
+            session_id: "sess-grok-1",
+            project: "/Users/test/grok-proj",
+            target_project: "/Users/test/target-grok-proj",
+            query_project: "target-grok-proj",
+        },
+        TeleportProviderCase {
+            source: "pi",
+            session_id: "sess-pi-1",
+            project: "/Users/test/pi-proj",
+            target_project: "/Users/test/target-pi-proj",
+            query_project: "target-pi-proj",
+        },
+    ]
+}
+
+fn expected_native_artifacts(source: &str) -> &'static [&'static str] {
+    match source {
+        "codex" => &["native/codex/transcript.jsonl"],
+        "claude" => &["native/claude/transcript.jsonl"],
+        "cursor" => &["native/cursor/transcript.jsonl"],
+        "grok" => &["native/grok/summary.json", "native/grok/updates.jsonl"],
+        "pi" => &["native/pi/transcript.jsonl"],
+        _ => &[],
+    }
+}
+
+fn run_cli_with_project_arg(
+    fixture: &TestFixture,
+    before_project: &[&str],
+    project: &str,
+    after_project: &[&str],
+) -> Output {
+    let mut args = before_project
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    if project.starts_with('-') {
+        args.push(format!("--project={project}"));
+    } else {
+        args.push("--project".to_string());
+        args.push(project.to_string());
+    }
+    args.extend(after_project.iter().map(|arg| (*arg).to_string()));
+    let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    fixture.run_cli(&refs)
+}
+
+#[test]
+fn teleport_provider_matrix_pack_inspect_apply() {
+    for case in teleport_provider_cases() {
+        let fixture = TestFixture::seeded();
+        let bundle_path = fixture
+            .home
+            .join(format!("teleport-matrix-{}.mmr", case.source));
+
+        let pack_output = run_cli_with_project_arg(
+            &fixture,
+            &[
+                "teleport",
+                "pack",
+                "--source",
+                case.source,
+                "--session",
+                case.session_id,
+            ],
+            case.project,
+            &["--to", bundle_path.to_str().expect("bundle path")],
+        );
+        assert!(
+            pack_output.status.success(),
+            "{} pack stderr={}",
+            case.source,
+            String::from_utf8_lossy(&pack_output.stderr)
+        );
+        let pack_json = parse_stdout_json(&pack_output);
+        assert_eq!(pack_json["session"]["source"], case.source);
+        assert_eq!(pack_json["session"]["source_session_id"], case.session_id);
+        let artifacts = pack_json["artifacts"].as_array().expect("artifacts");
+        for expected_path in expected_native_artifacts(case.source) {
+            assert!(
+                artifacts
+                    .iter()
+                    .any(|artifact| artifact["path"] == *expected_path),
+                "{} bundle should include {expected_path}",
+                case.source
+            );
+        }
+
+        let inspect_output = fixture.run_cli(&[
+            "teleport",
+            "inspect",
+            bundle_path.to_str().expect("bundle path"),
+        ]);
+        assert!(inspect_output.status.success());
+        let inspect_json = parse_stdout_json(&inspect_output);
+        assert_eq!(inspect_json["apply_ready"], true);
+
+        let read_output = fixture.run_cli(&[
+            "teleport",
+            "read",
+            bundle_path.to_str().expect("bundle path"),
+        ]);
+        assert!(read_output.status.success());
+        let read_json = parse_stdout_json(&read_output);
+        assert!(read_json.get("apply").is_none());
+
+        let apply_output = fixture.run_cli(&[
+            "teleport",
+            "apply",
+            bundle_path.to_str().expect("bundle path"),
+            "--project",
+            case.target_project,
+            "--force",
+        ]);
+        assert!(
+            apply_output.status.success(),
+            "{} apply stderr={}",
+            case.source,
+            String::from_utf8_lossy(&apply_output.stderr)
+        );
+        let apply_json = parse_stdout_json(&apply_output);
+        assert_eq!(apply_json["target_project"], case.target_project);
+        assert_eq!(apply_json["path_remap_applied"], true);
+
+        let messages_output = run_cli_with_project_arg(
+            &fixture,
+            &[
+                "messages",
+                "--source",
+                case.source,
+                "--session",
+                case.session_id,
+            ],
+            case.query_project,
+            &[],
+        );
+        assert!(
+            messages_output.status.success(),
+            "{} messages stderr={}",
+            case.source,
+            String::from_utf8_lossy(&messages_output.stderr)
+        );
+        let messages_json = parse_stdout_json(&messages_output);
+        assert!(
+            messages_json["total_messages"].as_i64().unwrap() > 0,
+            "{} applied bundle should be visible through mmr messages",
+            case.source
+        );
+
+        let resume_output = fixture.run_cli(&[
+            "teleport",
+            "resume",
+            bundle_path.to_str().expect("bundle path"),
+            "--project",
+            case.target_project,
+            "--as",
+            "same",
+            "--force",
+        ]);
+        assert!(
+            resume_output.status.success(),
+            "{} resume stderr={}",
+            case.source,
+            String::from_utf8_lossy(&resume_output.stderr)
+        );
+        let resume_json = parse_stdout_json(&resume_output);
+        assert_eq!(resume_json["target_agent"], case.source);
+
+        let export_path = if case.source == "grok" {
+            fixture.home.join("exported-grok")
+        } else {
+            fixture.home.join(format!("exported-{}.jsonl", case.source))
+        };
+        let export_output = fixture.run_cli(&[
+            "teleport",
+            "export",
+            bundle_path.to_str().expect("bundle path"),
+            "--to",
+            export_path.to_str().expect("export path"),
+            "--as",
+            "same",
+        ]);
+        assert!(
+            export_output.status.success(),
+            "{} export stderr={}",
+            case.source,
+            String::from_utf8_lossy(&export_output.stderr)
+        );
+        if case.source == "grok" {
+            assert!(export_path.join("summary.json").is_file());
+            assert!(export_path.join("updates.jsonl").is_file());
+        } else {
+            assert!(export_path.is_file());
+        }
+    }
+}
+
+#[test]
+fn teleport_provider_matrix_pack_latest() {
+    for case in teleport_provider_cases() {
+        let fixture = TestFixture::seeded();
+        let output = run_cli_with_project_arg(
+            &fixture,
+            &["teleport", "pack", "--source", case.source],
+            case.project,
+            &["--dry-run"],
+        );
+        assert!(
+            output.status.success(),
+            "{} latest pack stderr={}",
+            case.source,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json = parse_stdout_json(&output);
+        assert_eq!(json["session"]["source"], case.source);
+        assert_eq!(json["session"]["source_session_id"], case.session_id);
+    }
+}
+
+#[test]
+fn teleport_provider_matrix_file_send_read_receive() {
+    for case in teleport_provider_cases() {
+        let fixture = TestFixture::seeded();
+        let inbox = fixture.home.join(format!("provider-inbox-{}", case.source));
+        let to = format!("file://{}", inbox.display());
+        let send_output = run_cli_with_project_arg(
+            &fixture,
+            &[
+                "teleport",
+                "send",
+                "--source",
+                case.source,
+                "--session",
+                case.session_id,
+            ],
+            case.project,
+            &["--to", &to, "--transport", "file"],
+        );
+        assert!(
+            send_output.status.success(),
+            "{} send stderr={}",
+            case.source,
+            String::from_utf8_lossy(&send_output.stderr)
+        );
+        let send_json = parse_stdout_json(&send_output);
+        assert_eq!(send_json["session"]["source"], case.source);
+        let entry = inbox.join(send_json["bundle_id"].as_str().expect("bundle_id"));
+
+        let read_output =
+            fixture.run_cli(&["teleport", "read", entry.to_str().expect("entry path")]);
+        assert!(
+            read_output.status.success(),
+            "{} read stderr={}",
+            case.source,
+            String::from_utf8_lossy(&read_output.stderr)
+        );
+        let read_json = parse_stdout_json(&read_output);
+        assert_eq!(read_json["session"]["source"], case.source);
+        assert!(read_json.get("apply").is_none());
+
+        let receive_output = fixture.run_cli(&[
+            "teleport",
+            "receive",
+            "--to",
+            entry.to_str().expect("entry path"),
+            "--project",
+            case.target_project,
+            "--force",
+        ]);
+        assert!(
+            receive_output.status.success(),
+            "{} receive stderr={}",
+            case.source,
+            String::from_utf8_lossy(&receive_output.stderr)
+        );
+        let receive_json = parse_stdout_json(&receive_output);
+        assert_eq!(receive_json["apply"]["target_project"], case.target_project);
+    }
+}
+
+#[test]
+fn teleport_cross_provider_resume_is_structured_unsupported() {
+    let fixture = TestFixture::seeded();
+    let bundle_path = fixture.home.join("teleport-cross.mmr");
+    let pack_output = fixture.run_cli(&[
+        "teleport",
+        "pack",
+        "--source",
+        "grok",
+        "--session",
+        "sess-grok-1",
+        "--project",
+        "/Users/test/grok-proj",
+        "--to",
+        bundle_path.to_str().expect("bundle path"),
+    ]);
+    assert!(pack_output.status.success());
+
+    let output = fixture.run_cli(&[
+        "teleport",
+        "resume",
+        bundle_path.to_str().expect("bundle path"),
+        "--as",
+        "codex",
+    ]);
+    assert_teleport_unsupported(&output, "teleport/resume");
+}
+
+#[test]
+fn teleport_cross_provider_export_is_structured_unsupported() {
+    let fixture = TestFixture::seeded();
+    let bundle_path = fixture.home.join("teleport-cross-export.mmr");
+    let pack_output = fixture.run_cli(&[
+        "teleport",
+        "pack",
+        "--source",
+        "grok",
+        "--session",
+        "sess-grok-1",
+        "--project",
+        "/Users/test/grok-proj",
+        "--to",
+        bundle_path.to_str().expect("bundle path"),
+    ]);
+    assert!(pack_output.status.success());
+
+    let out_path = fixture.home.join("cross-export-claude.jsonl");
+    let output = fixture.run_cli(&[
+        "teleport",
+        "export",
+        bundle_path.to_str().expect("bundle path"),
+        "--to",
+        out_path.to_str().expect("out path"),
+        "--as",
+        "claude",
+    ]);
+    assert_teleport_unsupported(&output, "teleport/export");
+    assert!(!out_path.exists());
 }

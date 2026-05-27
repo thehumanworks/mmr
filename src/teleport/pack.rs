@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -7,23 +6,20 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::bundle::{
-    METADATA_PATH, NATIVE_TRANSCRIPT_PATH, NORMALIZED_TRANSCRIPT_PATH, RESTORE_CODEX_PATH,
-    TeleportBundleFile, bundle_bytes, bundle_sha256, compute_content_bundle_id,
-    default_bundle_path, hash_text, write_bundle,
+    TeleportBundleFile, bundle_bytes, bundle_sha256, default_bundle_path, hash_text, write_bundle,
 };
 use super::error::TeleportFailure;
 use super::manifest::{
-    BundleMetadata, ManifestArtifact, ManifestProject, ManifestRestore, ManifestSession,
-    TeleportFidelity, TeleportManifest, path_remap_for_project, project_aliases,
-    restore_hints_for_codex,
+    BundleMetadata, ManifestArtifact, ManifestProject, ManifestSession, TeleportFidelity,
+    TeleportManifest, path_remap_for_project, project_aliases,
+};
+use super::provider::{
+    artifact_entries_for_pack, build_manifest_restore, collect_native_files_for_pack, profile_for,
 };
 use super::{TeleportScanSummary, TeleportStatus};
-use crate::capture::CodexAdapter;
 use crate::messages::service::{MessageQueryOptions, QueryService};
 use crate::redaction::{DeterministicPrivacyDetector, scan_text_with_detector};
 use crate::types::{SortBy, SortOptions, SortOrder, SourceFilter};
-
-const SUPPORTED_SOURCE: &str = "codex";
 
 #[derive(Debug, Clone)]
 pub struct PackOptions {
@@ -75,54 +71,41 @@ pub fn pack_session(
     if options.fidelity == TeleportFidelity::SharedSafe {
         return Err(TeleportFailure::runtime(
             "teleport/pack",
-            "teleport pack supports native Codex bundles only; --as shared-safe is not supported",
+            "teleport pack supports native bundles only; --as shared-safe is not supported",
         ));
     }
 
-    if let Some(source_filter) = options.source_filter
-        && source_filter != SourceFilter::Codex
-    {
-        return Err(TeleportFailure::runtime(
-            "teleport/pack",
-            "teleport pack supports native Codex bundles only; omit --source or pass --source codex",
-        ));
-    }
+    let lookup_source_filter = if options.session_id.is_some() {
+        options.source_filter
+    } else {
+        options.source_filter.or(Some(SourceFilter::Codex))
+    };
 
     let context = service
         .resolve_teleport_session(
             options.session_id.as_deref(),
             options.project.as_deref(),
-            Some(SourceFilter::Codex),
+            lookup_source_filter,
         )
         .map_err(map_session_lookup_failure)?;
 
-    if context.session.source != SUPPORTED_SOURCE {
-        return Err(TeleportFailure::runtime(
-            "teleport/pack",
-            format!(
-                "teleport pack supports native Codex bundles only; session source is {}",
-                context.session.source
-            ),
-        ));
-    }
+    let profile = profile_for(&context.session.source)?;
+    let packed_native = collect_native_files_for_pack(profile, &context.source_file)?;
 
-    let native_transcript = fs::read_to_string(&context.source_file).map_err(|error| {
-        TeleportFailure::runtime(
-            "teleport/pack",
-            format!(
-                "read native transcript {}: {error}",
-                context.source_file.display()
-            ),
-        )
-    })?;
+    let scan_content = packed_native
+        .iter()
+        .map(|file| file.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let scan = scan_native_transcript(&scan_content);
 
-    let scan = scan_native_transcript(&native_transcript);
+    let source_filter = source_filter_for(&context.session.source)?;
 
     let messages = service
         .messages(
             Some(&context.session.session_id),
             Some(&context.session.project_name),
-            Some(SourceFilter::Codex),
+            Some(source_filter),
             MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
         )
         .map_err(|error| {
@@ -143,7 +126,9 @@ pub fn pack_session(
             )
         })?;
     let normalized_transcript = normalized_lines.join("\n");
-    let restore_json = restore_hints_for_codex(&context.session.session_id).to_string();
+    let restore_json = profile
+        .build_restore_hints(&context.session.session_id)
+        .to_string();
 
     let created_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -160,44 +145,41 @@ pub fn pack_session(
         project_path: context.session.project_path.clone(),
         native_source_file: context.source_file.display().to_string(),
         packed_at: created_at.clone(),
-        notes: Some("native Codex bundle (NHL-322)".to_string()),
+        notes: Some(format!(
+            "native {} bundle (provider profile)",
+            profile.source_name()
+        )),
     };
     let metadata_json = serde_json::to_string(&metadata).map_err(|error| {
         TeleportFailure::runtime("teleport/pack", format!("serialize metadata: {error}"))
     })?;
     let metadata_hash = hash_text(&metadata_json);
-    let native_hash = hash_text(&native_transcript);
     let normalized_hash = hash_text(&normalized_transcript);
     let restore_hash = hash_text(&restore_json);
 
-    let bundle_id = compute_content_bundle_id(&native_hash, &normalized_hash, Some(&restore_hash));
+    let bundle_id = compute_content_bundle_id_for_profile(
+        profile,
+        &packed_native,
+        &normalized_hash,
+        Some(&restore_hash),
+    );
 
-    let artifacts = vec![
-        ManifestArtifact {
-            path: METADATA_PATH.to_string(),
-            required: true,
-            sha256: metadata_hash,
-            kind: "metadata".to_string(),
-        },
-        ManifestArtifact {
-            path: NATIVE_TRANSCRIPT_PATH.to_string(),
-            required: true,
-            sha256: native_hash,
-            kind: "native_transcript".to_string(),
-        },
-        ManifestArtifact {
-            path: NORMALIZED_TRANSCRIPT_PATH.to_string(),
-            required: false,
-            sha256: normalized_hash,
-            kind: "normalized_transcript".to_string(),
-        },
-        ManifestArtifact {
-            path: RESTORE_CODEX_PATH.to_string(),
-            required: false,
-            sha256: restore_hash,
-            kind: "restore_hints".to_string(),
-        },
-    ];
+    let artifact_entries = artifact_entries_for_pack(
+        &metadata_hash,
+        &packed_native,
+        &normalized_hash,
+        Some(&restore_hash),
+        profile.restore_hints_path(),
+    );
+    let artifacts: Vec<ManifestArtifact> = artifact_entries
+        .into_iter()
+        .map(|(path, sha256, kind, required)| ManifestArtifact {
+            path,
+            required,
+            sha256,
+            kind,
+        })
+        .collect();
 
     let canonical_path = if context.session.project_path.is_empty() {
         context.session.project_name.clone()
@@ -211,8 +193,8 @@ pub fn pack_session(
         source_host: source_host_name(),
         mmr_version: env!("CARGO_PKG_VERSION").to_string(),
         min_mmr_version: env!("CARGO_PKG_VERSION").to_string(),
-        source: SUPPORTED_SOURCE.to_string(),
-        parser_version: CodexAdapter::PARSER_VERSION.to_string(),
+        source: profile.source_name().to_string(),
+        parser_version: profile.parser_version().to_string(),
         fidelity: TeleportFidelity::Native,
         session: ManifestSession {
             source_session_id: context.session.session_id.clone(),
@@ -227,21 +209,19 @@ pub fn pack_session(
             path_remap: path_remap_for_project(&canonical_path),
         },
         artifacts: artifacts.clone(),
-        capabilities: vec!["codex-native-apply".to_string(), "store-import".to_string()],
-        restore: ManifestRestore {
-            agent_resume: "best_effort".to_string(),
-            documented_command: format!("codex exec resume {}", context.session.session_id),
-            adapters: vec!["codex-native-apply".to_string()],
-        },
+        capabilities: profile.capabilities(),
+        restore: build_manifest_restore(profile, &context.session.session_id),
     };
 
     let mut files = BTreeMap::new();
-    files.insert(NATIVE_TRANSCRIPT_PATH.to_string(), native_transcript);
+    for packed in &packed_native {
+        files.insert(packed.bundle_path.clone(), packed.content.clone());
+    }
     files.insert(
-        NORMALIZED_TRANSCRIPT_PATH.to_string(),
+        profile.normalized_transcript_path().to_string(),
         normalized_transcript,
     );
-    files.insert(RESTORE_CODEX_PATH.to_string(), restore_json);
+    files.insert(profile.restore_hints_path().to_string(), restore_json);
 
     let bundle = TeleportBundleFile {
         mmr_teleport_bundle_version: super::bundle::BUNDLE_FORMAT_VERSION,
@@ -306,6 +286,29 @@ pub fn pack_session(
     })
 }
 
+fn compute_content_bundle_id_for_profile(
+    profile: &dyn super::provider::TeleportProviderProfile,
+    packed_native: &[super::provider::PackedNativeFile],
+    normalized_hash: &str,
+    restore_hash: Option<&str>,
+) -> String {
+    let mut entries: Vec<(String, String)> = packed_native
+        .iter()
+        .map(|file| (file.bundle_path.clone(), hash_text(&file.content)))
+        .collect();
+    entries.push((
+        profile.normalized_transcript_path().to_string(),
+        normalized_hash.to_string(),
+    ));
+    if let Some(restore_hash) = restore_hash {
+        entries.push((
+            profile.restore_hints_path().to_string(),
+            restore_hash.to_string(),
+        ));
+    }
+    super::bundle::compute_bundle_id(&entries)
+}
+
 fn map_session_lookup_failure(error: anyhow::Error) -> TeleportFailure {
     let message = error.to_string();
     if message.contains("not found in scope")
@@ -331,6 +334,22 @@ fn scan_native_transcript(content: &str) -> TeleportScanSummary {
         redacted_findings: outcome.findings.len(),
         pii_coverage: Some(format!("{:?}", outcome.pii_coverage.status).to_ascii_lowercase()),
     }
+}
+
+fn source_filter_for(source: &str) -> Result<SourceFilter, TeleportFailure> {
+    Ok(match source {
+        "codex" => SourceFilter::Codex,
+        "claude" => SourceFilter::Claude,
+        "cursor" => SourceFilter::Cursor,
+        "grok" => SourceFilter::Grok,
+        "pi" => SourceFilter::Pi,
+        other => {
+            return Err(TeleportFailure::runtime(
+                "teleport/pack",
+                format!("unknown source filter for {other}"),
+            ));
+        }
+    })
 }
 
 fn source_host_name() -> String {

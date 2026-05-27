@@ -81,9 +81,15 @@ spec explicitly supersedes it.
 - Top-level `mmr export` remains a history query over local sources; `teleport export` transforms a
   bundle artifact using `--as` and `--to`
 
-NHL-322 constraints:
+**Shipped (NHL-332–NHL-341):** provider profile abstraction and native teleport for
+`codex`, `claude`, `cursor`, `grok`, and `pi` — see `src/teleport/provider.rs` and
+`docs/mmr-teleport.md` provider matrix. Legacy bundles using flat
+`transcript.native.jsonl` remain readable.
 
-- **Codex + `native` fidelity only** for pack/apply (no Claude/Cursor/Grok/Pi apply yet)
+NHL-322 constraints (superseded for pack/apply by provider work above):
+
+- ~~**Codex + `native` fidelity only** for pack/apply~~ — all five handled sources
+  now support native pack/apply where documented in the provider matrix
 - **No network/transport** except SSH `send` (TELEPORT-005), local `file://` inbox
   send/receive (TELEPORT-006), and one-shot HTTP `serve`/`receive` (TELEPORT-007); no background
   daemon or shared-safe bundles yet
@@ -119,8 +125,9 @@ read path:
 ## Goals
 
 - Move one selected session as an immutable, content-addressed bundle.
-- Support Codex restore first; keep manifest and apply hooks extensible for
-  Claude and Cursor later.
+- Support same-provider native restore for `codex`, `claude`, `cursor`,
+  `grok`, and `pi`; keep manifest and apply hooks extensible for later
+  providers.
 - Work without a required cloud account, bucket, GitHub remote, or host-wide sync.
 - Bundle transport inside mmr (HTTP one-shot, SSH/SCP pipe, `file://` inbox).
 - Preserve machine-readable JSON on stdout; human diagnostics on stderr only.
@@ -957,7 +964,7 @@ Transport work MUST NOT precede bundle round-trip correctness.
 
 User-facing copy-paste examples live in [docs/mmr-teleport.md](../docs/mmr-teleport.md).
 The subsections below lock workflow intent to **current shipped behavior** (NHL-322
-through NHL-329).
+through NHL-341).
 
 ### Workflow 1: Same Tailnet / LAN one-shot HTTP
 
@@ -1007,7 +1014,8 @@ Default pack path: `~/.mmr/teleport/bundles/<bundle_id>/bundle.mmr`.
 
 ```bash
 mmr teleport resume ./handoff.mmr --project /path/to/project
-mmr teleport export ./handoff.mmr --to ./out.jsonl --as codex
+mmr teleport export ./handoff.mmr --to ./out.jsonl --as same
+mmr teleport export ./grok-handoff.mmr --to ./grok-export-dir --as grok
 ```
 
 Cross-agent `--as` on `resume` / `export` → stdout `status: "unsupported"`, exit
@@ -1017,11 +1025,12 @@ usage error, exit **2**.
 ## Safety (shipped behavior)
 
 - **Handoff, not sync:** one selected session; independent of `mmr sync`.
-- **Native Codex only** for pack/apply/send/serve/receive in this release.
+- **Provider-capable native teleport** for `codex`, `claude`, `cursor`,
+  `grok`, and `pi` for pack/apply/send/serve/receive/read/inspect.
 - **Native bundles** may contain secrets, tool output, private paths, and raw
   transcript content; stderr warns on pack/send/serve.
 - **`shared-safe` is not implemented** for pack, send, or native resume.
-- **Unsupported transforms** (`resume --as claude`, `export --as claude`, etc.)
+- **Unsupported transforms** (target provider differs from bundle source)
   return structured JSON with `status: "unsupported"` and exit code **3**.
 
 ## Troubleshooting (shipped behavior)
@@ -1034,7 +1043,7 @@ usage error, exit **2**.
 | Inspect/apply/receive exit 3 | Corrupt bundle or hash mismatch | Re-pack and re-transfer; verify `bundle.sha256` |
 | HTTP 403 / receive fails | Wrong or expired token | Re-run `serve`; use fresh `listen_url` while listening |
 | Receive `ok`, empty `staged` | Inbox incomplete or unsynced | Wait for `ready` marker and folder sync |
-| `resume --as native` exit 2 | Fidelity token on agent command | Use `--as same` or `--as codex`; fidelity is pack-time only |
+| `resume --as native` exit 2 | Fidelity token on agent command | Use `--as same` or the bundle source provider; fidelity is pack-time only |
 
 ## Fresh-session verification (NHL-321 – NHL-331)
 
@@ -1047,5 +1056,7 @@ cargo test --test cli_contract teleport
 
 Ticket map: NHL-321 (spec) → NHL-322 (pack/inspect/apply) → NHL-324 (apply
 hardening) → NHL-326 (SSH send) → NHL-327 (file inbox) → NHL-328 (HTTP serve) →
-NHL-329 (resume/export) → NHL-330 (docs/help) → NHL-331 (follow-on). Confirm
-each shipped note matches CLI behavior before extending transport or fidelity.
+NHL-329 (resume/export) → NHL-330 (docs/help) → NHL-331 (follow-on) →
+NHL-332 through NHL-341 (provider profiles, provider matrix, docs, and E2E).
+Confirm each shipped note matches CLI behavior before extending transport or
+fidelity.
