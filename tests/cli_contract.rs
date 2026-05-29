@@ -3708,6 +3708,46 @@ fn teleport_serve_read_http_loopback_caches_without_apply() {
 }
 
 #[test]
+fn teleport_serve_read_same_http_locator_uses_cache_after_server_exits() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (mut serve_child, startup) = spawn_teleport_serve(&fixture, &[]);
+    let listen_url = startup["listen_url"].as_str().expect("listen_url");
+
+    let first_output = fixture.run_cli(&["teleport", "read", listen_url]);
+    assert!(
+        first_output.status.success(),
+        "first read stderr={}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    let first_json = parse_stdout_json(&first_output);
+    assert_eq!(first_json["status"], "ok");
+
+    let serve_status = serve_child.wait().expect("wait for serve");
+    assert!(serve_status.success());
+
+    let second_output = fixture.run_cli(&["teleport", "read", listen_url]);
+    assert!(
+        second_output.status.success(),
+        "second read stderr={}",
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    let second_json = parse_stdout_json(&second_output);
+    assert_eq!(second_json["command"], "teleport/read");
+    assert_eq!(second_json["status"], "skipped");
+    assert_eq!(second_json["transport"], "http");
+    assert_eq!(second_json["locator"], listen_url);
+    assert_eq!(second_json["bundle_id"], first_json["bundle_id"]);
+    assert_eq!(second_json["bundle_path"], first_json["bundle_path"]);
+    assert_eq!(
+        second_json["messages"].as_array().expect("messages").len(),
+        first_json["messages"].as_array().expect("messages").len()
+    );
+}
+
+#[test]
 fn teleport_read_local_bundle_caches_and_second_read_is_skipped() {
     let fixture = TestFixture::seeded();
     let bundle_path = fixture.home.join("read-handoff.mmr");
@@ -3743,6 +3783,76 @@ fn teleport_read_local_bundle_caches_and_second_read_is_skipped() {
         second_json["messages"].as_array().expect("messages").len(),
         first_json["messages"].as_array().expect("messages").len()
     );
+}
+
+#[test]
+fn teleport_read_output_format_md_prints_readable_messages() {
+    let fixture = TestFixture::seeded();
+    let bundle_path = fixture.home.join("read-md.mmr");
+    pack_codex_teleport_bundle(&fixture, &bundle_path);
+
+    let output = fixture.run_cli(&[
+        "teleport",
+        "read",
+        bundle_path.to_str().expect("bundle path"),
+        "-O",
+        "md",
+    ]);
+    assert!(
+        output.status.success(),
+        "read md stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "teleport/read");
+    assert_eq!(json["status"], "ok");
+    let text = json["text"].as_str().expect("markdown text");
+    assert!(text.contains("# Teleport read"));
+    assert!(text.contains("- source: codex"));
+    assert!(text.contains("- session_id: sess-codex-1"));
+    assert!(text.contains("hello from codex"));
+    assert!(text.contains("short codex answer"));
+}
+
+#[test]
+fn teleport_read_http_locator_cache_falls_back_to_refetch_when_cached_bundle_is_missing() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (mut first_serve_child, first_startup) = spawn_teleport_serve(&fixture, &[]);
+    let first_url = first_startup["listen_url"].as_str().expect("listen_url");
+
+    let first_output = fixture.run_cli(&["teleport", "read", first_url]);
+    assert!(
+        first_output.status.success(),
+        "first read stderr={}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    let first_json = parse_stdout_json(&first_output);
+    assert_eq!(first_json["status"], "ok");
+    let cached_bundle_path = first_json["bundle_path"].as_str().expect("bundle_path");
+    fs::remove_file(cached_bundle_path).expect("remove cached bundle to force refetch");
+
+    let first_serve_status = first_serve_child.wait().expect("wait for first serve");
+    assert!(first_serve_status.success());
+
+    let (mut second_serve_child, second_startup) = spawn_teleport_serve(&fixture, &[]);
+    let second_url = second_startup["listen_url"].as_str().expect("listen_url");
+    let second_output = fixture.run_cli(&["teleport", "read", second_url]);
+    assert!(
+        second_output.status.success(),
+        "second read stderr={}",
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    let second_json = parse_stdout_json(&second_output);
+    assert_eq!(second_json["status"], "ok");
+    assert_eq!(second_json["bundle_id"], first_json["bundle_id"]);
+    assert_eq!(second_json["bundle_path"], first_json["bundle_path"]);
+    assert!(Path::new(cached_bundle_path).exists());
+
+    let second_serve_status = second_serve_child.wait().expect("wait for second serve");
+    assert!(second_serve_status.success());
 }
 
 #[test]

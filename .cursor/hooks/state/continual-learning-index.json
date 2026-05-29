@@ -1,13 +1,129 @@
 {
   "version": 1,
   "transcripts": {
-    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/56aa2ebc-0491-4917-aba5-9309c404868d/56aa2ebc-0491-4917-aba5-9309c404868d.jsonl": {
-      "mtimeMs": 1773836623021,
-      "lastProcessedAt": "2026-03-18T12:23:43.021Z"
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/ae91132f-1ce4-48b2-8d9f-317ac3694285/ae91132f-1ce4-48b2-8d9f-317ac3694285.jsonl": {
+      "mtimeMs": 1773060421558,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/0abf49c7-caf8-42b6-8502-c082384c8ae1/0abf49c7-caf8-42b6-8502-c082384c8ae1.jsonl": {
+      "mtimeMs": 1773260998272,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/3237db16-9878-477e-a240-cd059f3fc566/3237db16-9878-477e-a240-cd059f3fc566.jsonl": {
+      "mtimeMs": 1779733873802,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/7fb3c1ee-1765-458e-a21a-784f6883d575/7fb3c1ee-1765-458e-a21a-784f6883d575.jsonl": {
+      "mtimeMs": 1779640820076,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/1cd00ebc-7677-42e6-816e-0b9c3d22ff2d/1cd00ebc-7677-42e6-816e-0b9c3d22ff2d.jsonl": {
+      "mtimeMs": 1779755144817,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/5e8d8a41-fb49-4a58-918e-25cf8bdeb593/5e8d8a41-fb49-4a58-918e-25cf8bdeb593.jsonl": {
+      "mtimeMs": 1779753280001,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/30bb5e00-9be6-40ab-b534-5949f24dc205/30bb5e00-9be6-40ab-b534-5949f24dc205.jsonl": {
+      "mtimeMs": 1779756467741,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/73de05fa-8252-4954-bd09-694dfc368660/73de05fa-8252-4954-bd09-694dfc368660.jsonl": {
+      "mtimeMs": 1779754433758,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/a386519e-0460-446b-aef1-a858285be8f6/a386519e-0460-446b-aef1-a858285be8f6.jsonl": {
+      "mtimeMs": 1779755778506,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/e48ba0b1-3490-414d-a018-1bddd48a675d/e48ba0b1-3490-414d-a018-1bddd48a675d.jsonl": {
+      "mtimeMs": 1779877021203,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/7e07d19d-9a04-456a-8e31-faf01586defa/7e07d19d-9a04-456a-8e31-faf01586defa.jsonl": {
+      "mtimeMs": 1779755426037,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/18f1eee0-eb3d-468d-8dfb-e5d726d2c855/18f1eee0-eb3d-468d-8dfb-e5d726d2c855.jsonl": {
+      "mtimeMs": 1779756970880,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/76b34222-b444-4f45-96a9-8212a737e262/76b34222-b444-4f45-96a9-8212a737e262.jsonl": {
+      "mtimeMs": 1779757201905,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/9cdfe51a-bbfa-43fb-8284-a05b850d026d/9cdfe51a-bbfa-43fb-8284-a05b850d026d.jsonl": {
+      "mtimeMs": 1779799298343,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/7697bae6-fc3b-4e64-a706-b8bc412439a9/7697bae6-fc3b-4e64-a706-b8bc412439a9.jsonl": {
+      "mtimeMs": 1779751233253,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/ef838cea-1c0a-42e0-af3a-61fbe540022a/ef838cea-1c0a-42e0-af3a-61fbe540022a.jsonl": {
+      "mtimeMs": 1779756712089,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/5a223c67-6475-44f3-9062-56c76247b97f/5a223c67-6475-44f3-9062-56c76247b97f.jsonl": {
+      "mtimeMs": 1772918113290,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/1b531a7e-66f6-4baa-b4b6-e465bb679231/1b531a7e-66f6-4baa-b4b6-e465bb679231.jsonl": {
+      "mtimeMs": 1779825487292,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/bed63ef0-f994-4f06-94fc-45a013f6f4af/bed63ef0-f994-4f06-94fc-45a013f6f4af.jsonl": {
+      "mtimeMs": 1779736983108,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/d7dbdce4-6e8c-497a-9c69-61362559fe86/d7dbdce4-6e8c-497a-9c69-61362559fe86.jsonl": {
+      "mtimeMs": 1779789129263,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/e976bbf2-c0ab-4d19-8a7f-96cc1d79da97/e976bbf2-c0ab-4d19-8a7f-96cc1d79da97.jsonl": {
+      "mtimeMs": 1779646184708,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/1d65c09e-8895-4ba8-9c9e-27d413ba5601/1d65c09e-8895-4ba8-9c9e-27d413ba5601.jsonl": {
+      "mtimeMs": 1779756129564,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/9c70a149-16f4-44fb-8758-5f09d50cd16b/9c70a149-16f4-44fb-8758-5f09d50cd16b.jsonl": {
+      "mtimeMs": 1779754192314,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-projects-mmr/agent-transcripts/bea8dd57-cc6c-4e49-88fd-2a538d2f46c9/bea8dd57-cc6c-4e49-88fd-2a538d2f46c9.jsonl": {
+      "mtimeMs": 1779751191259,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/fcf683e5-19f9-4727-a768-2a37ef3d3509/fcf683e5-19f9-4727-a768-2a37ef3d3509.jsonl": {
+      "mtimeMs": 1774385536787,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
     },
     "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/fa9f6cc0-1b64-4ca5-bce2-3d752c634096/fa9f6cc0-1b64-4ca5-bce2-3d752c634096.jsonl": {
       "mtimeMs": 1773834712794,
-      "lastProcessedAt": "2026-03-18T12:23:43.021Z"
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/56aa2ebc-0491-4917-aba5-9309c404868d/56aa2ebc-0491-4917-aba5-9309c404868d.jsonl": {
+      "mtimeMs": 1773836758758,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/fc3025e9-e2ea-4e1e-a890-79449144c398/fc3025e9-e2ea-4e1e-a890-79449144c398.jsonl": {
+      "mtimeMs": 1773858482852,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/64e2ffab-0e70-4e8b-9cd4-7cd53cd0b310/64e2ffab-0e70-4e8b-9cd4-7cd53cd0b310.jsonl": {
+      "mtimeMs": 1774015655967,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/25d6757e-c665-408e-9bad-165e9381a677/25d6757e-c665-408e-9bad-165e9381a677.jsonl": {
+      "mtimeMs": 1779871331601,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
+    },
+    "/Users/mish/.cursor/projects/Users-mish-dev-mmr/agent-transcripts/bf4d9c01-31e6-45cc-b505-3fc395a28b69/bf4d9c01-31e6-45cc-b505-3fc395a28b69.jsonl": {
+      "mtimeMs": 1773943542199,
+      "lastProcessedAt": "2026-05-27T10:17:40.421Z"
     }
   }
 }
