@@ -17,7 +17,9 @@ use crate::dream::{
     ENV_DREAM_MOCK_FAILURE, ENV_DREAM_MOCK_OUTPUT, MockDreamRunner, ValidatedDreamOutput,
     ValidatedLearnedMemoryStatus, build_evidence_request, validate_dream_output,
 };
-use crate::messages::service::{MessageIndexRange, MessageQueryOptions, QueryService};
+use crate::messages::service::{
+    MessageIndexRange, MessageQueryOptions, QueryService, SessionAxis, SessionSelectionError,
+};
 use crate::redaction::{
     DeterministicPrivacyDetector, PiiCoverage, PiiCoverageStatus, RedactionFinding,
     RedactionOutcome, scan_text, scan_text_with_detector,
@@ -141,9 +143,9 @@ pub enum Commands {
     },
     /// Get messages (defaults to the current project when cwd auto-discovery succeeds)
     Messages {
-        /// Session ID
+        /// Session ID (repeatable; pins the query to specific sessions)
         #[arg(long)]
-        session: Option<String>,
+        session: Vec<String>,
         /// Project name or path
         #[arg(long)]
         project: Option<String>,
@@ -153,6 +155,15 @@ pub enum Commands {
         /// Return the newest N messages from the latest session in scope
         #[arg(long, num_args = 0..=1, default_missing_value = "1")]
         latest: Option<NonZeroUsize>,
+        /// Select the single session at recency-age N counting back from the newest (1 = previous)
+        #[arg(long, value_name = "N")]
+        session_back: Option<u32>,
+        /// Select a span of sessions by recency age, written older..newer (e.g. 2..1 = ages 1 and 2)
+        #[arg(long, value_name = "FROM..TO")]
+        session_range: Option<String>,
+        /// Make the newest (assumed-live, age 0) session addressable by the session axis
+        #[arg(long)]
+        include_newest: bool,
         /// First zero-based message index to include after filtering and sorting
         #[arg(long)]
         from_message_index: Option<usize>,
@@ -171,6 +182,21 @@ pub enum Commands {
         /// Sort order: asc or desc
         #[arg(short = 'o', long, default_value = "asc")]
         order: SortOrder,
+    },
+    /// Show a previous session's messages by recency (sugar for `messages --session-back N`)
+    Prev {
+        /// How many sessions back to read (1 = the previous session)
+        #[arg(value_name = "N", default_value_t = 1)]
+        n: u32,
+        /// Project name or path (recency is computed within this scope)
+        #[arg(long)]
+        project: Option<String>,
+        /// Compute recency across all projects instead of the auto-discovered cwd project
+        #[arg(long)]
+        all: bool,
+        /// Maximum number of messages to return
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
     },
     /// All messages for the current project (cwd) or --project, all sources, chronological
     Export {
@@ -809,6 +835,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             project,
             all,
             latest,
+            session_back,
+            session_range,
+            include_newest,
             from_message_index,
             to_message_index,
             limit,
@@ -818,51 +847,111 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         } => {
             let message_index_range =
                 validate_message_index_range(from_message_index, to_message_index)?;
-            // When a session ID is provided without an explicit project,
-            // skip cwd auto-discovery and search all projects instead.
-            let project_scope = if session.is_some() && project.is_none() {
-                if source_filter.is_none() {
-                    eprintln!(
-                        "hint: searching all sources for session; pass --source to narrow the search"
-                    );
-                }
-                None
-            } else {
-                effective_project_scope(project.clone(), all)
+
+            // At most one session selector is allowed (mirror the teleport selector guard).
+            let selector_count = (!session.is_empty()) as u8
+                + latest.is_some() as u8
+                + session_back.is_some() as u8
+                + session_range.is_some() as u8;
+            if selector_count > 1 {
+                return Err(anyhow::Error::new(multiple_selectors_failure(cli.pretty)?));
+            }
+
+            let session_axis = match (session_back, session_range.as_deref()) {
+                (Some(age), _) => Some(SessionAxis::Back(age)),
+                (None, Some(range)) => Some(SessionAxis::Range(parse_session_range(range)?)),
+                (None, None) => None,
             };
 
-            let mut response = if let Some(latest) = latest {
-                service.latest_session_messages(
-                    session.as_deref(),
-                    project_scope.as_deref(),
+            if let Some(axis) = session_axis {
+                let options =
+                    MessageQueryOptions::new(Some(limit), offset, SortOptions::new(sort_by, order))
+                        .with_message_index_range(message_index_range);
+                run_session_axis(
+                    &service,
+                    cli.source,
                     source_filter,
-                    latest.get(),
-                    message_index_range,
+                    cli.pretty,
+                    project,
+                    all,
+                    axis,
+                    include_newest,
+                    options,
                 )?
             } else {
-                service.messages(
-                    session.as_deref(),
-                    project_scope.as_deref(),
-                    source_filter,
-                    MessageQueryOptions::new(Some(limit), offset, SortOptions::new(sort_by, order))
+                // When session ID(s) are provided without an explicit project,
+                // skip cwd auto-discovery and search all projects instead.
+                let project_scope = if !session.is_empty() && project.is_none() {
+                    if source_filter.is_none() {
+                        eprintln!(
+                            "hint: searching all sources for session; pass --source to narrow the search"
+                        );
+                    }
+                    None
+                } else {
+                    effective_project_scope(project.clone(), all)
+                };
+
+                let mut response = if let Some(latest) = latest {
+                    service.latest_session_messages(
+                        &session,
+                        project_scope.as_deref(),
+                        source_filter,
+                        latest.get(),
+                        message_index_range,
+                    )?
+                } else {
+                    service.messages(
+                        &session,
+                        project_scope.as_deref(),
+                        source_filter,
+                        MessageQueryOptions::new(
+                            Some(limit),
+                            offset,
+                            SortOptions::new(sort_by, order),
+                        )
                         .with_message_index_range(message_index_range),
-                )?
-            };
-            if latest.is_none() && response.next_page {
-                response.next_command = Some(build_next_messages_command(
-                    cli.source,
-                    cli.pretty,
-                    session.as_deref(),
-                    project.as_deref(),
-                    all,
-                    message_index_range,
-                    limit,
-                    response.next_offset as usize,
-                    sort_by,
-                    order,
-                ));
+                    )?
+                };
+                if latest.is_none() && response.next_page {
+                    response.next_command = Some(build_next_messages_command(
+                        cli.source,
+                        cli.pretty,
+                        &session,
+                        project.as_deref(),
+                        all,
+                        message_index_range,
+                        limit,
+                        response.next_offset as usize,
+                        sort_by,
+                        order,
+                    ));
+                }
+                serialize(&response, cli.pretty)?
             }
-            serialize(&response, cli.pretty)?
+        }
+        Commands::Prev {
+            n,
+            project,
+            all,
+            limit,
+        } => {
+            let options = MessageQueryOptions::new(
+                Some(limit),
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+            );
+            run_session_axis(
+                &service,
+                cli.source,
+                source_filter,
+                cli.pretty,
+                project,
+                all,
+                SessionAxis::Back(n),
+                false,
+                options,
+            )?
         }
         Commands::Export {
             project,
@@ -876,7 +965,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                 let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
                 if let Some(proj) = project {
                     let response = service.messages(
-                        None,
+                        &[],
                         Some(proj.as_str()),
                         source_filter,
                         MessageQueryOptions::new(None, 0, sort),
@@ -889,7 +978,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     let mut messages: Vec<ApiMessage> = Vec::new();
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Codex) {
                         let codex = service.messages(
-                            None,
+                            &[],
                             Some(&codex_path),
                             Some(SourceFilter::Codex),
                             MessageQueryOptions::new(None, 0, sort),
@@ -898,7 +987,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Claude) {
                         let claude = service.messages(
-                            None,
+                            &[],
                             Some(&claude_name),
                             Some(SourceFilter::Claude),
                             MessageQueryOptions::new(None, 0, sort),
@@ -907,7 +996,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Cursor) {
                         let cursor = service.messages(
-                            None,
+                            &[],
                             Some(&cursor_name),
                             Some(SourceFilter::Cursor),
                             MessageQueryOptions::new(None, 0, sort),
@@ -916,7 +1005,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Grok) {
                         let grok = service.messages(
-                            None,
+                            &[],
                             Some(&codex_path),
                             Some(SourceFilter::Grok),
                             MessageQueryOptions::new(None, 0, sort),
@@ -925,7 +1014,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     }
                     if source_filter.is_none() || source_filter == Some(SourceFilter::Pi) {
                         let pi = service.messages(
-                            None,
+                            &[],
                             Some(&codex_path),
                             Some(SourceFilter::Pi),
                             MessageQueryOptions::new(None, 0, sort),
@@ -944,6 +1033,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                         next_page: false,
                         next_offset: total,
                         next_command: None,
+                        session_selection: None,
                     };
                     serialize(&response, cli.pretty)?
                 }
@@ -3592,6 +3682,46 @@ fn validate_message_index_range(
     Ok(MessageIndexRange::new(from, to))
 }
 
+/// Parse a `--session-range FROM..TO` argument into an inclusive span of recency ages.
+///
+/// The argument is written older-bound `..` newer-bound (e.g. `2..1` selects ages 1 and 2),
+/// so `FROM >= TO >= 1`. Age 0 (the newest, assumed-live session) is never range-addressable.
+/// Returns the ages as `newest_bound..=oldest_bound` (`1..=2` for `2..1`).
+fn parse_session_range(input: &str) -> Result<std::ops::RangeInclusive<u32>> {
+    let trimmed = input.trim();
+    let (oldest_str, newest_str) = trimmed.split_once("..").with_context(|| {
+        format!("--session-range expects FROM..TO (older..newer), e.g. 2..1; got {input:?}")
+    })?;
+    let oldest: u32 = oldest_str.trim().parse().map_err(|_| {
+        anyhow::anyhow!("--session-range FROM must be a non-negative integer; got {oldest_str:?}")
+    })?;
+    let newest: u32 = newest_str.trim().parse().map_err(|_| {
+        anyhow::anyhow!("--session-range TO must be a non-negative integer; got {newest_str:?}")
+    })?;
+    if newest < 1 {
+        bail!(
+            "--session-range bounds must be >= 1; the newest session is age 0 and is not \
+             range-addressable (use --session-back 0 --include-newest); got {input:?}"
+        );
+    }
+    if oldest < newest {
+        bail!(
+            "--session-range must be written older..newer with FROM >= TO (e.g. 2..1); got {input:?}"
+        );
+    }
+    Ok(newest..=oldest)
+}
+
+/// Reject the not-by-default newest session (age 0) unless the caller opted in with
+/// `--include-newest`. Out-of-range ages depend on the in-scope session count and are
+/// enforced later in the service against the recency ranking.
+fn validate_session_back(age: u32, include_newest: bool) -> Result<u32, SessionSelectionError> {
+    if age == 0 && !include_newest {
+        return Err(SessionSelectionError::AgeZeroNotSelectable);
+    }
+    Ok(age)
+}
+
 fn default_remember_agent_from_env() -> Option<Agent> {
     std::env::var(ENV_DEFAULT_REMEMBER_AGENT)
         .ok()
@@ -3681,7 +3811,7 @@ fn current_dir_project() -> Result<String> {
 fn build_next_messages_command(
     source: Option<SourceFilter>,
     pretty: bool,
-    session: Option<&str>,
+    session: &[String],
     project: Option<&str>,
     all: bool,
     message_index_range: Option<MessageIndexRange>,
@@ -3708,7 +3838,7 @@ fn build_next_messages_command(
 
     parts.push("messages".to_string());
 
-    if let Some(sess) = session {
+    for sess in session {
         parts.push(format!("--session {sess}"));
     }
     if let Some(proj) = project {
@@ -3741,6 +3871,130 @@ fn build_next_messages_command(
     }
 
     parts.join(" ")
+}
+
+/// Resolve and serialize a reverse session-axis query (`--session-back`/`--session-range`/`prev`).
+///
+/// Recency-derived ages are unstable across time, so a paged result pins `next_command` to the
+/// concrete resolved session id(s) rather than echoing the age-based selector; a session landing
+/// between calls then cannot shift the window.
+#[allow(clippy::too_many_arguments)]
+fn run_session_axis(
+    service: &QueryService,
+    cli_source: Option<SourceFilter>,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+    project: Option<String>,
+    all: bool,
+    axis: SessionAxis,
+    include_newest: bool,
+    options: MessageQueryOptions,
+) -> Result<String> {
+    // Fail fast on the age-0 rule (out-of-range needs the scope count and is enforced below).
+    if let SessionAxis::Back(age) = &axis
+        && let Err(error) = validate_session_back(*age, include_newest)
+    {
+        return Err(anyhow::Error::new(session_selection_cli_failure(
+            error, pretty,
+        )?));
+    }
+
+    let project_scope = effective_project_scope(project, all);
+    let outcome = service.messages_by_session_age(
+        project_scope.as_deref(),
+        all,
+        source_filter,
+        &axis,
+        include_newest,
+        options,
+    )?;
+    let mut response = match outcome {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(anyhow::Error::new(session_selection_cli_failure(
+                error, pretty,
+            )?));
+        }
+    };
+
+    if response.next_page {
+        let session_ids = response
+            .session_selection
+            .as_ref()
+            .map(|selection| {
+                selection
+                    .selected
+                    .iter()
+                    .map(|selected| selected.session_id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        response.next_command = Some(build_next_messages_command(
+            cli_source,
+            pretty,
+            &session_ids,
+            None,
+            false,
+            options.message_index_range,
+            options.limit.unwrap_or(0),
+            response.next_offset as usize,
+            options.sort.by,
+            options.sort.order,
+        ));
+    }
+
+    serialize(&response, pretty)
+}
+
+/// Build the structured CLI failure (machine JSON on stdout, message on stderr, exit 2) for an
+/// out-of-range / age-0 session-axis request, naming the relevant counts.
+fn session_selection_cli_failure(error: SessionSelectionError, pretty: bool) -> Result<CliFailure> {
+    let mut value = serde_json::json!({
+        "command": "messages",
+        "status": "failed",
+        "error_kind": error.error_kind(),
+        "message": error.to_string(),
+    });
+    match &error {
+        SessionSelectionError::AgeZeroNotSelectable => {}
+        SessionSelectionError::SessionBackOutOfRange {
+            total_sessions_in_scope,
+            max_selectable_age,
+            requested,
+        } => {
+            value["total_sessions_in_scope"] = serde_json::json!(total_sessions_in_scope);
+            value["max_selectable_age"] = serde_json::json!(max_selectable_age);
+            value["requested_age"] = serde_json::json!(requested);
+        }
+        SessionSelectionError::SessionRangeOutOfRange {
+            total_sessions_in_scope,
+            max_selectable_age,
+            requested_newest,
+            requested_oldest,
+        } => {
+            value["total_sessions_in_scope"] = serde_json::json!(total_sessions_in_scope);
+            value["max_selectable_age"] = serde_json::json!(max_selectable_age);
+            value["requested_newest_age"] = serde_json::json!(requested_newest);
+            value["requested_oldest_age"] = serde_json::json!(requested_oldest);
+        }
+    }
+    let stdout = serialize(&value, pretty)?;
+    Ok(CliFailure::new(2, stdout, error.to_string()))
+}
+
+/// Reject more than one session selector (`--session`, `--latest`, `--session-back`,
+/// `--session-range`) with a usage error mirroring the teleport selector guard.
+fn multiple_selectors_failure(pretty: bool) -> Result<CliFailure> {
+    let message =
+        "pass only one session selector: --session, --latest, --session-back, or --session-range";
+    let value = serde_json::json!({
+        "command": "messages",
+        "status": "failed",
+        "error_kind": "multiple_session_selectors",
+        "message": message,
+    });
+    let stdout = serialize(&value, pretty)?;
+    Ok(CliFailure::new(2, stdout, message))
 }
 
 fn serialize<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
@@ -3956,6 +4210,117 @@ mod tests {
             err.to_string()
                 .contains("--from-message-index must be less than or equal to --to-message-index")
         );
+    }
+
+    #[test]
+    fn prev_defaults_to_one_session_back() {
+        let parsed = Cli::try_parse_from(["mmr", "prev"]).expect("prev should parse");
+        let Commands::Prev { n, all, .. } = parsed.command else {
+            panic!("expected prev command");
+        };
+        assert_eq!(n, 1);
+        assert!(!all);
+    }
+
+    #[test]
+    fn prev_accepts_explicit_count_and_scope() {
+        let parsed =
+            Cli::try_parse_from(["mmr", "prev", "2", "--all"]).expect("prev 2 --all should parse");
+        let Commands::Prev { n, all, .. } = parsed.command else {
+            panic!("expected prev command");
+        };
+        assert_eq!(n, 2);
+        assert!(all);
+    }
+
+    #[test]
+    fn messages_session_flag_is_repeatable() {
+        let parsed = Cli::try_parse_from(["mmr", "messages", "--session", "a", "--session", "b"])
+            .expect("repeated --session should parse");
+        let Commands::Messages { session, .. } = parsed.command else {
+            panic!("expected messages command");
+        };
+        assert_eq!(session, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn messages_session_axis_flags_parse() {
+        let parsed =
+            Cli::try_parse_from(["mmr", "messages", "--session-back", "3", "--include-newest"])
+                .expect("--session-back should parse");
+        let Commands::Messages {
+            session_back,
+            include_newest,
+            ..
+        } = parsed.command
+        else {
+            panic!("expected messages command");
+        };
+        assert_eq!(session_back, Some(3));
+        assert!(include_newest);
+
+        let ranged =
+            Cli::try_parse_from(["mmr", "messages", "--session-range", "2..1"]).expect("range");
+        let Commands::Messages { session_range, .. } = ranged.command else {
+            panic!("expected messages command");
+        };
+        assert_eq!(session_range.as_deref(), Some("2..1"));
+    }
+
+    #[test]
+    fn messages_strawman_index_flags_do_not_parse() {
+        assert!(Cli::try_parse_from(["mmr", "messages", "--from-index", "-1"]).is_err());
+        assert!(Cli::try_parse_from(["mmr", "messages", "--to-index", "-1"]).is_err());
+    }
+
+    #[test]
+    fn parse_session_range_accepts_older_to_newer_span() {
+        assert_eq!(parse_session_range("2..1").unwrap(), 1..=2);
+        assert_eq!(parse_session_range("1..1").unwrap(), 1..=1);
+        assert_eq!(parse_session_range("5..3").unwrap(), 3..=5);
+        // Surrounding whitespace is tolerated.
+        assert_eq!(parse_session_range(" 2 .. 1 ").unwrap(), 1..=2);
+    }
+
+    #[test]
+    fn parse_session_range_rejects_reversed_span() {
+        let err = parse_session_range("1..2").unwrap_err();
+        assert!(
+            err.to_string().contains("older..newer"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_session_range_rejects_age_zero_bounds() {
+        let err = parse_session_range("1..0").unwrap_err();
+        assert!(err.to_string().contains(">= 1"), "unexpected error: {err}");
+        assert!(parse_session_range("0..0").is_err());
+    }
+
+    #[test]
+    fn parse_session_range_rejects_non_numeric_and_negative() {
+        assert!(parse_session_range("a..b").is_err());
+        assert!(parse_session_range("-1..1").is_err());
+        assert!(parse_session_range("2..-1").is_err());
+        // Missing separator and empty bounds are rejected.
+        assert!(parse_session_range("2.1").is_err());
+        assert!(parse_session_range("..1").is_err());
+        assert!(parse_session_range("2..").is_err());
+        // A trailing extra bound is not a valid integer.
+        assert!(parse_session_range("3..2..1").is_err());
+    }
+
+    #[test]
+    fn validate_session_back_rejects_age_zero_without_include_newest() {
+        assert_eq!(
+            validate_session_back(0, false),
+            Err(SessionSelectionError::AgeZeroNotSelectable)
+        );
+        assert_eq!(validate_session_back(0, true), Ok(0));
+        assert_eq!(validate_session_back(1, false), Ok(1));
+        // Out-of-range ages are a scope concern, not rejected by this validator.
+        assert_eq!(validate_session_back(5, false), Ok(5));
     }
 
     #[test]

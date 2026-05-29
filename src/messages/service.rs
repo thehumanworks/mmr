@@ -12,7 +12,8 @@ use crate::types::query::{
 };
 use crate::types::{
     ApiMessage, ApiMessagesResponse, ApiProject, ApiProjectsResponse, ApiSession,
-    ApiSessionsResponse, MessageRecord, SortBy, SortOptions, SortOrder, SourceFilter, SourceKind,
+    ApiSessionsResponse, MessageRecord, SelectedSession, SessionSelection, SessionSelectionScope,
+    SkippedNewest, SortBy, SortOptions, SortOrder, SourceFilter, SourceKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +58,80 @@ impl MessageQueryOptions {
         self
     }
 }
+
+/// Reverse session selector resolved against a recency ranking of in-scope sessions.
+/// Ages are one-based and unsigned: age 0 = newest visible session, age 1 = previous.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionAxis {
+    /// The single session at a single recency age.
+    Back(u32),
+    /// A contiguous, both-ends-inclusive span of recency ages (newest-bound ..= oldest-bound).
+    Range(std::ops::RangeInclusive<u32>),
+}
+
+/// Structured, non-clamping failures for the reverse session axis. Each variant maps to a
+/// machine-readable `error_kind` so callers never have to parse a free-text message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSelectionError {
+    /// Age 0 (the newest, assumed-live session) was requested without `--include-newest`.
+    AgeZeroNotSelectable,
+    /// A `--session-back` age exceeded the oldest selectable age in scope.
+    SessionBackOutOfRange {
+        total_sessions_in_scope: i64,
+        max_selectable_age: u32,
+        requested: u32,
+    },
+    /// A `--session-range` bound exceeded the oldest selectable age in scope.
+    SessionRangeOutOfRange {
+        total_sessions_in_scope: i64,
+        max_selectable_age: u32,
+        requested_newest: u32,
+        requested_oldest: u32,
+    },
+}
+
+impl SessionSelectionError {
+    pub fn error_kind(&self) -> &'static str {
+        match self {
+            Self::AgeZeroNotSelectable => "age_zero_not_selectable",
+            Self::SessionBackOutOfRange { .. } => "session_back_out_of_range",
+            Self::SessionRangeOutOfRange { .. } => "session_range_out_of_range",
+        }
+    }
+}
+
+impl std::fmt::Display for SessionSelectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AgeZeroNotSelectable => f.write_str(
+                "session age 0 is the newest (assumed-live) session and is not selectable; \
+                 pass --include-newest to address it",
+            ),
+            Self::SessionBackOutOfRange {
+                total_sessions_in_scope,
+                max_selectable_age,
+                requested,
+            } => write!(
+                f,
+                "--session-back {requested} is out of range: {total_sessions_in_scope} session(s) \
+                 in scope, max selectable age is {max_selectable_age}",
+            ),
+            Self::SessionRangeOutOfRange {
+                total_sessions_in_scope,
+                max_selectable_age,
+                requested_newest,
+                requested_oldest,
+            } => write!(
+                f,
+                "--session-range {requested_oldest}..{requested_newest} is out of range: \
+                 {total_sessions_in_scope} session(s) in scope, max selectable age is \
+                 {max_selectable_age}",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SessionSelectionError {}
 
 #[derive(Debug)]
 pub struct TeleportSessionContext {
@@ -297,7 +372,7 @@ impl QueryService {
 
     pub fn messages(
         &self,
-        session_id: Option<&str>,
+        session_ids: &[String],
         project: Option<&str>,
         source_filter: Option<SourceFilter>,
         options: MessageQueryOptions,
@@ -307,68 +382,26 @@ impl QueryService {
             None => None,
         };
 
-        let mut filtered = self
+        let filtered = self
             .messages
             .iter()
             .filter(|message| {
                 matches_source_filter(message.source, source_filter)
-                    && matches_session_filter(message.session_id.as_str(), session_id)
+                    && matches_session_filter(message.session_id.as_str(), session_ids)
                     && matches_message_project_filter(message, resolved_project.as_ref())
             })
             .cloned()
             .collect::<Vec<_>>();
         let total_messages = filtered.len() as i64;
-        let session_message_counts = build_session_message_counts(&filtered);
-        sort_messages(
-            &mut filtered,
-            options.sort.by,
-            options.sort.order,
-            &session_message_counts,
-        );
-        let selected_total = options
-            .message_index_range
-            .map(|range| message_index_range_len(filtered.len(), range))
-            .unwrap_or(filtered.len());
-        let filtered = apply_message_index_range(filtered, options.message_index_range);
-
-        let paged = if options.sort.by == SortBy::Timestamp && options.sort.order == SortOrder::Asc
-        {
-            // Preserve the historical "newest window, then chronological output" behavior.
-            let descending = filtered.into_iter().rev().collect::<Vec<_>>();
-            let mut paged = apply_pagination(descending, options.limit, options.offset);
-            paged.reverse();
-            paged
-        } else {
-            apply_pagination(filtered, options.limit, options.offset)
-        };
-
-        let page_size = paged.len();
-        let next_offset = (options.offset + page_size) as i64;
-        let next_page = options.limit.is_some() && next_offset < selected_total as i64;
-
-        let messages = paged
-            .into_iter()
-            .map(|message| ApiMessage {
-                session_id: message.session_id,
-                source: message.source.as_str().to_string(),
-                project_name: message.project_name,
-                role: message.role,
-                content: message.content,
-                model: message.model,
-                timestamp: message.timestamp,
-                is_subagent: message.is_subagent,
-                msg_type: message.msg_type,
-                input_tokens: message.input_tokens,
-                output_tokens: message.output_tokens,
-            })
-            .collect();
+        let (paged, next_page, next_offset) = page_filtered_messages(filtered, &options);
 
         Ok(ApiMessagesResponse {
-            messages,
+            messages: paged.into_iter().map(api_message_from_record).collect(),
             total_messages,
             next_page,
             next_offset,
             next_command: None,
+            session_selection: None,
         })
     }
 
@@ -455,7 +488,7 @@ impl QueryService {
 
     pub fn latest_session_messages(
         &self,
-        session_id: Option<&str>,
+        session_ids: &[String],
         project: Option<&str>,
         source_filter: Option<SourceFilter>,
         window: usize,
@@ -471,7 +504,7 @@ impl QueryService {
             .iter()
             .filter(|message| {
                 matches_source_filter(message.source, source_filter)
-                    && matches_session_filter(message.session_id.as_str(), session_id)
+                    && matches_session_filter(message.session_id.as_str(), session_ids)
                     && matches_message_project_filter(message, resolved_project.as_ref())
             })
             .collect::<Vec<_>>();
@@ -486,6 +519,7 @@ impl QueryService {
                 next_page: false,
                 next_offset: 0,
                 next_command: None,
+                session_selection: None,
             });
         };
         let latest_key = (
@@ -518,7 +552,164 @@ impl QueryService {
             next_page: false,
             next_offset,
             next_command: None,
+            session_selection: None,
         })
+    }
+
+    /// Resolve messages for the session(s) at the given reverse-recency `axis` within scope.
+    ///
+    /// Sessions in scope are ranked newest-first via the shared `sort_sessions` comparator and
+    /// assigned one-based ages (age 0 = newest, assumed-live). The newest session is unselectable
+    /// unless `include_newest` is set; out-of-range ages fail loudly rather than clamp. A scope
+    /// with zero sessions is a legitimate empty result, not an error. The resulting messages from
+    /// the selected session(s) are merged and paginated exactly like `messages`.
+    pub fn messages_by_session_age(
+        &self,
+        project: Option<&str>,
+        all: bool,
+        source_filter: Option<SourceFilter>,
+        axis: &SessionAxis,
+        include_newest: bool,
+        options: MessageQueryOptions,
+    ) -> Result<std::result::Result<ApiMessagesResponse, SessionSelectionError>> {
+        let resolved_project = match project {
+            Some(project) => Some(resolve_project(&self.projects, source_filter, project)?),
+            None => None,
+        };
+
+        let mut ranked = self
+            .sessions
+            .iter()
+            .filter(|session| {
+                matches_source_filter(session.source, source_filter)
+                    && matches_project_filter(session, resolved_project.as_ref())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        sort_sessions(&mut ranked, SortBy::Timestamp, SortOrder::Desc);
+
+        let scope = SessionSelectionScope {
+            project: project.map(str::to_string),
+            all,
+            source: source_filter.map(|source| source_filter_kind(source).as_str().to_string()),
+        };
+
+        // A legitimately empty scope returns an empty success, distinct from out-of-range.
+        if ranked.is_empty() {
+            return Ok(Ok(ApiMessagesResponse {
+                messages: Vec::new(),
+                total_messages: 0,
+                next_page: false,
+                next_offset: 0,
+                next_command: None,
+                session_selection: Some(SessionSelection {
+                    scope,
+                    axis: session_axis_name(axis).to_string(),
+                    total_sessions_in_scope: 0,
+                    selected: Vec::new(),
+                    skipped_newest: None,
+                }),
+            }));
+        }
+
+        let total_in_scope = ranked.len();
+        let max_selectable_age = (total_in_scope - 1) as u32;
+
+        let selected_ages: Vec<u32> = match axis {
+            SessionAxis::Back(age) => {
+                if *age == 0 && !include_newest {
+                    return Ok(Err(SessionSelectionError::AgeZeroNotSelectable));
+                }
+                if *age > max_selectable_age {
+                    return Ok(Err(SessionSelectionError::SessionBackOutOfRange {
+                        total_sessions_in_scope: total_in_scope as i64,
+                        max_selectable_age,
+                        requested: *age,
+                    }));
+                }
+                vec![*age]
+            }
+            SessionAxis::Range(range) => {
+                let oldest = *range.end();
+                let newest = *range.start();
+                if oldest > max_selectable_age {
+                    return Ok(Err(SessionSelectionError::SessionRangeOutOfRange {
+                        total_sessions_in_scope: total_in_scope as i64,
+                        max_selectable_age,
+                        requested_newest: newest,
+                        requested_oldest: oldest,
+                    }));
+                }
+                (newest..=oldest).collect()
+            }
+        };
+
+        // age N is the (N)th session counting back from the newest in the recency ranking.
+        let selected_sessions: Vec<(u32, SessionAggregate)> = selected_ages
+            .iter()
+            .map(|age| (*age, ranked[*age as usize].clone()))
+            .collect();
+
+        let selected_keys: HashSet<SessionMessageCountKey> = selected_sessions
+            .iter()
+            .map(|(_, session)| {
+                (
+                    session.source,
+                    session.project_name.clone(),
+                    session.session_id.clone(),
+                )
+            })
+            .collect();
+
+        let filtered = self
+            .messages
+            .iter()
+            .filter(|message| selected_keys.contains(&session_key(message)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let total_messages = filtered.len() as i64;
+        let (paged, next_page, next_offset) = page_filtered_messages(filtered, &options);
+
+        let selected = selected_sessions
+            .into_iter()
+            .map(|(age, session)| SelectedSession {
+                age,
+                equivalent_command: format!("mmr messages --session {}", session.session_id),
+                session_id: session.session_id,
+                source: session.source.as_str().to_string(),
+                project_name: session.project_name,
+                first_timestamp: session.first_timestamp,
+                last_timestamp: session.last_timestamp,
+                message_count: session.message_count,
+            })
+            .collect::<Vec<_>>();
+
+        // Document the held-back newest session so callers understand why age 0 was skipped.
+        let skipped_newest = if include_newest {
+            None
+        } else {
+            ranked.first().map(|newest| SkippedNewest {
+                age: 0,
+                session_id: newest.session_id.clone(),
+                last_timestamp: newest.last_timestamp.clone(),
+                assumed_live: true,
+            })
+        };
+
+        Ok(Ok(ApiMessagesResponse {
+            messages: paged.into_iter().map(api_message_from_record).collect(),
+            total_messages,
+            next_page,
+            next_offset,
+            next_command: None,
+            session_selection: Some(SessionSelection {
+                scope,
+                axis: session_axis_name(axis).to_string(),
+                total_sessions_in_scope: total_in_scope as i64,
+                selected,
+                skipped_newest,
+            }),
+        }))
     }
 }
 
@@ -746,11 +937,8 @@ fn matches_message_project_filter(
     }
 }
 
-fn matches_session_filter(session_id: &str, filter: Option<&str>) -> bool {
-    match filter {
-        None => true,
-        Some(id) => session_id == id,
-    }
+fn matches_session_filter(session_id: &str, filter: &[String]) -> bool {
+    filter.is_empty() || filter.iter().any(|id| id == session_id)
 }
 
 fn matches_source_filter(source: SourceKind, filter: Option<SourceFilter>) -> bool {
@@ -804,6 +992,59 @@ fn sort_sessions(sessions: &mut [SessionAggregate], sort_by: SortBy, order: Sort
 }
 
 type SessionMessageCountKey = (SourceKind, String, String);
+
+/// Sort, apply the optional message-index window, and paginate a pre-filtered message set,
+/// preserving the "newest window, then chronological output" contract for ascending timestamp
+/// queries. Shared by `messages` and `messages_by_session_age` so both pages identically.
+fn page_filtered_messages(
+    mut filtered: Vec<MessageRecord>,
+    options: &MessageQueryOptions,
+) -> (Vec<MessageRecord>, bool, i64) {
+    let session_message_counts = build_session_message_counts(&filtered);
+    sort_messages(
+        &mut filtered,
+        options.sort.by,
+        options.sort.order,
+        &session_message_counts,
+    );
+    let selected_total = options
+        .message_index_range
+        .map(|range| message_index_range_len(filtered.len(), range))
+        .unwrap_or(filtered.len());
+    let filtered = apply_message_index_range(filtered, options.message_index_range);
+
+    let paged = if options.sort.by == SortBy::Timestamp && options.sort.order == SortOrder::Asc {
+        // Preserve the historical "newest window, then chronological output" behavior.
+        let descending = filtered.into_iter().rev().collect::<Vec<_>>();
+        let mut paged = apply_pagination(descending, options.limit, options.offset);
+        paged.reverse();
+        paged
+    } else {
+        apply_pagination(filtered, options.limit, options.offset)
+    };
+
+    let page_size = paged.len();
+    let next_offset = (options.offset + page_size) as i64;
+    let next_page = options.limit.is_some() && next_offset < selected_total as i64;
+    (paged, next_page, next_offset)
+}
+
+fn source_filter_kind(source: SourceFilter) -> SourceKind {
+    match source {
+        SourceFilter::Claude => SourceKind::Claude,
+        SourceFilter::Codex => SourceKind::Codex,
+        SourceFilter::Cursor => SourceKind::Cursor,
+        SourceFilter::Grok => SourceKind::Grok,
+        SourceFilter::Pi => SourceKind::Pi,
+    }
+}
+
+fn session_axis_name(axis: &SessionAxis) -> &'static str {
+    match axis {
+        SessionAxis::Back(_) => "session-back",
+        SessionAxis::Range(_) => "session-range",
+    }
+}
 
 fn build_session_message_counts(
     messages: &[MessageRecord],
@@ -1016,7 +1257,7 @@ mod tests {
 
         let response = service
             .messages(
-                Some("session-1"),
+                &["session-1".to_string()],
                 None,
                 None,
                 MessageQueryOptions::new(
@@ -1073,7 +1314,7 @@ mod tests {
 
         let response = service
             .latest_session_messages(
-                None,
+                &[],
                 Some("/Users/test/proj"),
                 Some(SourceFilter::Codex),
                 2,
@@ -1213,7 +1454,7 @@ mod tests {
 
         let response = service
             .messages(
-                None,
+                &[],
                 None,
                 None,
                 MessageQueryOptions::new(
@@ -1252,7 +1493,7 @@ mod tests {
 
         let response = service
             .messages(
-                None,
+                &[],
                 Some("-Users-test-proj"),
                 Some(SourceFilter::Claude),
                 MessageQueryOptions::new(
@@ -1651,7 +1892,7 @@ mod tests {
 
         let response = service
             .messages(
-                None,
+                &[],
                 None,
                 None,
                 MessageQueryOptions::new(
@@ -1701,7 +1942,7 @@ mod tests {
 
         let response = service
             .messages(
-                None,
+                &[],
                 None,
                 None,
                 MessageQueryOptions::new(
@@ -1742,7 +1983,7 @@ mod tests {
 
         let response = service
             .messages(
-                None,
+                &[],
                 None,
                 None,
                 MessageQueryOptions::new(
@@ -1939,5 +2180,226 @@ mod tests {
             .resolve_teleport_session(Some("sess-dup"), None, Some(SourceFilter::Codex))
             .expect_err("duplicate session ids should fail");
         assert!(error.to_string().contains("multiple sessions matched"));
+    }
+
+    fn three_session_service() -> QueryService {
+        QueryService::from_messages(vec![
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "sess-oldest",
+                "user",
+                "oldest-1",
+                "2025-01-01T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "sess-oldest",
+                "assistant",
+                "oldest-2",
+                "2025-01-01T00:01:00",
+                1,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "sess-middle",
+                "user",
+                "middle-1",
+                "2025-01-02T00:00:00",
+                0,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "sess-middle",
+                "assistant",
+                "middle-2",
+                "2025-01-02T00:01:00",
+                1,
+            ),
+            record(
+                SourceKind::Codex,
+                "/Users/test/proj",
+                "sess-newest",
+                "user",
+                "newest-1",
+                "2025-01-03T00:00:00",
+                0,
+            ),
+        ])
+    }
+
+    fn age_options() -> MessageQueryOptions {
+        MessageQueryOptions::new(
+            Some(50),
+            0,
+            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+        )
+    }
+
+    #[test]
+    fn messages_by_session_age_back_one_pins_previous_session() {
+        let service = three_session_service();
+        let response = service
+            .messages_by_session_age(
+                Some("/Users/test/proj"),
+                false,
+                Some(SourceFilter::Codex),
+                &SessionAxis::Back(1),
+                false,
+                age_options(),
+            )
+            .expect("query")
+            .expect("selectable age");
+
+        let selection = response
+            .session_selection
+            .expect("session_selection present");
+        assert_eq!(selection.axis, "session-back");
+        assert_eq!(selection.total_sessions_in_scope, 3);
+        assert_eq!(selection.selected.len(), 1);
+        assert_eq!(selection.selected[0].age, 1);
+        assert_eq!(selection.selected[0].session_id, "sess-middle");
+        assert_eq!(
+            selection.selected[0].equivalent_command,
+            "mmr messages --session sess-middle"
+        );
+        let skipped = selection
+            .skipped_newest
+            .expect("newest documented as skipped");
+        assert_eq!(skipped.session_id, "sess-newest");
+        assert_eq!(skipped.age, 0);
+        assert!(skipped.assumed_live);
+        assert!(
+            response
+                .messages
+                .iter()
+                .all(|message| message.session_id == "sess-middle")
+        );
+    }
+
+    #[test]
+    fn messages_by_session_age_zero_requires_include_newest() {
+        let service = three_session_service();
+
+        let rejected = service
+            .messages_by_session_age(
+                Some("/Users/test/proj"),
+                false,
+                Some(SourceFilter::Codex),
+                &SessionAxis::Back(0),
+                false,
+                age_options(),
+            )
+            .expect("query ok");
+        assert_eq!(
+            rejected.err(),
+            Some(SessionSelectionError::AgeZeroNotSelectable)
+        );
+
+        let response = service
+            .messages_by_session_age(
+                Some("/Users/test/proj"),
+                false,
+                Some(SourceFilter::Codex),
+                &SessionAxis::Back(0),
+                true,
+                age_options(),
+            )
+            .expect("query")
+            .expect("age 0 selectable with include-newest");
+        let selection = response
+            .session_selection
+            .expect("session_selection present");
+        assert_eq!(selection.selected[0].age, 0);
+        assert_eq!(selection.selected[0].session_id, "sess-newest");
+        assert!(selection.skipped_newest.is_none());
+    }
+
+    #[test]
+    fn messages_by_session_age_range_merges_two_previous_sessions_chronologically() {
+        let service = three_session_service();
+        let response = service
+            .messages_by_session_age(
+                Some("/Users/test/proj"),
+                false,
+                Some(SourceFilter::Codex),
+                &SessionAxis::Range(1..=2),
+                false,
+                age_options(),
+            )
+            .expect("query")
+            .expect("range selectable");
+
+        let selection = response
+            .session_selection
+            .expect("session_selection present");
+        assert_eq!(selection.axis, "session-range");
+        let ages = selection
+            .selected
+            .iter()
+            .map(|s| (s.age, s.session_id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(ages, vec![(1, "sess-middle"), (2, "sess-oldest")]);
+
+        let contents = response
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            contents,
+            vec!["oldest-1", "oldest-2", "middle-1", "middle-2"]
+        );
+        assert_eq!(response.total_messages, 4);
+    }
+
+    #[test]
+    fn messages_by_session_age_out_of_range_names_counts() {
+        let service = three_session_service();
+        let rejected = service
+            .messages_by_session_age(
+                Some("/Users/test/proj"),
+                false,
+                Some(SourceFilter::Codex),
+                &SessionAxis::Back(5),
+                false,
+                age_options(),
+            )
+            .expect("query ok");
+        assert_eq!(
+            rejected.err(),
+            Some(SessionSelectionError::SessionBackOutOfRange {
+                total_sessions_in_scope: 3,
+                max_selectable_age: 2,
+                requested: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn messages_by_session_age_empty_scope_is_empty_success_not_error() {
+        let service = three_session_service();
+        let response = service
+            .messages_by_session_age(
+                Some("/Users/test/does-not-exist"),
+                false,
+                Some(SourceFilter::Codex),
+                &SessionAxis::Back(1),
+                false,
+                age_options(),
+            )
+            .expect("query")
+            .expect("empty scope is a legitimate empty result");
+        let selection = response
+            .session_selection
+            .expect("session_selection present");
+        assert_eq!(selection.total_sessions_in_scope, 0);
+        assert!(selection.selected.is_empty());
+        assert!(selection.skipped_newest.is_none());
+        assert!(response.messages.is_empty());
     }
 }

@@ -103,7 +103,7 @@ pub fn pack_session(
 
     let messages = service
         .messages(
-            Some(&context.session.session_id),
+            std::slice::from_ref(&context.session.session_id),
             Some(&context.session.project_name),
             Some(source_filter),
             MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),

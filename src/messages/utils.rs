@@ -29,7 +29,7 @@ pub(crate) fn load_session_transcripts(
         .par_iter()
         .map(|selection| {
             let response = service.messages(
-                Some(&selection.session_id),
+                std::slice::from_ref(&selection.session_id),
                 Some(&selection.project_name),
                 Some(selection.source),
                 MessageQueryOptions::new(

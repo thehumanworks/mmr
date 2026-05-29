@@ -2334,6 +2334,389 @@ fn messages_session_with_explicit_project_uses_project_scope() {
     assert_eq!(empty_json["total_messages"].as_i64().unwrap(), 0);
 }
 
+// ---------------------------------------------------------------------------
+// reverse session selection: --session-back / --session-range / mmr prev
+// ---------------------------------------------------------------------------
+
+fn assert_messages_failure(output: &Output, expected_error_kind: &str) {
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(output);
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["command"], "messages");
+    assert_eq!(
+        json["error_kind"],
+        expected_error_kind,
+        "stdout={}",
+        stdout_text(output)
+    );
+    assert!(json["message"].is_string());
+}
+
+#[test]
+fn prev_returns_previous_session_in_cwd_project() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+
+    let output =
+        fixture.run_cli_in_dir_with_env(&["prev"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let selection = &json["session_selection"];
+    assert_eq!(selection["axis"], "session-back");
+    assert_eq!(selection["total_sessions_in_scope"].as_i64().unwrap(), 2);
+    let selected = selection["selected"].as_array().unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0]["age"].as_u64().unwrap(), 1);
+    // The newest session in the cwd project is the claude one (last_timestamp 00:02);
+    // the previous (age 1) is the codex session (last_timestamp 00:00:02).
+    assert_eq!(
+        selected[0]["session_id"].as_str().unwrap(),
+        "sess-cwd-codex"
+    );
+    assert_eq!(
+        selection["skipped_newest"]["session_id"].as_str().unwrap(),
+        "sess-cwd-claude"
+    );
+    assert!(
+        json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["session_id"].as_str().unwrap() == "sess-cwd-codex")
+    );
+}
+
+#[test]
+fn messages_session_back_one_reports_age_one() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--session-back",
+        "1",
+        "--pretty",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let selection = &json["session_selection"];
+    assert_eq!(selection["axis"], "session-back");
+    assert_eq!(selection["total_sessions_in_scope"].as_i64().unwrap(), 2);
+    let selected = selection["selected"].as_array().unwrap();
+    assert_eq!(selected[0]["age"].as_u64().unwrap(), 1);
+    assert_eq!(selected[0]["session_id"].as_str().unwrap(), "sess-codex-2");
+    assert_eq!(
+        selected[0]["equivalent_command"].as_str().unwrap(),
+        "mmr messages --session sess-codex-2"
+    );
+    assert!(
+        json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["session_id"].as_str().unwrap() == "sess-codex-2")
+    );
+}
+
+#[test]
+fn messages_session_range_merges_two_previous_sessions() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--all",
+        "--session-range",
+        "2..1",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let selection = &json["session_selection"];
+    assert_eq!(selection["axis"], "session-range");
+    assert_eq!(selection["total_sessions_in_scope"].as_i64().unwrap(), 3);
+    let ages: Vec<(u64, &str)> = selection["selected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["age"].as_u64().unwrap(),
+                s["session_id"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(ages, vec![(1, "sess-codex-1"), (2, "sess-codex-2")]);
+
+    let contents: Vec<&str> = json["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["content"].as_str().unwrap())
+        .collect();
+    // Merged chronologically across both sessions (age 1 oldest message is 00:00:01).
+    assert_eq!(contents.first().copied(), Some("hello from codex"));
+    assert_eq!(contents.last().copied(), Some("short codex answer"));
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
+}
+
+#[test]
+fn messages_session_range_all_sources_carries_source_and_project() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["messages", "--all", "--session-range", "2..1"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let selection = &json["session_selection"];
+    assert!(selection["scope"]["all"].as_bool().unwrap());
+    assert!(selection["scope"]["source"].is_null());
+    let selected = selection["selected"].as_array().unwrap();
+    let ages: Vec<u64> = selected
+        .iter()
+        .map(|s| s["age"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ages, vec![1, 2]);
+    for entry in selected {
+        assert!(
+            !entry["source"].as_str().unwrap().is_empty(),
+            "each selected entry self-describes its source"
+        );
+        assert!(
+            !entry["project_name"].as_str().unwrap().is_empty(),
+            "each selected entry self-describes its project_name"
+        );
+    }
+}
+
+#[test]
+fn messages_session_back_zero_is_rejected() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--session-back",
+        "0",
+    ]);
+    assert_messages_failure(&output, "age_zero_not_selectable");
+}
+
+#[test]
+fn messages_session_back_zero_with_include_newest_returns_newest() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--session-back",
+        "0",
+        "--include-newest",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    let selection = &json["session_selection"];
+    let selected = selection["selected"].as_array().unwrap();
+    assert_eq!(selected[0]["age"].as_u64().unwrap(), 0);
+    assert_eq!(selected[0]["session_id"].as_str().unwrap(), "sess-codex-1");
+    assert!(
+        selection["skipped_newest"].is_null(),
+        "include-newest means nothing is skipped"
+    );
+}
+
+#[test]
+fn messages_session_back_out_of_range_names_counts() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--all",
+        "--session-back",
+        "5",
+    ]);
+    assert_messages_failure(&output, "session_back_out_of_range");
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_sessions_in_scope"].as_i64().unwrap(), 3);
+    assert_eq!(json["max_selectable_age"].as_u64().unwrap(), 2);
+    assert_eq!(json["requested_age"].as_u64().unwrap(), 5);
+}
+
+#[test]
+fn messages_rejects_multiple_session_selectors() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--all",
+        "--session-back",
+        "1",
+        "--latest",
+        "5",
+    ]);
+    assert_messages_failure(&output, "multiple_session_selectors");
+}
+
+#[test]
+fn messages_without_session_axis_omits_session_selection_field() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--limit", "5"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert!(
+        json.get("session_selection").is_none(),
+        "session_selection must be absent for plain messages queries"
+    );
+}
+
+#[test]
+fn messages_strawman_from_index_flags_are_rejected_by_clap() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["messages", "--from-index", "-1", "--to-index", "-1"]);
+    assert!(
+        !output.status.success(),
+        "strawman --from-index/--to-index must not be accepted"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument") || stderr.contains("--from-index"),
+        "expected clap unexpected-argument error, got: {stderr}"
+    );
+}
+
+#[test]
+fn session_axis_pagination_pins_to_concrete_session_not_recency_age() {
+    let fixture = TestFixture::seeded();
+
+    // Page 1: previous session (age 1) in codex-proj is sess-codex-2 (4 messages).
+    let page1 = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--session-back",
+        "1",
+        "--limit",
+        "2",
+    ]);
+    assert!(
+        page1.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
+    let page1_json = parse_stdout_json(&page1);
+    assert!(page1_json["next_page"].as_bool().unwrap());
+    let next_cmd = page1_json["next_command"].as_str().unwrap().to_string();
+    // The next command must pin to the concrete session id, never echo the unstable age axis.
+    assert!(
+        next_cmd.contains("--session sess-codex-2"),
+        "next_command should pin to the resolved session id, got: {next_cmd}"
+    );
+    assert!(
+        !next_cmd.contains("--session-back") && !next_cmd.contains("--session-range"),
+        "next_command must not echo the recency-age selector, got: {next_cmd}"
+    );
+    assert!(
+        next_cmd.contains("--offset 2"),
+        "next_command should advance the offset, got: {next_cmd}"
+    );
+
+    // A new, newer session lands between page reads, shifting every recency age by one.
+    let injected = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-injected.jsonl");
+    write_file(
+        &injected,
+        r#"{"type":"session_meta","timestamp":"2025-01-09T00:00:00","payload":{"id":"sess-codex-injected","cwd":"/Users/test/codex-proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-09T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-09T00:00:01","payload":{"type":"user_message","message":"freshly injected session"}}
+{"type":"response_item","timestamp":"2025-01-09T00:01:00","payload":{"role":"assistant","content":[{"type":"output_text","text":"injected answer"}]}}"#,
+    );
+
+    // Page 2 follows the pinned next_command verbatim and must stay on sess-codex-2.
+    let page2_args: Vec<&str> = next_cmd.split_whitespace().skip(1).collect();
+    let page2 = fixture.run_cli(&page2_args);
+    assert!(
+        page2.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
+    let page2_json = parse_stdout_json(&page2);
+    let page2_messages = page2_json["messages"].as_array().unwrap();
+    assert_eq!(page2_messages.len(), 2);
+    assert!(
+        page2_messages
+            .iter()
+            .all(|m| m["session_id"].as_str().unwrap() == "sess-codex-2"),
+        "paged window must stay pinned to the original session after a new one is injected"
+    );
+
+    // Contrast: re-running the age-based selector after injection shifts to a different session,
+    // proving the pin is load-bearing (age 1 is now sess-codex-1, not sess-codex-2).
+    let shifted = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "messages",
+        "--project",
+        "/Users/test/codex-proj",
+        "--session-back",
+        "1",
+        "--limit",
+        "2",
+        "--offset",
+        "2",
+    ]);
+    let shifted_json = parse_stdout_json(&shifted);
+    let shifted_session = shifted_json["session_selection"]["selected"][0]["session_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        shifted_session, "sess-codex-1",
+        "the recency age axis is intentionally unstable across an injected session"
+    );
+}
+
 #[test]
 fn teleport_bundle_pack_inspect_apply_round_trip() {
     let fixture = TestFixture::seeded();

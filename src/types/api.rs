@@ -64,6 +64,50 @@ pub struct ApiMessagesResponse {
     pub next_offset: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_command: Option<String>,
+    /// Present only when a reverse session-axis selector (`--session-back`/`--session-range`)
+    /// is used; omitted entirely otherwise so default `messages` output stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_selection: Option<SessionSelection>,
+}
+
+/// Self-describing record of which prior session(s) a reverse-axis query resolved to,
+/// so a caller can read the answer without re-deriving the recency ranking.
+#[derive(Debug, Serialize)]
+pub struct SessionSelection {
+    pub scope: SessionSelectionScope,
+    pub axis: String,
+    pub total_sessions_in_scope: i64,
+    pub selected: Vec<SelectedSession>,
+    /// The newest (assumed-live) session that was held back when `--include-newest` is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_newest: Option<SkippedNewest>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionSelectionScope {
+    pub project: Option<String>,
+    pub all: bool,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SelectedSession {
+    pub age: u32,
+    pub session_id: String,
+    pub source: String,
+    pub project_name: String,
+    pub first_timestamp: String,
+    pub last_timestamp: String,
+    pub message_count: i32,
+    pub equivalent_command: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkippedNewest {
+    pub age: u32,
+    pub session_id: String,
+    pub last_timestamp: String,
+    pub assumed_live: bool,
 }
 
 #[derive(Debug, Serialize)]

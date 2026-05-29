@@ -17,7 +17,21 @@ A session ID is globally unique. The caller already knows which session they wan
 | `--session`                   | All projects (no cwd)  | Yes (`--source`) |
 | `--session --source X`        | All projects (no cwd)  | No           |
 | `--session --project P`       | Explicit project `P`   | No           |
+| `--session-back` / `--session-range` | cwd auto-discovery (recency computed within scope) | No |
+| `--session-back --all`        | All projects (recency computed across all) | No |
 | (no `--session`)              | cwd auto-discovery     | No           |
+
+## Invariant: recency selectors stay cwd-scoped; literal `--session <id>` stays global
+
+A literal `--session <id>` is an identity lookup: the caller already knows which
+session they want, so it bypasses cwd auto-discovery and searches all projects.
+
+The recency selectors `--session-back` and `--session-range` are **not** identity
+lookups — "age 1" only has meaning relative to a scope. They therefore keep the
+default cwd-project scope (ADR-002): a bare `mmr messages --session-back 1` means
+"the previous session in this cwd project". Widen the recency scope explicitly
+with `--all` or `--project`. See ADR-004 for the full rationale, including why
+age 0 (the assumed-live newest session) is held back by default.
 
 ### Hint message
 

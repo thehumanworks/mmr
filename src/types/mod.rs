@@ -10,6 +10,7 @@ pub use agent::{
 };
 pub use api::{
     ApiMessage, ApiMessagesResponse, ApiProject, ApiProjectsResponse, ApiSession,
-    ApiSessionsResponse, RememberResponse,
+    ApiSessionsResponse, RememberResponse, SelectedSession, SessionSelection,
+    SessionSelectionScope, SkippedNewest,
 };
 pub use domain::{Agent, MessageRecord, SortBy, SortOptions, SortOrder, SourceFilter, SourceKind};

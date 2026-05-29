@@ -1,5 +1,16 @@
 # Repository Guidelines
 
+## Goal-first workflow (required)
+
+Every interaction with this codebase must start by capturing the user's request
+as a goal-driven prompt document under `goals/`. Before writing or changing code,
+create `goals/<YYYY-MM-DD>-<kebab-title>.md` with YAML frontmatter (`title`,
+`description`, `date`, `status`) and a body that states the outcome, the surface
+touched, the validation plan, and the definition of done. Drive the work from
+that document and update its `status` as it progresses (`in-progress` → `done`,
+or `blocked` with the smallest missing fact). Existing goals in `goals/` are the
+template; `goals/2026-05-29-reverse-session-selection.md` is a worked example.
+
 ## Project Structure & Module Organization
 
 `mmr` is a Rust CLI focused on local Claude/Codex/Cursor/Pi history parsing.
@@ -45,6 +56,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- messages` — list messages for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
 - `cargo run -- messages --all` — list messages across all projects and sessions.
 - `cargo run -- messages --session sess-123` — messages for a specific session.
+- `cargo run -- prev` — messages for the previous session (recency age 1) in the cwd project; `prev N` goes N sessions back. Sugar for `messages --session-back N`.
+- `cargo run -- messages --session-back N` — the single session N back from the newest (age 0 = newest, held back unless `--include-newest`). `--session-range FROM..TO` selects an inclusive span by age (e.g. `2..1`). Recency selectors stay cwd-scoped; see ADR-004 and `specs/messages.md`.
 - `cargo run -- --source claude messages --project my-proj` — messages filtered by source and project.
 - `cargo run -- export` — all messages for current directory (cwd) as project, all sources, chronological JSON.
 - `cargo run -- export --project /path/to/proj` — all messages for the given project.
