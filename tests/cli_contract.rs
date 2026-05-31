@@ -1263,6 +1263,55 @@ fn messages_filtered_by_project() {
 }
 
 #[test]
+fn messages_filtered_by_project_basename_alias() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["--source", "codex", "messages", "--project", "codex-proj"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
+    let messages = json["messages"].as_array().unwrap();
+    assert!(!messages.is_empty());
+    for msg in messages {
+        assert_eq!(
+            msg["project_name"].as_str().unwrap(),
+            "/Users/test/codex-proj"
+        );
+    }
+}
+
+#[test]
+fn sessions_filtered_by_generated_project_alias() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "sessions",
+        "--project=-Users-test-codex-proj",
+    ]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 2);
+    let sessions = json["sessions"].as_array().unwrap();
+    assert!(
+        sessions.iter().all(|session| {
+            session["project_name"].as_str().unwrap() == "/Users/test/codex-proj"
+        })
+    );
+}
+
+#[test]
 fn default_source_empty_string_keeps_both_sources() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);

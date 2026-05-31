@@ -1,5 +1,18 @@
 # Messages Command
 
+## `--project`
+
+Explicit `--project <value>` is alias-capable. The selector first preserves
+existing exact project matching, including absolute paths and provider-native
+project names. If no exact project matches, it resolves known project aliases,
+including the basename of stored project paths and generated provider path aliases
+such as `-Users-test-codex-proj`.
+
+If an alias maps to the same canonical project across multiple sources, the
+query includes each source-specific project name in that project. If the same
+alias maps to multiple distinct project paths, the command fails and asks the
+caller to pass an exact project path.
+
 ## `--latest`
 
 `mmr messages --latest` selects the latest session in the current scope and returns only the latest message from that session.

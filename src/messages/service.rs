@@ -882,21 +882,13 @@ fn resolve_project(
         if !matches_source_filter(item.source, source_filter) {
             continue;
         }
-        for candidate in [&item.name, &item.original_path] {
-            if candidate.is_empty() {
-                continue;
-            }
-            let matches_basename = path_basename(candidate) == Some(basename);
-            let matches_literal = candidate == trimmed;
-            if (matches_basename || matches_literal) && !alias_matches.contains(&item.name) {
-                alias_matches.push(item.name.clone());
-                let identity = if item.original_path.is_empty() {
-                    item.name.clone()
-                } else {
-                    item.original_path.clone()
-                };
-                alias_identities.push(identity);
-            }
+        let aliases = project_lookup_aliases(&item.name, &item.original_path);
+        let matches_alias = aliases
+            .iter()
+            .any(|alias| alias == trimmed || alias == basename);
+        if matches_alias && !alias_matches.contains(&item.name) {
+            alias_matches.push(item.name.clone());
+            alias_identities.push(project_alias_identity(item));
         }
     }
 
@@ -918,6 +910,14 @@ fn resolve_project(
     Ok(ResolvedProject {
         names: vec![project.to_string()],
     })
+}
+
+fn project_alias_identity(item: &ProjectAggregate) -> String {
+    if item.original_path.is_empty() {
+        item.name.clone()
+    } else {
+        item.original_path.clone()
+    }
 }
 
 fn matches_project_filter(session: &SessionAggregate, resolved: Option<&ResolvedProject>) -> bool {
@@ -2012,6 +2012,28 @@ mod tests {
 
         let resolved = resolve_project(&service.projects, Some(SourceFilter::Codex), "mmr")
             .expect("basename alias should resolve");
+
+        assert_eq!(resolved.names, vec!["/Users/alice/dev/mmr".to_string()]);
+    }
+
+    #[test]
+    fn resolve_project_matches_generated_provider_alias() {
+        let service = QueryService::from_messages(vec![record(
+            SourceKind::Codex,
+            "/Users/alice/dev/mmr",
+            "sess-1",
+            "user",
+            "hello",
+            "2025-01-01T00:00:00",
+            0,
+        )]);
+
+        let resolved = resolve_project(
+            &service.projects,
+            Some(SourceFilter::Codex),
+            "-Users-alice-dev-mmr",
+        )
+        .expect("generated project alias should resolve");
 
         assert_eq!(resolved.names, vec!["/Users/alice/dev/mmr".to_string()]);
     }
