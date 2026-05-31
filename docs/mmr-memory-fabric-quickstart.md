@@ -179,6 +179,20 @@ mmr --source codex read source --pretty
 when cwd auto-discovery succeeds. Use `--all` for cross-project session listing
 or recall, and use `read source` for source-wide raw reads across projects.
 
+## Agent Skill
+
+Use the bundled skill when an agent needs operational guidance beyond `--help`:
+
+```bash
+mmr skill load
+mmr skill install
+mmr skill install --local
+```
+
+`skill load` prints the skill bundle to stdout. `skill install` replaces
+`~/.agents/skills/mmr`; `--local` replaces `.agents/skills/mmr` under the
+current project.
+
 ## Recovery
 
 Unlinked cwd:

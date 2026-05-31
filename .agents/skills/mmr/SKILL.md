@@ -14,6 +14,7 @@ description: "mmr is the local tool for querying and retrieving AI coding sessio
 - Read raw history (`mmr read session`, `mmr read project`, `mmr read source --source <source>`)
 - Generate summaries (`mmr summarize project|session|source`)
 - Prepare assimilation handoffs (`mmr assimilate project|source`)
+- Load or install this skill from the CLI (`mmr skill load`, `mmr skill install`, `mmr skill install --local`)
 
 ## Subskills
 
@@ -41,6 +42,7 @@ Use the top-level `mmr` skill when:
 - You have a general question about mmr commands, flags, or behavior
 - You're not sure which specific capability or subskill applies
 - You're setting up, initializing, or troubleshooting mmr itself
+- You need to bootstrap this skill into a user or project skill directory
 
 For most continuity and previous-session work, load the `session-mining` subskill directly.
 

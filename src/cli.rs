@@ -78,11 +78,40 @@ const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
 const ENV_DEFAULT_REMEMBER_AGENT: &str = "MMR_DEFAULT_REMEMBER_AGENT";
 const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 
+#[derive(Debug, Clone, Copy)]
+struct BundledSkillFile {
+    relative_path: &'static str,
+    contents: &'static str,
+}
+
+const BUNDLED_MMR_SKILL_FILES: &[BundledSkillFile] = &[
+    BundledSkillFile {
+        relative_path: "SKILL.md",
+        contents: include_str!("../.agents/skills/mmr/SKILL.md"),
+    },
+    BundledSkillFile {
+        relative_path: "session-mining/SKILL.md",
+        contents: include_str!("../.agents/skills/mmr/session-mining/SKILL.md"),
+    },
+    BundledSkillFile {
+        relative_path: "session-mining/references/extraction-jq-patterns.md",
+        contents: include_str!(
+            "../.agents/skills/mmr/session-mining/references/extraction-jq-patterns.md"
+        ),
+    },
+    BundledSkillFile {
+        relative_path: "session-mining/references/session-retrieval-patterns.md",
+        contents: include_str!(
+            "../.agents/skills/mmr/session-mining/references/session-retrieval-patterns.md"
+        ),
+    },
+];
+
 #[derive(Parser, Debug)]
 #[command(
     name = "mmr",
     about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
-    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --project /path/to/project\n  mmr recall --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr assimilate project --pretty\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON."
+    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --project /path/to/project\n  mmr recall --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr assimilate project --pretty\n  mmr skill load\n  mmr skill install --local\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -116,6 +145,8 @@ pub enum Commands {
     Summarize(SummarizeArgs),
     /// Return prompt/runbook/evidence for memory assimilation
     Assimilate(AssimilateArgs),
+    /// Load or install the bundled mmr agent skill
+    Skill(SkillArgs),
     /// Import normalized events into the local memory store
     Import(ImportArgs),
     /// Add a human-authored note to the local memory store
@@ -424,6 +455,27 @@ pub struct AssimilateSourceArgs {
     /// Keep only events at or after this RFC3339 timestamp
     #[arg(long)]
     since: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct SkillArgs {
+    #[command(subcommand)]
+    command: SkillCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SkillCommand {
+    /// Print the bundled mmr skill to stdout for immediate agent use
+    Load,
+    /// Install the bundled mmr skill, replacing any existing target directory
+    Install(SkillInstallArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SkillInstallArgs {
+    /// Install into .agents/skills/mmr under the current directory instead of ~/.agents/skills/mmr
+    #[arg(long)]
+    local: bool,
 }
 
 #[derive(Args, Debug)]
@@ -885,6 +937,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     if let Commands::Assimilate(args) = &cli.command {
         return serialize(&assimilate_response(args, cli.source)?, cli.pretty);
     }
+    if let Commands::Skill(args) = &cli.command {
+        return skill_command_response(args, cli.pretty);
+    }
     if let Commands::Import(args) = &cli.command {
         return serialize(&import_response(args, source_filter)?, cli.pretty);
     }
@@ -952,6 +1007,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Assimilate(args) => {
             serialize(&assimilate_response(&args, cli.source)?, cli.pretty)?
         }
+        Commands::Skill(args) => skill_command_response(&args, cli.pretty)?,
         Commands::Init(args) => serialize(&init_response(&args, source_filter)?, cli.pretty)?,
         Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
         Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
@@ -1739,6 +1795,95 @@ fn response_message<T: Serialize>(response: &T) -> Option<String> {
         .get("message")?
         .as_str()
         .map(str::to_string)
+}
+
+#[derive(Debug, Serialize)]
+struct SkillInstallResponse {
+    command: String,
+    scope: String,
+    path: String,
+    replaced: bool,
+    files: Vec<String>,
+}
+
+fn skill_command_response(args: &SkillArgs, pretty: bool) -> Result<String> {
+    match &args.command {
+        SkillCommand::Load => Ok(render_bundled_mmr_skill()),
+        SkillCommand::Install(args) => serialize(&install_bundled_mmr_skill(args.local)?, pretty),
+    }
+}
+
+fn render_bundled_mmr_skill() -> String {
+    let mut output = String::from(
+        "# mmr skill bundle\n\n\
+This is the bundled `mmr` skill. Read `mmr/SKILL.md` first, then load referenced files only when needed.\n",
+    );
+    for file in BUNDLED_MMR_SKILL_FILES {
+        output.push_str("\n---\n\n");
+        output.push_str("## mmr/");
+        output.push_str(file.relative_path);
+        output.push_str("\n\n");
+        output.push_str(file.contents.trim_end());
+        output.push('\n');
+    }
+    output
+}
+
+fn install_bundled_mmr_skill(local: bool) -> Result<SkillInstallResponse> {
+    let target = if local {
+        std::env::current_dir()
+            .context("current_dir")?
+            .join(".agents")
+            .join("skills")
+            .join("mmr")
+    } else {
+        let home = std::env::var_os("HOME").context("HOME is not set")?;
+        PathBuf::from(home)
+            .join(".agents")
+            .join("skills")
+            .join("mmr")
+    };
+    let replaced = remove_existing_skill_target(&target)?;
+    for file in BUNDLED_MMR_SKILL_FILES {
+        let path = target.join(file.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create skill directory {}", parent.display()))?;
+        }
+        fs::write(&path, file.contents)
+            .with_context(|| format!("write skill file {}", path.display()))?;
+    }
+
+    Ok(SkillInstallResponse {
+        command: "skill/install".to_string(),
+        scope: if local { "local" } else { "user" }.to_string(),
+        path: target.display().to_string(),
+        replaced,
+        files: BUNDLED_MMR_SKILL_FILES
+            .iter()
+            .map(|file| file.relative_path.to_string())
+            .collect(),
+    })
+}
+
+fn remove_existing_skill_target(target: &Path) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspect existing skill target {}", target.display()));
+        }
+    };
+
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(target)
+            .with_context(|| format!("remove existing skill directory {}", target.display()))?;
+    } else {
+        fs::remove_file(target)
+            .with_context(|| format!("remove existing skill file {}", target.display()))?;
+    }
+    Ok(true)
 }
 
 fn parse_pack_fidelity(as_flag: Option<&str>) -> Result<TeleportFidelity, TeleportFailure> {
@@ -4256,6 +4401,25 @@ mod tests {
             panic!("expected read session command");
         };
         assert_eq!(session.session_id, "sess-123");
+    }
+
+    #[test]
+    fn skill_commands_parse() {
+        let load = Cli::try_parse_from(["mmr", "skill", "load"]).expect("skill load");
+        let Commands::Skill(args) = load.command else {
+            panic!("expected skill command");
+        };
+        assert!(matches!(args.command, SkillCommand::Load));
+
+        let install =
+            Cli::try_parse_from(["mmr", "skill", "install", "--local"]).expect("skill install");
+        let Commands::Skill(args) = install.command else {
+            panic!("expected skill command");
+        };
+        let SkillCommand::Install(install) = args.command else {
+            panic!("expected skill install command");
+        };
+        assert!(install.local);
     }
 
     #[test]

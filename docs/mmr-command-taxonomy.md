@@ -35,6 +35,10 @@
   evidence bundle for project memory deduplication and generalisation.
 - `mmr assimilate source --source <source>` returns the source-wide equivalent,
   using a bounded per-project evidence window.
+- `mmr skill load` prints the bundled mmr agent skill to stdout for immediate
+  agent context.
+- `mmr skill install` replaces `~/.agents/skills/mmr` with the bundled skill;
+  `--local` targets `.agents/skills/mmr` under the current project.
 - `mmr redact scan` and `mmr redact explain` inspect privacy policy outcomes.
 - `mmr teleport ...` remains the native session handoff namespace.
 

@@ -75,6 +75,9 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source codex summarize source` — generate a stateless summary over one source across projects.
 - `cargo run -- assimilate project` — return the project memory deduplication/generalization prompt, runbook, output contract, and evidence bundle.
 - `cargo run -- --source codex assimilate source` — return the harness-wide assimilation prompt, runbook, output contract, and evidence bundle.
+- `cargo run -- skill load` — print the bundled mmr agent skill to stdout for immediate agent context.
+- `cargo run -- skill install` — replace `~/.agents/skills/mmr` with the bundled mmr skill.
+- `cargo run -- skill install --local` — replace `.agents/skills/mmr` under the current project with the bundled mmr skill.
 - `cargo fmt` — format Rust code.
 - `cargo test` — unit + integration tests.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.

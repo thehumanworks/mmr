@@ -57,6 +57,15 @@ fn run_cli_with_home(home: &Path, args: &[&str]) -> Output {
         .expect("run mmr")
 }
 
+fn run_cli_with_home_in_dir(home: &Path, cwd: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(args)
+        .env("HOME", home)
+        .current_dir(cwd)
+        .output()
+        .expect("run mmr")
+}
+
 fn run_cli_with_home_and_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
     command.args(args).env("HOME", home);
@@ -247,6 +256,88 @@ fn seed_empty_discovered_project(fixture: &TestFixture) -> PathBuf {
     );
 
     cwd
+}
+
+// --- skill ---
+
+#[test]
+fn skill_load_prints_bundled_skill_for_agent_context() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["skill", "load"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = stdout_text(&output);
+    assert!(stdout.starts_with("# mmr skill bundle"));
+    assert!(stdout.contains("## mmr/SKILL.md"));
+    assert!(stdout.contains("name: mmr"));
+    assert!(stdout.contains("`mmr` is the local Rust CLI"));
+    assert!(stdout.contains("## mmr/session-mining/SKILL.md"));
+    assert!(stdout.contains("session-mining"));
+}
+
+#[test]
+fn skill_install_replaces_user_scoped_skill() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&home).expect("create home");
+    let target = home.join(".agents").join("skills").join("mmr");
+    write_file(&target.join("stale.txt"), "remove me");
+
+    let output = run_cli_with_home(&home, &["skill", "install"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "skill/install");
+    assert_eq!(json["scope"], "user");
+    assert_eq!(json["path"], target.display().to_string());
+    assert_eq!(json["replaced"], true);
+    assert!(target.join("SKILL.md").is_file());
+    assert!(target.join("session-mining").join("SKILL.md").is_file());
+    assert!(
+        target
+            .join("session-mining")
+            .join("references")
+            .join("session-retrieval-patterns.md")
+            .is_file()
+    );
+    assert!(!target.join("stale.txt").exists());
+}
+
+#[test]
+fn skill_install_local_replaces_project_scoped_skill() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    let project = tmp.path().join("project");
+    fs::create_dir_all(&home).expect("create home");
+    fs::create_dir_all(&project).expect("create project");
+    let target = project.join(".agents").join("skills").join("mmr");
+    write_file(&target.join("stale.txt"), "remove me");
+
+    let output = run_cli_with_home_in_dir(&home, &project, &["skill", "install", "--local"]);
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    let canonical_target = fs::canonicalize(&target).expect("canonical target");
+    assert_eq!(json["command"], "skill/install");
+    assert_eq!(json["scope"], "local");
+    assert_eq!(json["path"], canonical_target.display().to_string());
+    assert_eq!(json["replaced"], true);
+    assert!(target.join("SKILL.md").is_file());
+    assert!(target.join("session-mining").join("SKILL.md").is_file());
+    assert!(!target.join("stale.txt").exists());
 }
 
 // --- projects ---
