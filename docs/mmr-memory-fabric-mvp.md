@@ -18,7 +18,7 @@ abstraction.
 The central flow is:
 
 ```text
-raw history -> retrieval/search/summary -> dream assimilation with evidence
+raw history -> retrieval/search/summary -> dream prompt/runbook -> agent-led assimilation
 ```
 
 ## Goals
@@ -33,7 +33,8 @@ raw history -> retrieval/search/summary -> dream assimilation with evidence
 - Add exact and structured discovery with `mmr rg` and `mmr search`.
 - Rename the stateless continuity brief command from `remember` to `summary`,
   keeping `remember` as a compatibility alias unless explicitly removed later.
-- Add `mmr dream` as the only public stateful assimilation command.
+- Add `mmr dream` as the public prompt/runbook handoff for agent-led
+  assimilation.
 - Redact before remote sync by default.
 - Keep learned memory evidence-linked and reversible.
 
@@ -62,10 +63,10 @@ raw history -> retrieval/search/summary -> dream assimilation with evidence
 - Blob: large raw or derived content stored out of the hot event row.
 - Source cursor: adapter progress state used to make import and watcher passes
   idempotent.
-- Evidence ref: a stable pointer from a summary, search result, dream output, or
-  learned memory record back to source events.
-- Learned memory: an assimilated durable claim or preference derived by
-  `mmr dream` from valid evidence refs.
+- Evidence ref: a stable pointer from a summary, search result, dream handoff,
+  or learned memory record back to source events.
+- Learned memory: an assimilated durable claim or preference derived from valid
+  evidence refs and applied through a durable memory surface.
 - Sync manifest: replayable remote export metadata for hydration on a fresh
   host.
 
@@ -217,10 +218,10 @@ Minimum JSON fields:
       "action": "..."
     },
     "dream_runner": {
-      "runner": "mock",
-      "status": "available",
+      "runner": "prompt_runbook",
+      "status": "not_required",
       "command_configured": false,
-      "command_env": "MMR_DREAM_COMMAND",
+      "command_env": "",
       "action": null
     },
     "actions": []
@@ -307,15 +308,16 @@ Behavior:
 
 ### `mmr dream`
 
-Stateful assimilation into learned memory.
+Prompt/runbook handoff for memory assimilation.
 
 Behavior:
 
 - Analyzes the current project by default.
-- Calls a configurable provider/model through the dream runner interface.
-- Produces structured candidate records with evidence refs.
-- Validates evidence refs before writing learned memory.
-- Writes learned memory only through the local store.
+- Returns a system prompt, runbook, output contract, and cited evidence bundle.
+- Empowers the calling AI agent to perform memory deduplication, knowledge
+  assimilation, and generalisation.
+- Does not run a provider, mock runner, or command runner.
+- Does not write `dream_runs`, `dream_candidates`, or `learned_memory`.
 - Does not expose public `learn`, `context`, `candidates`, `knowledge`,
   `promote`, or `reject` commands in the MVP.
 
@@ -648,60 +650,49 @@ the store exists.
 The output instruction replacement behavior from `remember --instructions` is
 part of the contract and must be preserved.
 
-## Dream Runner Contract
+## Dream Guide Contract
 
-Dreaming is stateful assimilation, not summarization.
+Dreaming is an AI-agent handoff, not a hidden provider call.
 
-NHL-278 implements the provider-neutral runner layer in `src/dream.rs`.
-NHL-279 adds the public `mmr dream` command and durable learned-memory writes.
-
-Runner selection resolves from an explicit runner override, project default,
-user default (`MMR_DEFAULT_DREAM_RUNNER`), then the built-in `mock` runner. The
-`command` runner is a local command adapter configured by `MMR_DREAM_COMMAND`;
-it reads a JSON evidence request on stdin and emits structured dream output JSON
-on stdout. `MMR_DREAM_COMMAND` is parsed as a program plus arguments, for
-example `MMR_DREAM_COMMAND="python runner.py"`.
+NHL-278 implemented the provider-neutral runner layer in `src/dream.rs`; the
+public `mmr dream` command now avoids that side effect and returns the material
+the calling AI agent needs to assimilate memory itself.
 
 Shared-safe evidence bundles redact deterministic local PII, omit events blocked
 by deterministic secret findings, and preserve normalized metadata plus
 `mmr://event/<id>` refs.
 
-`mmr dream --dry-run` validates proposed learned-memory changes without writing
-state. `mmr dream --review` returns the same non-mutating proposal shape with a
-review status. A normal `mmr dream` records a dream run and writes active
-learned memory only after runner output passes schema and evidence-ref
-validation.
-
-Provider output must be structured before it can update learned memory:
+`mmr dream` returns JSON containing `mode: "prompt_runbook"`, `system_prompt`,
+`runbook`, `output_contract`, `guardrails`, `suggested_commands`, and
+`evidence`. The calling agent should return structured memory candidates such
+as:
 
 ```json
 {
-  "observations": [
+  "memory_candidates": [
     {
       "kind": "preference",
       "claim": "Use fixture-driven integration tests for cwd behavior.",
+      "scope": "project",
+      "status": "active",
       "confidence": 0.82,
-      "evidence_refs": ["mmr://event/evt:v1:..."]
+      "evidence_refs": ["mmr://event/evt:v1:..."],
+      "counterevidence_refs": [],
+      "target_surface": "memory"
     }
   ]
 }
 ```
 
-Validation rules:
+Agent rules:
 
-- Every evidence ref must resolve to an event in the submitted dream evidence
-  bundle.
-- Claims without evidence are rejected.
-- Output with unknown schema fields is rejected.
-- Runner requests use shared-safe redacted evidence by default; raw local
-  evidence requires explicit local-only opt-in and is blocked for command/API
-  style runners.
-- Confidence below `0.8`, counterevidence, or sensitive/identity-affecting
-  content queues or rejects the item instead of applying active learned memory.
-- Plain `observations` are candidates/audit material. Active learned memory must
-  come from `learned_memory_updates` or explicit `claims`.
-- A dream run may not silently overwrite learned memory. Supersession must be
-  explicit via `superseded_by` or a later equivalent field.
+- Every memory candidate must cite one or more supplied evidence refs.
+- Claims without evidence must be rejected.
+- The agent must not treat omitted evidence as reviewed.
+- Raw local evidence requires explicit local-only opt-in.
+- Confidence, counterevidence, or sensitive/identity-affecting content should
+  queue or reject the item instead of recommending active learned memory.
+- Duplicate memory should be deduped or superseded explicitly.
 - Learned memory sync remaps local evidence refs to redacted remote event refs,
   and hydration restores learned-memory rows after replaying remote events.
 - Active learned memory is inspectable through existing `search`/`rg` surfaces;
@@ -842,8 +833,9 @@ Implemented contract ownership:
    store contract is available.
 5. NHL-274, NHL-275, and NHL-276 source importers proceed after the adapter
    framework.
-6. NHL-277 link/sync/status and NHL-278 dream runner proceed after redaction.
-7. NHL-279 dream assimilation proceeds after search and dream runner.
+6. NHL-277 link/sync/status and NHL-278 dream evidence projection proceed after
+   redaction.
+7. NHL-279 dream handoff proceeds after search and evidence projection.
 8. NHL-280 integrated CLI/docs follows the command surfaces and adds the
    `summary` compatibility path.
 9. NHL-281 final release verification follows all implementation tickets.
@@ -852,7 +844,7 @@ Implemented contract ownership:
 
 - Canonical hot store: local SQLite/libSQL-shaped storage.
 - First remote adapter: default authenticated-user GitHub repo `mmr-store`.
-- Public assimilation surface: `mmr dream` only.
+- Public assimilation handoff: `mmr dream`.
 - Raw retrieval: remains a core product surface.
 - Redaction: blocks sync by default.
 

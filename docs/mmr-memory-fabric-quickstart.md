@@ -70,7 +70,7 @@ Key fields:
 - `diagnostics.remote`: remote availability and auth state.
 - `diagnostics.summary_runner`: continuity brief provider availability for
   `summary` and the `remember` compatibility alias.
-- `diagnostics.dream_runner`: mock or command runner availability.
+- `diagnostics.dream_runner`: reports that no dream runner is required.
 - `diagnostics.actions`: concrete recovery commands or environment fixes.
 
 ## Add Local Notes
@@ -121,41 +121,28 @@ set. `mmr status --pretty` reports `diagnostics.summary_runner` so missing
 `CURSOR_API_KEY`, the Cursor `agent` CLI, Gemini keys, or the Codex CLI are
 visible before you run a summary.
 
-`summary` and `remember` are stateless: they do not write active learned memory.
-Use `mmr dream` for stateful assimilation.
+`summary`, `remember`, and `dream` are stateless: they do not write active
+learned memory. Use `mmr dream` to generate a prompt, runbook, output contract,
+and cited evidence bundle for the calling AI agent.
 
 ## Dream
 
-Preview learned-memory proposals without writing state:
-
-```bash
-mmr dream --dry-run --pretty
-```
-
-Queue a review-shaped response without active learned-memory writes:
-
-```bash
-mmr dream --review --pretty
-```
-
-Run the default mock runner and persist the dream audit:
+Generate the memory assimilation prompt and runbook:
 
 ```bash
 mmr dream --pretty
 ```
 
-Configure a local command runner:
+`mmr dream` does not run an AI provider and does not write learned memory. The
+JSON response includes:
 
-```bash
-export MMR_DEFAULT_DREAM_RUNNER=command
-export MMR_DREAM_COMMAND="python ./dream_runner.py"
-mmr dream --pretty
-```
+- `system_prompt`: role and guardrails for the calling AI agent.
+- `runbook`: ordered steps for deduplication, assimilation, and generalisation.
+- `output_contract`: the shape the agent should return after analysis.
+- `evidence.events`: shared-safe evidence with `mmr://event/...` refs.
 
-The command runner reads a dream request JSON object on stdin and writes
-structured dream output JSON on stdout. Shared-safe evidence is the default:
-deterministic local PII is redacted and secret-bearing events are omitted before
-runner invocation.
+Shared-safe evidence is the default: deterministic local PII is redacted and
+secret-bearing events are omitted before being returned.
 
 ## Sync
 
@@ -255,12 +242,4 @@ mmr status --pretty
 Back up the database shown in `store.db_path`, update `mmr`, and rerun the
 command so migrations can complete.
 
-Dream command missing:
-
-```bash
-export MMR_DEFAULT_DREAM_RUNNER=command
-export MMR_DREAM_COMMAND="python ./dream_runner.py"
-mmr status --pretty
-```
-
-Use `MMR_DEFAULT_DREAM_RUNNER=mock` to return to the built-in local runner.
+`mmr dream` does not require `MMR_DREAM_COMMAND` or a configured local runner.

@@ -1159,7 +1159,7 @@ fn status_diagnostics_contract_is_implemented() {
     );
     assert_eq!(
         status_json["diagnostics"]["dream_runner"]["status"],
-        "missing_command"
+        "not_required"
     );
     assert_eq!(
         status_json["diagnostics"]["summary_runner"]["status"],
@@ -1171,7 +1171,7 @@ fn status_diagnostics_contract_is_implemented() {
     );
     assert_eq!(
         status_json["diagnostics"]["dream_runner"]["command_env"],
-        "MMR_DREAM_COMMAND"
+        ""
     );
 
     let actions = status_json["diagnostics"]["actions"]
@@ -1184,11 +1184,11 @@ fn status_diagnostics_contract_is_implemented() {
         "unlinked status should tell the user how to link"
     );
     assert!(
-        actions.iter().any(|action| action
+        actions.iter().all(|action| !action
             .as_str()
             .unwrap_or_default()
             .contains("MMR_DREAM_COMMAND")),
-        "command runner status should name the missing env var"
+        "dream no longer requires a command runner"
     );
     assert!(
         actions.iter().all(|action| !action
@@ -1252,7 +1252,7 @@ fn cli_help_contract_is_lean_and_actionable() {
     }
     assert!(help_text.contains("mmr link"));
     assert!(help_text.contains("mmr status --pretty"));
-    assert!(help_text.contains("mmr dream --dry-run"));
+    assert!(help_text.contains("mmr dream --pretty"));
 
     let status_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(["status", "--help"])
@@ -1270,9 +1270,11 @@ fn cli_help_contract_is_lean_and_actionable() {
         .expect("dream help");
     assert_success_ref(&dream_help);
     let dream_help_text = String::from_utf8(dream_help.stdout).expect("dream help UTF-8");
-    assert!(dream_help_text.contains("--dry-run"));
-    assert!(dream_help_text.contains("--review"));
-    assert!(dream_help_text.contains("MMR_DREAM_COMMAND"));
+    assert!(dream_help_text.contains("system prompt"));
+    assert!(dream_help_text.contains("runbook"));
+    assert!(!dream_help_text.contains("--dry-run"));
+    assert!(!dream_help_text.contains("--review"));
+    assert!(!dream_help_text.contains("MMR_DREAM_COMMAND"));
 }
 
 #[test]
@@ -1318,15 +1320,6 @@ fn mvp_quickstart_flow_smoke_test() {
         serde_json::from_slice(&search.stdout).expect("quickstart search JSON");
     assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
 
-    let dream_dry_run = base_command("dream")
-        .args(["--dry-run", "--pretty"])
-        .output()
-        .expect("quickstart dream dry run");
-    assert_success_ref(&dream_dry_run);
-    let dry_run_json: serde_json::Value =
-        serde_json::from_slice(&dream_dry_run.stdout).expect("quickstart dry-run JSON");
-    assert_eq!(dry_run_json["dream_run"]["status"], "dry_run");
-
     let dream = base_command("dream")
         .args(["--pretty"])
         .output()
@@ -1335,6 +1328,20 @@ fn mvp_quickstart_flow_smoke_test() {
     let dream_json: serde_json::Value =
         serde_json::from_slice(&dream.stdout).expect("quickstart dream JSON");
     assert_eq!(dream_json["command"], "dream");
+    assert_eq!(dream_json["mode"], "prompt_runbook");
+    assert!(
+        dream_json["system_prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Memory Assimilation Agent")
+    );
+    assert!(
+        dream_json["runbook"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["step"] == "deduplicate")
+    );
 
     let sync = base_command("sync")
         .args(["--pretty"])
@@ -1355,7 +1362,7 @@ fn mvp_quickstart_flow_smoke_test() {
     assert_eq!(status_json["status"]["sync_status"], "synced");
     assert_eq!(
         status_json["diagnostics"]["dream_runner"]["status"],
-        "available"
+        "not_required"
     );
 
     for command in ["projects", "sessions", "messages", "export"] {
@@ -1795,22 +1802,34 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         "unsafe note secret should be blocked before sync"
     );
 
-    let dream_output = dream_output_json(
-        &evidence_ref,
-        "Prefer release-gate evidence checks.",
-        0.94,
-        "",
-    );
     let dream = command("dream", &data_home, &project)
-        .env("MMR_DREAM_MOCK_OUTPUT", dream_output)
+        .env(
+            "MMR_DREAM_MOCK_OUTPUT",
+            dream_output_json(
+                &evidence_ref,
+                "Ignored because public dream no longer runs mock output.",
+                0.94,
+                "",
+            ),
+        )
         .output()
-        .expect("release dream");
+        .expect("release dream guide");
     assert_success_ref(&dream);
     let dream_json: serde_json::Value = serde_json::from_slice(&dream.stdout).expect("dream JSON");
-    assert_eq!(dream_json["applied"].as_u64().unwrap(), 1);
-    assert_eq!(
-        dream_json["learned_memory"][0]["evidence_refs"][0],
-        evidence_ref
+    assert_eq!(dream_json["mode"], "prompt_runbook");
+    assert!(
+        dream_json["evidence"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["evidence_ref"] == evidence_ref),
+        "dream evidence should include the searched event ref"
+    );
+    assert!(
+        dream_json["system_prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Perform memory deduplication")
     );
 
     let learned_search = command("search", &data_home, &project)
@@ -1820,11 +1839,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     assert_success_ref(&learned_search);
     let learned_search_json: serde_json::Value =
         serde_json::from_slice(&learned_search.stdout).expect("learned search JSON");
-    assert_eq!(learned_search_json["total_results"].as_u64().unwrap(), 1);
-    assert_eq!(
-        learned_search_json["results"][0]["source"],
-        "learned_memory"
-    );
+    assert_eq!(learned_search_json["total_results"].as_u64().unwrap(), 0);
 
     let sync = command("sync", &data_home, &project)
         .output()
@@ -1859,7 +1874,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     assert!(remote_text.contains("Release gate safe note"));
     assert!(remote_text.contains("[REDACTED:private_email]"));
     assert!(remote_text.contains("Release Codex imported contact [REDACTED:private_email]."));
-    assert!(remote_text.contains("Prefer release-gate evidence checks."));
+    assert!(!remote_text.contains("Prefer release-gate evidence checks."));
 
     let hydrate = fresh_command("link").output().expect("release hydrate");
     assert_success_ref(&hydrate);
@@ -1871,11 +1886,11 @@ fn mvp_release_gate_e2e_fixture_scenario() {
             .unwrap()
             >= 1
     );
-    assert!(
+    assert_eq!(
         hydrate_json["hydration"]["inserted_learned_memory"]
             .as_u64()
-            .unwrap()
-            >= 1
+            .unwrap(),
+        0
     );
     assert!(
         hydrate_json["imports"]
@@ -1906,19 +1921,6 @@ fn mvp_release_gate_e2e_fixture_scenario() {
             .expect("hydrated event id")
     );
 
-    let hydrated_search = fresh_command("search")
-        .arg("release-gate evidence checks")
-        .output()
-        .expect("hydrated learned search");
-    assert_success_ref(&hydrated_search);
-    let hydrated_search_json: serde_json::Value =
-        serde_json::from_slice(&hydrated_search.stdout).expect("hydrated search JSON");
-    assert_eq!(hydrated_search_json["total_results"].as_u64().unwrap(), 1);
-    assert_eq!(
-        hydrated_search_json["results"][0]["source"],
-        "learned_memory"
-    );
-
     let fresh_store = Store::open(fresh_data_home.join("mmr").join("mmr.db")).expect("fresh store");
     let fresh_project_record = fresh_store
         .project_by_path(&fresh_project)
@@ -1937,31 +1939,23 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     let fresh_memory = fresh_store
         .learned_memory_for_project(&fresh_project_record.id)
         .expect("fresh learned memory");
-    let hydrated_memory = fresh_memory
-        .iter()
-        .find(|memory| memory.claim == "Prefer release-gate evidence checks.")
-        .expect("hydrated learned memory claim");
-    assert_eq!(
-        hydrated_memory.evidence_refs,
-        vec![fresh_evidence_ref.clone()]
-    );
+    assert!(fresh_memory.is_empty());
 
-    let fresh_dream_output = dream_output_json(
-        &fresh_evidence_ref,
-        "Fresh release hosts keep hydrated evidence refs valid.",
-        0.91,
-        "",
-    );
     let fresh_dream = fresh_command("dream")
-        .args(["--dry-run"])
-        .env("MMR_DREAM_MOCK_OUTPUT", fresh_dream_output)
         .output()
         .expect("fresh release dream");
     assert_success_ref(&fresh_dream);
     let fresh_dream_json: serde_json::Value =
         serde_json::from_slice(&fresh_dream.stdout).expect("fresh dream JSON");
-    assert_eq!(fresh_dream_json["dry_run"], true);
-    assert_eq!(fresh_dream_json["applied"].as_u64().unwrap(), 1);
+    assert_eq!(fresh_dream_json["mode"], "prompt_runbook");
+    assert!(
+        fresh_dream_json["evidence"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["evidence_ref"] == fresh_evidence_ref),
+        "fresh dream evidence should include the hydrated searched event ref"
+    );
 }
 
 #[test]
@@ -2411,27 +2405,48 @@ fn dream_cli_contract_is_implemented() {
         .expect("evidence event id")
         .to_string();
     let evidence_ref = format!("mmr://event/{evidence_event_id}");
-    let output_json = dream_output_json(
+    let ignored_runner_output = dream_output_json(
         &evidence_ref,
         "Prefer durable assimilation checks.",
         0.93,
         "",
     );
-
-    let dry_run = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["dream", "--dry-run"])
+    let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .arg("dream")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_DREAM_MOCK_OUTPUT", &output_json)
+        .env("MMR_DREAM_MOCK_OUTPUT", &ignored_runner_output)
+        .env("MMR_DEFAULT_DREAM_RUNNER", "unsupported")
+        .env("MMR_DREAM_COMMAND", "false")
         .current_dir(&project)
         .output()
-        .expect("dream dry run");
-    assert_success_ref(&dry_run);
-    let dry_run_json: serde_json::Value =
-        serde_json::from_slice(&dry_run.stdout).expect("dry-run JSON");
-    assert_eq!(dry_run_json["dry_run"], true);
-    assert_eq!(dry_run_json["applied"].as_u64().unwrap(), 1);
-    assert_eq!(dry_run_json["dream_run"]["id"], serde_json::Value::Null);
+        .expect("dream guide");
+    assert_success_ref(&dream);
+    let dream_json: serde_json::Value =
+        serde_json::from_slice(&dream.stdout).expect("dream stdout JSON");
+    assert_eq!(dream_json["command"], "dream");
+    assert_eq!(dream_json["mode"], "prompt_runbook");
+    assert_eq!(
+        dream_json["evidence"]["included_events"].as_u64().unwrap(),
+        1
+    );
+    assert_eq!(
+        dream_json["evidence"]["events"][0]["evidence_ref"],
+        evidence_ref
+    );
+    assert!(
+        dream_json["system_prompt"]
+            .as_str()
+            .unwrap()
+            .contains("knowledge assimilation")
+    );
+    assert!(
+        dream_json["runbook"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["step"] == "generalise")
+    );
     {
         let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
         let project_record = store
@@ -2446,100 +2461,28 @@ fn dream_cli_contract_is_implemented() {
         );
     }
 
-    let review = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["dream", "--review"])
+    let legacy_dry_run = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["dream", "--dry-run"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_DREAM_MOCK_OUTPUT", &output_json)
         .current_dir(&project)
         .output()
-        .expect("dream review");
-    assert_success_ref(&review);
-    let review_json: serde_json::Value =
-        serde_json::from_slice(&review.stdout).expect("review JSON");
-    assert_eq!(review_json["review"], true);
-    assert_eq!(review_json["dream_run"]["status"], "review");
-
-    let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("dream")
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_DREAM_MOCK_OUTPUT", &output_json)
-        .current_dir(&project)
-        .output()
-        .expect("dream apply");
-    assert_success_ref(&dream);
-    let dream_json: serde_json::Value =
-        serde_json::from_slice(&dream.stdout).expect("dream stdout JSON");
-    assert_eq!(dream_json["command"], "dream");
-    assert_eq!(dream_json["applied"].as_u64().unwrap(), 1);
-    assert_eq!(dream_json["queued"].as_u64().unwrap(), 0);
-    assert_eq!(dream_json["learned_memory"][0]["status"], "active");
-    assert_eq!(
-        dream_json["learned_memory"][0]["evidence_refs"][0],
-        evidence_ref
-    );
-
-    let low_confidence = dream_output_json(&evidence_ref, "Maybe archive scratch notes.", 0.42, "");
-    let queued = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("dream")
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_DREAM_MOCK_OUTPUT", &low_confidence)
-        .current_dir(&project)
-        .output()
-        .expect("dream low confidence");
-    assert_success_ref(&queued);
-    let queued_json: serde_json::Value =
-        serde_json::from_slice(&queued.stdout).expect("queued JSON");
-    assert_eq!(queued_json["applied"].as_u64().unwrap(), 0);
-    assert_eq!(queued_json["queued"].as_u64().unwrap(), 1);
-
-    let counterevidence = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("dream")
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env(
-            "MMR_DREAM_MOCK_OUTPUT",
-            dream_output_with_top_counterevidence(
-                &evidence_ref,
-                "Conflicted dream memory should not become active.",
-                0.95,
-            ),
-        )
-        .current_dir(&project)
-        .output()
-        .expect("dream counterevidence");
-    assert_success_ref(&counterevidence);
-    let counterevidence_json: serde_json::Value =
-        serde_json::from_slice(&counterevidence.stdout).expect("counterevidence JSON");
-    assert_eq!(counterevidence_json["applied"].as_u64().unwrap(), 0);
+        .expect("dream dry-run legacy flag");
+    assert!(!legacy_dry_run.status.success());
     assert!(
-        counterevidence_json["queued"].as_u64().unwrap() >= 1,
-        "counterevidenced memory should be queued"
+        String::from_utf8_lossy(&legacy_dry_run.stderr).contains("unexpected argument"),
+        "stderr={}",
+        String::from_utf8_lossy(&legacy_dry_run.stderr)
     );
 
-    let sensitive_kind = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("dream")
+    let legacy_runner = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["dream", "--runner", "command"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
-        .env(
-            "MMR_DREAM_MOCK_OUTPUT",
-            dream_output_with_kind(
-                &evidence_ref,
-                "person@example.com",
-                "A safe-looking claim with an unsafe kind must not persist.",
-                0.95,
-            ),
-        )
         .current_dir(&project)
         .output()
-        .expect("dream unsafe kind");
-    assert_success_ref(&sensitive_kind);
-    let sensitive_kind_json: serde_json::Value =
-        serde_json::from_slice(&sensitive_kind.stdout).expect("sensitive kind JSON");
-    assert_eq!(sensitive_kind_json["applied"].as_u64().unwrap(), 0);
-    assert_eq!(sensitive_kind_json["rejected"].as_u64().unwrap(), 1);
+        .expect("dream runner legacy flag");
+    assert!(!legacy_runner.status.success());
 
     let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(["search", "durable assimilation checks"])
@@ -2551,47 +2494,7 @@ fn dream_cli_contract_is_implemented() {
     assert_success_ref(&search);
     let search_json: serde_json::Value =
         serde_json::from_slice(&search.stdout).expect("search JSON");
-    assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
-    assert_eq!(search_json["results"][0]["source"], "learned_memory");
-
-    let counterevidence_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["search", "Conflicted dream memory"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("search counterevidenced memory");
-    assert_success_ref(&counterevidence_search);
-    let counterevidence_search_json: serde_json::Value =
-        serde_json::from_slice(&counterevidence_search.stdout)
-            .expect("counterevidence search JSON");
-    assert_eq!(
-        counterevidence_search_json["total_results"]
-            .as_u64()
-            .unwrap(),
-        0
-    );
-
-    let invalid_ref_output = dream_output_json(
-        "mmr://event/evt:v1:missing",
-        "Unsupported memories are rejected.",
-        0.94,
-        "",
-    );
-    let invalid = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("dream")
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_DREAM_MOCK_OUTPUT", invalid_ref_output)
-        .current_dir(&project)
-        .output()
-        .expect("dream invalid evidence");
-    assert!(!invalid.status.success());
-    assert!(
-        String::from_utf8_lossy(&invalid.stderr).contains("missing evidence"),
-        "stderr={}",
-        String::from_utf8_lossy(&invalid.stderr)
-    );
+    assert_eq!(search_json["total_results"].as_u64().unwrap(), 0);
 
     let reserved_flag = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(["dream", "--best-of", "2"])
@@ -2616,13 +2519,13 @@ fn dream_cli_contract_is_implemented() {
             .env("MMR_GITHUB_USER", "fixture-user")
             .current_dir(&project)
             .output()
-            .expect("sync dream memory"),
+            .expect("sync dream evidence"),
     );
     let remote_text = remote_file_text(&remote);
     assert!(!remote_text.contains("person@example.com"));
     assert!(!remote_text.contains(&evidence_event_id));
     assert!(remote_text.contains("[REDACTED:private_email]"));
-    assert!(remote_text.contains("Prefer durable assimilation checks."));
+    assert!(!remote_text.contains("Prefer durable assimilation checks."));
 
     let hydrate = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .arg("link")
@@ -2632,7 +2535,7 @@ fn dream_cli_contract_is_implemented() {
         .env("MMR_GITHUB_USER", "fixture-user")
         .current_dir(&fresh_project)
         .output()
-        .expect("hydrate learned memory");
+        .expect("hydrate dream evidence");
     assert_success_ref(&hydrate);
     let hydrate_json: serde_json::Value =
         serde_json::from_slice(&hydrate.stdout).expect("hydrate JSON");
@@ -2640,7 +2543,7 @@ fn dream_cli_contract_is_implemented() {
         hydrate_json["hydration"]["inserted_learned_memory"]
             .as_u64()
             .unwrap(),
-        1
+        0
     );
     let hydrated_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(["search", "durable assimilation checks"])
@@ -2652,7 +2555,7 @@ fn dream_cli_contract_is_implemented() {
     assert_success_ref(&hydrated_search);
     let hydrated_search_json: serde_json::Value =
         serde_json::from_slice(&hydrated_search.stdout).expect("hydrated search JSON");
-    assert_eq!(hydrated_search_json["total_results"].as_u64().unwrap(), 1);
+    assert_eq!(hydrated_search_json["total_results"].as_u64().unwrap(), 0);
 }
 
 #[test]
@@ -3818,12 +3721,6 @@ fn optional_external_dream_command_smoke_is_gated() {
     {
         return;
     }
-    let command = std::env::var("MMR_DREAM_COMMAND").unwrap_or_default();
-    assert!(
-        !command.trim().is_empty(),
-        "set MMR_DREAM_COMMAND with MMR_RUN_EXTERNAL_DREAM_SMOKE=1"
-    );
-
     let tmp = tempfile::tempdir().expect("temp dir");
     let home = tmp.path().join("home");
     let data_home = tmp.path().join("data");
@@ -3847,25 +3744,26 @@ fn optional_external_dream_command_smoke_is_gated() {
     assert_success_ref(&link);
 
     let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["dream", "--dry-run", "--runner", "command"])
+        .arg("dream")
         .env("HOME", &home)
         .env("SIMPLEMMR_HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
+        .env("MMR_DREAM_COMMAND", "false")
         .current_dir(&project)
         .output()
-        .expect("external dream smoke");
+        .expect("external dream guide smoke");
     assert_success_ref(&dream);
     let json: serde_json::Value =
         serde_json::from_slice(&dream.stdout).expect("external dream JSON");
     assert_eq!(json["command"], "dream");
-    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["mode"], "prompt_runbook");
     assert!(json["evidence"]["included_events"].as_u64().unwrap() > 0);
-    let produced = json["applied"].as_u64().unwrap()
-        + json["queued"].as_u64().unwrap()
-        + json["rejected"].as_u64().unwrap();
     assert!(
-        produced > 0,
-        "external dream command should return at least one validated observation or memory update"
+        json["system_prompt"]
+            .as_str()
+            .unwrap()
+            .contains("deduplication"),
+        "dream should return guidance for the calling agent"
     );
 }
 
@@ -4214,56 +4112,6 @@ fn dream_output_json(
   "learned_memory_updates": [
     {{
       "kind": "preference",
-      "claim": "{claim}",
-      "confidence": {confidence},
-      "evidence_refs": ["{evidence_ref}"]
-    }}
-  ]
-}}"#
-    )
-}
-
-fn dream_output_with_top_counterevidence(
-    evidence_ref: &str,
-    claim: &str,
-    confidence: f64,
-) -> String {
-    format!(
-        r#"{{
-  "observations": [
-    {{
-      "kind": "preference",
-      "claim": "{claim}",
-      "confidence": {confidence},
-      "evidence_refs": ["{evidence_ref}"]
-    }}
-  ],
-  "counterevidence": [
-    {{
-      "kind": "counterevidence",
-      "claim": "Evidence is conflicting enough to require review.",
-      "confidence": 0.89,
-      "evidence_refs": ["{evidence_ref}"]
-    }}
-  ]
-}}"#
-    )
-}
-
-fn dream_output_with_kind(evidence_ref: &str, kind: &str, claim: &str, confidence: f64) -> String {
-    format!(
-        r#"{{
-  "observations": [
-    {{
-      "kind": "{kind}",
-      "claim": "{claim}",
-      "confidence": {confidence},
-      "evidence_refs": ["{evidence_ref}"]
-    }}
-  ],
-  "learned_memory_updates": [
-    {{
-      "kind": "{kind}",
       "claim": "{claim}",
       "confidence": {confidence},
       "evidence_refs": ["{evidence_ref}"]

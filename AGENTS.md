@@ -32,6 +32,8 @@ template; `goals/2026-05-29-reverse-session-selection.md` is a worked example.
 - `.cursor/rules/`: persistent repo rules for workflow, contract, ingestion, and tests.
 - `.agents/skills/mmr-clap-colored-cli/`: local reusable CLI workflow references.
 - `.agents/skills/mmr-teleport-providers/`: provider-profile native teleport layouts and verification notes.
+- `.agents/skills/mmr/`: parent skill for the local `mmr` history tool. Use for general mmr questions or when unsure which mmr capability applies.
+- `.agents/skills/mmr/session-mining/`: (subskill) retrieve previous sessions via `--session-back`, `--session-range`, `prev`, etc., analyze them, and produce continuity context. Critical for surviving context compaction and clearing. Use when you need to remind an agent (or yourself) of prior work.
 
 ## Cursor Rules
 

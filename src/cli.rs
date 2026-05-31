@@ -11,22 +11,15 @@ use crate::agent::ai;
 use crate::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot,
 };
-use crate::dream::{
-    CommandDreamRunner, DreamConfigOverride, DreamEvidenceMode, DreamObservation, DreamRunner,
-    DreamRunnerConfig, DreamRunnerKind, ENV_DEFAULT_DREAM_RUNNER, ENV_DREAM_COMMAND,
-    ENV_DREAM_MOCK_FAILURE, ENV_DREAM_MOCK_OUTPUT, MockDreamRunner, ValidatedDreamOutput,
-    ValidatedLearnedMemoryStatus, build_evidence_request, validate_dream_output,
-};
+use crate::dream::{DreamEvidence, DreamEvidenceMode, OmittedDreamEvidence, build_evidence_bundle};
 use crate::messages::service::{
     MessageIndexRange, MessageQueryOptions, QueryService, SessionAxis, SessionSelectionError,
 };
 use crate::redaction::{
-    DeterministicPrivacyDetector, PiiCoverage, PiiCoverageStatus, RedactionFinding,
-    RedactionOutcome, scan_text, scan_text_with_detector,
+    PiiCoverage, PiiCoverageStatus, RedactionFinding, RedactionOutcome, scan_text,
 };
 use crate::store::{
-    DEFAULT_REDACTION_POLICY_ID, DreamCandidateRecord, EventRecord, LATEST_SCHEMA_VERSION,
-    LearnedMemoryRecord, NewDreamCandidate, NewEvent, NewLearnedMemory, NewRedactionSpan,
+    DEFAULT_REDACTION_POLICY_ID, EventRecord, LATEST_SCHEMA_VERSION, NewEvent, NewRedactionSpan,
     ProjectRecord, Store, content_hash, default_db_path,
 };
 use crate::sync::{
@@ -87,7 +80,7 @@ const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 #[command(
     name = "mmr",
     about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
-    after_help = "Examples:\n  mmr link\n  mmr status --pretty\n  mmr note \"Decision: keep the migration append-only.\"\n  mmr search \"migration append-only\" --pretty\n  mmr rg \"TODO\" --line\n  mmr summary all --project /path/to/project\n  mmr dream --dry-run --pretty\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout. Use --pretty for indented JSON."
+    after_help = "Examples:\n  mmr link\n  mmr status --pretty\n  mmr note \"Decision: keep the migration append-only.\"\n  mmr search \"migration append-only\" --pretty\n  mmr rg \"TODO\" --line\n  mmr summary all --project /path/to/project\n  mmr dream --pretty\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout. Use --pretty for indented JSON."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -387,24 +380,12 @@ pub struct SearchTextArgs {
 
 #[derive(Args, Debug)]
 #[command(
-    after_help = "Environment:\n  MMR_DEFAULT_DREAM_RUNNER=mock|command selects the default runner.\n  MMR_DREAM_COMMAND configures the command runner. The command reads a dream request JSON object from stdin and writes dream output JSON to stdout.\n  MMR_DREAM_MOCK_OUTPUT supplies mock runner output for local tests."
+    after_help = "Behavior:\n  `mmr dream` returns a system prompt, runbook, output contract, and cited evidence bundle for the calling AI agent. It does not run a provider or write learned memory."
 )]
 pub struct DreamArgs {
     /// Project path (omit to use current directory)
     #[arg(long)]
     project: Option<PathBuf>,
-    /// Validate proposed learned memory without writing it
-    #[arg(long)]
-    dry_run: bool,
-    /// Queue proposed changes for review without writing active learned memory
-    #[arg(long)]
-    review: bool,
-    /// Dream runner to use: mock or command
-    #[arg(long)]
-    runner: Option<String>,
-    /// Provider model identifier
-    #[arg(long)]
-    model: Option<String>,
     /// Evidence projection mode
     #[arg(long = "evidence-mode", value_enum, default_value = "shared-safe")]
     evidence_mode: DreamEvidenceModeArg,
@@ -2115,30 +2096,12 @@ fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
 }
 
 fn status_dream_runner_diagnostic() -> StatusDreamRunnerDiagnostic {
-    let config = DreamRunnerConfig::resolve_from_env(None);
-    let command_configured = std::env::var(ENV_DREAM_COMMAND)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let (status, action) = match config.runner_kind() {
-        Ok(DreamRunnerKind::Mock) => ("available", None),
-        Ok(DreamRunnerKind::Command) if command_configured => ("configured", None),
-        Ok(DreamRunnerKind::Command) => (
-            "missing_command",
-            Some(
-                "Set MMR_DREAM_COMMAND to the local command that reads dream request JSON on stdin.",
-            ),
-        ),
-        Err(_) => (
-            "unsupported_runner",
-            Some("Set MMR_DEFAULT_DREAM_RUNNER to mock or command."),
-        ),
-    };
     StatusDreamRunnerDiagnostic {
-        runner: config.runner,
-        status: status.to_string(),
-        command_configured,
-        command_env: ENV_DREAM_COMMAND.to_string(),
-        action: action.map(str::to_string),
+        runner: "prompt_runbook".to_string(),
+        status: "not_required".to_string(),
+        command_configured: false,
+        command_env: String::new(),
+        action: None,
     }
 }
 
@@ -2445,514 +2408,182 @@ fn default_import_source_root(source_filter: Option<SourceFilter>) -> Result<Pat
 #[derive(Debug, Serialize)]
 struct DreamResponse {
     command: String,
-    dry_run: bool,
-    review: bool,
+    mode: String,
     project_id: String,
-    runner: String,
-    model: Option<String>,
     evidence: DreamEvidenceResponse,
-    dream_run: DreamRunResponse,
-    applied: usize,
-    queued: usize,
-    rejected: usize,
-    candidates: Vec<DreamCandidateResponse>,
-    learned_memory: Vec<DreamLearnedMemoryResponse>,
-    diagnostics: crate::dream::DreamDiagnostics,
+    system_prompt: String,
+    runbook: Vec<DreamRunbookStep>,
+    output_contract: DreamOutputContract,
+    guardrails: Vec<String>,
+    suggested_commands: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct DreamEvidenceResponse {
+    access: String,
     included_events: usize,
+    omitted_events: usize,
     evidence_hash: String,
+    pii_coverage: PiiCoverageStatus,
+    events: Vec<DreamEvidence>,
+    omitted: Vec<OmittedDreamEvidence>,
 }
 
 #[derive(Debug, Serialize)]
-struct DreamRunResponse {
-    id: Option<String>,
-    status: String,
+struct DreamRunbookStep {
+    step: String,
+    objective: String,
+    instructions: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct DreamCandidateResponse {
-    id: Option<String>,
-    kind: String,
-    claim: String,
-    confidence: f64,
-    status: String,
-    evidence_refs: Vec<String>,
-    counterevidence_refs: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct DreamLearnedMemoryResponse {
-    id: Option<String>,
-    kind: String,
-    claim: String,
-    confidence: f64,
-    status: String,
-    evidence_refs: Vec<String>,
-    counterevidence_refs: Vec<String>,
+struct DreamOutputContract {
+    format: String,
+    required_sections: Vec<String>,
+    memory_candidate_fields: Vec<String>,
+    refusal_conditions: Vec<String>,
 }
 
 fn dream_response(args: &DreamArgs) -> Result<DreamResponse> {
-    let mut store = Store::open_default()?;
+    let store = Store::open_default()?;
     let project = linked_project(&store, args.project.as_deref())?;
-    let config = dream_runner_config(args);
-    let request = build_evidence_request(&store, &project, &config)?;
-    if request.evidence.is_empty() {
+    let evidence_mode: DreamEvidenceMode = args.evidence_mode.into();
+    if evidence_mode == DreamEvidenceMode::LocalRaw && !args.allow_raw_evidence {
+        bail!("raw dream evidence requires explicit local-only opt-in");
+    }
+    let bundle = build_evidence_bundle(&store, &project, evidence_mode.clone())?;
+    if bundle.events.is_empty() {
         bail!("dream requires at least one shared-safe evidence event");
     }
 
-    let runner = dream_runner_for_config(&config, &request)?;
-    let mut run = None;
-    if !args.dry_run && !args.review {
-        let model = config
-            .model
-            .clone()
-            .unwrap_or_else(|| default_dream_model(&config.runner));
-        run = Some(store.start_dream_run(
-            &project.id,
-            &config.runner,
-            &model,
-            &request.evidence_hash,
-        )?);
-    }
-
-    let output = match runner.run(&request) {
-        Ok(output) => output,
-        Err(err) => {
-            if let Some(run) = &run {
-                let _ = store.fail_dream_run(&run.id, None);
-            }
-            return Err(anyhow::anyhow!("dream runner failed: {err}"));
-        }
-    };
-    let validated = match validate_dream_output(&request.evidence_refs(), output.clone()) {
-        Ok(validated) => validated,
-        Err(err) => {
-            if let Some(run) = &run {
-                let output_hash = serde_json::to_string(&output)
-                    .map(|json| content_hash(&json))
-                    .ok();
-                let _ = store.fail_dream_run(&run.id, output_hash.as_deref());
-            }
-            return Err(err);
-        }
-    };
-    let classified = classify_dream_output(&validated);
-
-    if args.dry_run || args.review {
-        let candidates = classified
-            .candidates
-            .iter()
-            .map(|candidate| dream_candidate_preview_response(candidate, None))
-            .collect::<Vec<_>>();
-        let learned_memory = classified
-            .learned_memory
-            .iter()
-            .map(|memory| dream_learned_memory_preview_response(memory, None))
-            .collect::<Vec<_>>();
-        let applied = learned_memory
-            .iter()
-            .filter(|memory| memory.status == "active")
-            .count();
-        let queued = learned_memory
-            .iter()
-            .filter(|memory| memory.status == "pending")
-            .count()
-            + candidates
-                .iter()
-                .filter(|candidate| candidate.status == "pending")
-                .count()
-                .saturating_sub(queued_learned_preview_count(&learned_memory));
-        let rejected = candidates
-            .iter()
-            .filter(|candidate| candidate.status == "rejected")
-            .count();
-        return Ok(DreamResponse {
-            command: "dream".to_string(),
-            dry_run: true,
-            review: args.review,
-            project_id: project.id,
-            runner: config.runner,
-            model: config.model,
-            evidence: DreamEvidenceResponse {
-                included_events: request.evidence.len(),
-                evidence_hash: request.evidence_hash,
-            },
-            dream_run: DreamRunResponse {
-                id: None,
-                status: if args.review { "review" } else { "dry_run" }.to_string(),
-            },
-            applied,
-            queued,
-            rejected,
-            candidates,
-            learned_memory,
-            diagnostics: validated.diagnostics,
-        });
-    }
-
-    let run = run.expect("dream run is started for non-dry-run dream");
-    let output_hash =
-        content_hash(&serde_json::to_string(&output).context("serialize dream output")?);
-    let persisted = match store.complete_dream_run(
-        &run.id,
-        &output_hash,
-        &classified.candidates,
-        &classified.learned_memory,
-    ) {
-        Ok(persisted) => persisted,
-        Err(err) => {
-            let _ = store.fail_dream_run(&run.id, Some(&output_hash));
-            return Err(err);
-        }
-    };
-
-    let candidates = persisted
-        .candidates
-        .iter()
-        .map(dream_candidate_record_response)
-        .collect::<Vec<_>>();
-    let learned_memory = persisted
-        .learned_memory
-        .iter()
-        .map(dream_learned_memory_record_response)
-        .collect::<Vec<_>>();
-    let applied = learned_memory
-        .iter()
-        .filter(|memory| memory.status == "active")
-        .count();
-    let queued = learned_memory
-        .iter()
-        .filter(|memory| memory.status == "pending")
-        .count()
-        + candidates
-            .iter()
-            .filter(|candidate| candidate.status == "pending")
-            .count()
-            .saturating_sub(queued_learned_preview_count(&learned_memory));
-    let rejected = candidates
-        .iter()
-        .filter(|candidate| candidate.status == "rejected")
-        .count();
-
     Ok(DreamResponse {
         command: "dream".to_string(),
-        dry_run: false,
-        review: false,
-        project_id: project.id,
-        runner: config.runner,
-        model: config.model,
+        mode: "prompt_runbook".to_string(),
+        project_id: project.id.clone(),
         evidence: DreamEvidenceResponse {
-            included_events: request.evidence.len(),
-            evidence_hash: request.evidence_hash,
+            access: match evidence_mode {
+                DreamEvidenceMode::SharedSafe => "shared_safe",
+                DreamEvidenceMode::LocalRaw => "local_raw",
+            }
+            .to_string(),
+            included_events: bundle.events.len(),
+            omitted_events: bundle.omitted_events.len(),
+            evidence_hash: bundle.evidence_hash,
+            pii_coverage: bundle.pii_coverage,
+            events: bundle.events,
+            omitted: bundle.omitted_events,
         },
-        dream_run: DreamRunResponse {
-            id: Some(persisted.run.id),
-            status: persisted.run.status,
-        },
-        applied,
-        queued,
-        rejected,
-        candidates,
-        learned_memory,
-        diagnostics: validated.diagnostics,
+        system_prompt: dream_system_prompt(),
+        runbook: dream_runbook(),
+        output_contract: dream_output_contract(),
+        guardrails: dream_guardrails(),
+        suggested_commands: dream_suggested_commands(&project),
     })
 }
 
-#[derive(Debug)]
-struct ClassifiedDreamOutput {
-    candidates: Vec<NewDreamCandidate>,
-    learned_memory: Vec<NewLearnedMemory>,
+fn dream_system_prompt() -> String {
+    [
+        "You are a Memory Assimilation Agent operating inside an mmr-linked project.",
+        "Your job is to turn the supplied evidence bundle into durable, evidence-cited knowledge for future agents.",
+        "Perform memory deduplication, knowledge assimilation, and generalisation yourself; do not assume `mmr dream` already ran an AI provider or wrote memory.",
+        "Prefer stable operating preferences, repeatable workflow lessons, project facts, and unresolved follow-ups over transcript summary.",
+        "Every proposed memory must cite one or more supplied `mmr://event/...` refs and must identify counterevidence when present.",
+        "Reject or quarantine claims that are personal, secret-bearing, identity-affecting, unsupported, too narrow to reuse, or contradicted by newer evidence.",
+        "When evidence is insufficient, return the smallest missing fact or command needed to continue instead of inventing memory.",
+    ]
+    .join("\n")
 }
 
-fn dream_runner_config(args: &DreamArgs) -> DreamRunnerConfig {
-    let user_runner = std::env::var(ENV_DEFAULT_DREAM_RUNNER).ok();
-    DreamRunnerConfig::resolve(
-        DreamConfigOverride {
-            runner: args.runner.clone(),
-            model: args.model.clone(),
-            evidence_mode: Some(args.evidence_mode.into()),
-            allow_raw_evidence: args.allow_raw_evidence,
-            best_of: None,
-            retries: None,
+fn dream_runbook() -> Vec<DreamRunbookStep> {
+    vec![
+        DreamRunbookStep {
+            step: "deduplicate".to_string(),
+            objective: "Collapse repeated or overlapping observations into the smallest durable set."
+                .to_string(),
+            instructions: vec![
+                "Group evidence by recurring decision, preference, workflow, project fact, blocker, or correction.".to_string(),
+                "Prefer one generalized memory over several near-duplicates when the same lesson recurs.".to_string(),
+                "Keep distinct memories separate when scope, owner, tool, project, or acceptance criteria materially differ.".to_string(),
+            ],
         },
-        None,
-        user_runner.as_deref(),
-    )
+        DreamRunbookStep {
+            step: "assimilate".to_string(),
+            objective: "Convert evidence into reusable knowledge with explicit provenance.".to_string(),
+            instructions: vec![
+                "Write each candidate as a concise claim that a future agent can act on.".to_string(),
+                "Attach all supporting evidence refs and any counterevidence refs.".to_string(),
+                "Classify each candidate as active, pending, rejected, superseded, or duplicate.".to_string(),
+            ],
+        },
+        DreamRunbookStep {
+            step: "generalise".to_string(),
+            objective: "Lift narrow session details into stable rules without losing important boundaries."
+                .to_string(),
+            instructions: vec![
+                "Generalise only when multiple evidence points or strong single evidence justify a reusable rule.".to_string(),
+                "Preserve scope limits such as project path, provider, command, file, date, or environment when they matter.".to_string(),
+                "Prefer operational wording: what future agents should inspect, run, avoid, or verify.".to_string(),
+            ],
+        },
+        DreamRunbookStep {
+            step: "apply-or-report".to_string(),
+            objective: "Return actionable output for the caller to apply through the appropriate durable surface."
+                .to_string(),
+            instructions: vec![
+                "If asked to update memory, produce a concrete patch or command sequence rather than vague advice.".to_string(),
+                "If no durable memory should be added, explain why and list the evidence refs reviewed.".to_string(),
+                "Do not write secrets, raw personal data, or unsupported conclusions into long-term memory.".to_string(),
+            ],
+        },
+    ]
 }
 
-fn dream_runner_for_config(
-    config: &DreamRunnerConfig,
-    request: &crate::dream::DreamRequest,
-) -> Result<Box<dyn DreamRunner>> {
-    match config.runner_kind()? {
-        DreamRunnerKind::Mock => {
-            if let Ok(message) = std::env::var(ENV_DREAM_MOCK_FAILURE) {
-                Ok(Box::new(MockDreamRunner::failing(message)))
-            } else if let Ok(output) = std::env::var(ENV_DREAM_MOCK_OUTPUT) {
-                Ok(Box::new(MockDreamRunner::returning_json(output)))
-            } else {
-                Ok(Box::new(MockDreamRunner::returning_json(
-                    default_mock_dream_output(request),
-                )))
-            }
-        }
-        DreamRunnerKind::Command => Ok(Box::new(CommandDreamRunner::from_env()?)),
+fn dream_output_contract() -> DreamOutputContract {
+    DreamOutputContract {
+        format: "markdown_or_json".to_string(),
+        required_sections: vec![
+            "evidence_reviewed".to_string(),
+            "deduplication_groups".to_string(),
+            "memory_candidates".to_string(),
+            "counterevidence_or_rejections".to_string(),
+            "application_plan".to_string(),
+        ],
+        memory_candidate_fields: vec![
+            "kind".to_string(),
+            "claim".to_string(),
+            "scope".to_string(),
+            "status".to_string(),
+            "confidence".to_string(),
+            "evidence_refs".to_string(),
+            "counterevidence_refs".to_string(),
+            "target_surface".to_string(),
+        ],
+        refusal_conditions: vec![
+            "no supplied evidence supports the claim".to_string(),
+            "claim contains secrets, credentials, or raw private identifiers".to_string(),
+            "claim is better represented as a transient task than durable memory".to_string(),
+            "newer evidence contradicts the proposed memory".to_string(),
+        ],
     }
 }
 
-fn default_mock_dream_output(request: &crate::dream::DreamRequest) -> String {
-    let evidence_ref = request
-        .evidence
-        .first()
-        .map(|event| event.evidence_ref.as_str())
-        .unwrap_or("mmr://event/evt:v1:missing");
-    format!(
-        r#"{{
-  "observations": [
-    {{
-      "kind": "observation",
-      "claim": "Project evidence is available for configured dream assimilation.",
-      "confidence": 0.49,
-      "evidence_refs": ["{evidence_ref}"]
-    }}
-  ],
-  "diagnostics": {{"warnings": ["mock dream runner used; set MMR_DREAM_MOCK_OUTPUT or configure MMR_DREAM_COMMAND for provider output"]}}
-}}"#
-    )
+fn dream_guardrails() -> Vec<String> {
+    vec![
+        "Do not treat omitted evidence as reviewed.".to_string(),
+        "Do not infer private facts from redacted placeholders.".to_string(),
+        "Do not create duplicate memory when an existing memory should be superseded or left unchanged.".to_string(),
+        "Do not mark a candidate active without at least one supplied evidence ref.".to_string(),
+        "Keep project-scoped memories scoped to the project unless the evidence supports a broader account-level preference.".to_string(),
+    ]
 }
 
-fn default_dream_model(runner: &str) -> String {
-    match runner {
-        "mock" => "mock".to_string(),
-        "command" => "command".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn classify_dream_output(output: &ValidatedDreamOutput) -> ClassifiedDreamOutput {
-    let mut candidates = output
-        .observations
-        .iter()
-        .map(candidate_from_observation)
-        .collect::<Vec<_>>();
-    let global_counterevidence_refs = output
-        .counterevidence
-        .iter()
-        .flat_map(|observation| {
-            observation
-                .evidence_refs
-                .iter()
-                .chain(observation.counterevidence_refs.iter())
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if !global_counterevidence_refs.is_empty() {
-        for candidate in &mut candidates {
-            if candidate.status == "accepted" {
-                candidate.status = "pending".to_string();
-            }
-            candidate
-                .counterevidence_refs
-                .extend(global_counterevidence_refs.iter().cloned());
-            candidate.counterevidence_refs = normalized_refs(&candidate.counterevidence_refs);
-        }
-    }
-    candidates.extend(
-        output
-            .counterevidence
-            .iter()
-            .map(counterevidence_candidate_from_observation),
-    );
-    let mut learned_memory = Vec::new();
-    for memory in &output.learned_memory {
-        let mut memory_counterevidence_refs = memory.counterevidence_refs.clone();
-        memory_counterevidence_refs.extend(global_counterevidence_refs.iter().cloned());
-        let status = learned_memory_status(
-            &memory.kind,
-            &memory.claim,
-            memory.confidence,
-            &memory_counterevidence_refs,
-            &memory.status,
-        );
-        let evidence_refs = normalized_refs(&memory.evidence_refs);
-        let counterevidence_refs = normalized_refs(&memory_counterevidence_refs);
-        if status == "active" {
-            learned_memory.push(NewLearnedMemory {
-                kind: memory.kind.clone(),
-                claim: memory.claim.clone(),
-                confidence: memory.confidence,
-                evidence_refs,
-                counterevidence_refs,
-                status,
-            });
-        } else if !candidates.iter().any(|candidate| {
-            candidate.kind == memory.kind
-                && candidate.claim == memory.claim
-                && candidate.evidence_refs == evidence_refs
-        }) {
-            candidates.push(NewDreamCandidate {
-                kind: memory.kind.clone(),
-                claim: memory.claim.clone(),
-                confidence: memory.confidence,
-                evidence_refs,
-                counterevidence_refs,
-                status,
-            });
-        }
-    }
-    ClassifiedDreamOutput {
-        candidates,
-        learned_memory,
-    }
-}
-
-fn candidate_from_observation(observation: &DreamObservation) -> NewDreamCandidate {
-    NewDreamCandidate {
-        kind: observation.kind.clone(),
-        claim: observation.claim.clone(),
-        confidence: observation.confidence,
-        evidence_refs: normalized_refs(&observation.evidence_refs),
-        counterevidence_refs: normalized_refs(&observation.counterevidence_refs),
-        status: candidate_status(observation),
-    }
-}
-
-fn counterevidence_candidate_from_observation(observation: &DreamObservation) -> NewDreamCandidate {
-    NewDreamCandidate {
-        kind: observation.kind.clone(),
-        claim: observation.claim.clone(),
-        confidence: observation.confidence,
-        evidence_refs: normalized_refs(&observation.evidence_refs),
-        counterevidence_refs: normalized_refs(&observation.counterevidence_refs),
-        status: "pending".to_string(),
-    }
-}
-
-fn candidate_status(observation: &DreamObservation) -> String {
-    if claim_is_sensitive(&observation.kind, &observation.claim) {
-        "rejected".to_string()
-    } else if observation.confidence >= 0.8 && observation.counterevidence_refs.is_empty() {
-        "accepted".to_string()
-    } else {
-        "pending".to_string()
-    }
-}
-
-fn learned_memory_status(
-    kind: &str,
-    claim: &str,
-    confidence: f64,
-    counterevidence_refs: &[String],
-    status: &ValidatedLearnedMemoryStatus,
-) -> String {
-    if claim_is_sensitive(kind, claim) {
-        "rejected".to_string()
-    } else if !counterevidence_refs.is_empty() {
-        "pending".to_string()
-    } else {
-        match status {
-            ValidatedLearnedMemoryStatus::Active if confidence >= 0.8 => "active".to_string(),
-            ValidatedLearnedMemoryStatus::Active => "pending".to_string(),
-            ValidatedLearnedMemoryStatus::Pending => "pending".to_string(),
-            ValidatedLearnedMemoryStatus::Rejected => "rejected".to_string(),
-        }
-    }
-}
-
-fn claim_is_sensitive(kind: &str, claim: &str) -> bool {
-    let normalized_kind = kind.trim().to_ascii_lowercase();
-    if normalized_kind.is_empty()
-        || normalized_kind.len() > 64
-        || !normalized_kind
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-    {
-        return true;
-    }
-    if ["identity", "personal", "secret", "credential", "sensitive"]
-        .iter()
-        .any(|needle| normalized_kind.contains(needle))
-    {
-        return true;
-    }
-    let outcome = scan_text_with_detector(
-        &format!("{normalized_kind}\n{}", claim.trim()),
-        &DeterministicPrivacyDetector,
-    );
-    outcome.blocks_sync || !outcome.findings.is_empty()
-}
-
-fn normalized_refs(refs: &[String]) -> Vec<String> {
-    let mut refs = refs.to_vec();
-    refs.sort();
-    refs.dedup();
-    refs
-}
-
-fn queued_learned_preview_count(learned_memory: &[DreamLearnedMemoryResponse]) -> usize {
-    learned_memory
-        .iter()
-        .filter(|memory| memory.status == "pending")
-        .count()
-}
-
-fn dream_candidate_preview_response(
-    candidate: &NewDreamCandidate,
-    id: Option<String>,
-) -> DreamCandidateResponse {
-    DreamCandidateResponse {
-        id,
-        kind: candidate.kind.clone(),
-        claim: candidate.claim.clone(),
-        confidence: candidate.confidence,
-        status: candidate.status.clone(),
-        evidence_refs: candidate.evidence_refs.clone(),
-        counterevidence_refs: candidate.counterevidence_refs.clone(),
-    }
-}
-
-fn dream_learned_memory_preview_response(
-    memory: &NewLearnedMemory,
-    id: Option<String>,
-) -> DreamLearnedMemoryResponse {
-    DreamLearnedMemoryResponse {
-        id,
-        kind: memory.kind.clone(),
-        claim: memory.claim.clone(),
-        confidence: memory.confidence,
-        status: memory.status.clone(),
-        evidence_refs: memory.evidence_refs.clone(),
-        counterevidence_refs: memory.counterevidence_refs.clone(),
-    }
-}
-
-fn dream_candidate_record_response(candidate: &DreamCandidateRecord) -> DreamCandidateResponse {
-    DreamCandidateResponse {
-        id: Some(candidate.id.clone()),
-        kind: candidate.kind.clone(),
-        claim: candidate.claim.clone(),
-        confidence: candidate.confidence,
-        status: candidate.status.clone(),
-        evidence_refs: candidate.evidence_refs.clone(),
-        counterevidence_refs: candidate.counterevidence_refs.clone(),
-    }
-}
-
-fn dream_learned_memory_record_response(
-    memory: &LearnedMemoryRecord,
-) -> DreamLearnedMemoryResponse {
-    DreamLearnedMemoryResponse {
-        id: Some(memory.id.clone()),
-        kind: memory.kind.clone(),
-        claim: memory.claim.clone(),
-        confidence: memory.confidence,
-        status: memory.status.clone(),
-        evidence_refs: memory.evidence_refs.clone(),
-        counterevidence_refs: memory.counterevidence_refs.clone(),
-    }
+fn dream_suggested_commands(project: &ProjectRecord) -> Vec<String> {
+    let project = shell_quote_path(Path::new(&project.canonical_path));
+    vec![
+        format!("mmr search --project {project} <query> --pretty"),
+        format!("mmr summary all --project {project} --pretty"),
+        format!("mmr sync --project {project} --dry-run --pretty"),
+    ]
 }
 
 #[derive(Debug, Serialize)]

@@ -38,12 +38,13 @@ It proves, from a clean non-Git temp directory, that:
 - `mmr redact scan` and `mmr sync --dry-run` block fake secrets from both
   imported source history and human notes without printing the secret, and sync
   redacts PII before remote payloads are written.
-- `mmr dream` applies only evidence-linked learned memory.
-- `mmr sync` uploads safe redacted projections and active learned memory while
-  blocking unsafe content.
+- `mmr dream` returns a prompt/runbook handoff with evidence-linked refs and
+  does not run a provider or write learned memory.
+- `mmr sync` uploads safe redacted projections and any active learned memory
+  created through store-level paths while blocking unsafe content.
 - A second empty local HOME/store can `mmr link` against the fake remote and
-  hydrate usable events, search documents, learned memory, and evidence refs
-  that still work in a fresh `mmr dream --dry-run`.
+  hydrate usable events, search documents, and evidence refs that still work in
+  a fresh `mmr dream`.
 
 ## Optional External Smoke
 
@@ -65,24 +66,21 @@ MMR_RUN_EXTERNAL_SUMMARY_SMOKE=1 GOOGLE_API_KEY=<key> \
   cargo test --test memory_fabric_contract optional_external_summary_provider_smoke_is_gated -- --nocapture
 ```
 
-Dream command runner example:
+Dream handoff example:
 
 ```bash
-export MMR_DEFAULT_DREAM_RUNNER=command
-export MMR_DREAM_COMMAND="python ./dream_runner.py"
-mmr dream --dry-run --pretty
+mmr dream --pretty
 ```
 
-The automated optional command-runner smoke is gated separately:
+The automated optional dream handoff smoke is gated separately:
 
 ```bash
-MMR_RUN_EXTERNAL_DREAM_SMOKE=1 MMR_DREAM_COMMAND="python ./dream_runner.py" \
+MMR_RUN_EXTERNAL_DREAM_SMOKE=1 \
   cargo test --test memory_fabric_contract optional_external_dream_command_smoke_is_gated -- --nocapture
 ```
 
-The built-in release gate uses the deterministic mock dream runner and a local
-mock Gemini server so CI and local development do not depend on third-party
-accounts.
+The built-in release gate uses local dream handoff generation and a local mock
+Gemini server so CI and local development do not depend on third-party accounts.
 
 ## Known Limitations
 
