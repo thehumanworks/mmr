@@ -211,10 +211,11 @@ Minimum JSON fields:
       "action": "..."
     },
     "summary_runner": {
-      "agent": "cursor",
+      "backend": "openai-compatible",
       "status": "missing_api_key",
-      "command": "agent",
-      "api_key_env": ["CURSOR_API_KEY"],
+      "endpoint": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "api_key_env": ["OPENAI_API_KEY"],
       "action": "..."
     },
     "assimilation_runner": {
@@ -299,8 +300,8 @@ Stateless continuity brief generation from prior sessions.
 Behavior:
 
 - Uses explicit `project`, `source`, and `session` scopes.
-- Uses the same agent/provider options unless
-  a downstream ticket narrows the surface intentionally.
+- Uses an OpenAI-compatible Chat Completions API configured by
+  `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `MMR_SUMMARISER_MODEL`.
 - Keeps `--instructions` semantics: custom text replaces the default output
   instruction while preserving the base identity/input-format instruction.
 - The user prompt stays neutral so the system instruction owns output behavior.
@@ -643,9 +644,9 @@ usable store without raw secrets.
 
 ## Summary Runner Contract
 
-`summarize` is stateless. It may call an agent/provider, but it does not write
-learned memory. It may write a `summaries` row only as an audit/cache record once
-the store exists.
+`summarize` is stateless. It may call an OpenAI-compatible API, but it does not
+write learned memory. It may write a `summaries` row only as an audit/cache
+record once the store exists.
 
 The output instruction replacement behavior from `summarize --instructions` is
 part of the contract and must be preserved.

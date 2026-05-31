@@ -1,14 +1,9 @@
 use anyhow::Result;
 
-use crate::agent::codex::CodexAgent;
-use crate::agent::cursor::CursorAgent;
-use crate::agent::gemini_api::Gemini;
+use crate::agent::chat_completions::{ChatCompletionRequest, ChatCompletionsClient};
 use crate::messages::service::QueryService;
 use crate::messages::utils::{format_messages_for_input, load_session_transcripts};
-use crate::types::{
-    Agent, CodexGenerateRequest, GeminiGenerateRequest, InteractionInput, InteractionInputType,
-    RememberRequest, RememberResponse,
-};
+use crate::types::{RememberRequest, RememberResponse};
 
 /// Preserved in every call. Establishes agent identity and describes the input format.
 pub const MEMORY_AGENT_BASE_INSTRUCTION: &str = r#"You are a Memory Agent — a specialized AI that analyzes AI coding session transcripts.
@@ -75,127 +70,55 @@ fn build_system_instruction(instructions: Option<&str>) -> String {
     }
 }
 
-async fn remember_with_gemini(
-    service: &QueryService,
-    request: RememberRequest<'_>,
-) -> Result<RememberResponse> {
-    let gemini = Gemini::new(request.model, None)?;
-    let system_instruction = build_system_instruction(request.instructions);
-
-    let sessions =
-        load_session_transcripts(service, request.project, &request.selection, request.source)?;
-    let formatted = format_messages_for_input(&sessions);
-    let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
-
-    let result = gemini
-        .generate(GeminiGenerateRequest {
-            input: vec![InteractionInput::new(InteractionInputType::Text, &input)],
-            system_instruction: Some(&system_instruction),
-        })
-        .await?;
-
-    Ok(RememberResponse::new(Agent::Gemini, result.text))
-}
-
-async fn remember_with_codex(
-    service: &QueryService,
-    request: RememberRequest<'_>,
-) -> Result<RememberResponse> {
-    let codex = CodexAgent::new().await;
-    let system_instruction = build_system_instruction(request.instructions);
-
-    let sessions =
-        load_session_transcripts(service, request.project, &request.selection, request.source)?;
-    let formatted = format_messages_for_input(&sessions);
-    let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
-
-    let result = codex
-        .generate(CodexGenerateRequest {
-            input: &input,
-            developer_instructions: Some(&system_instruction),
-        })
-        .await?;
-
-    Ok(RememberResponse::new(
-        Agent::Codex,
-        result.get_text().to_string(),
-    ))
-}
-
-fn remember_with_cursor(
-    service: &QueryService,
-    request: RememberRequest<'_>,
-) -> Result<RememberResponse> {
-    let cursor = CursorAgent::new(request.model, None::<String>);
-    let system_instruction = build_system_instruction(request.instructions);
-
-    let sessions =
-        load_session_transcripts(service, request.project, &request.selection, request.source)?;
-    let formatted = format_messages_for_input(&sessions);
-    let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
-
-    let result = cursor.generate(&format!(
-        "<system>\n{}\n</system>\n\n<user>{}</user>\n",
-        system_instruction, input
-    ))?;
-
-    Ok(RememberResponse::new(Agent::Cursor, result))
-}
-
 pub async fn remember(
     service: &QueryService,
     request: RememberRequest<'_>,
 ) -> Result<RememberResponse> {
-    match request.agent {
-        Agent::Gemini => remember_with_gemini(service, request).await,
-        Agent::Codex => remember_with_codex(service, request).await,
-        Agent::Cursor => remember_with_cursor(service, request),
-    }
+    let client = ChatCompletionsClient::from_env()?;
+    let system_instruction = build_system_instruction(request.instructions);
+
+    let sessions =
+        load_session_transcripts(service, request.project, &request.selection, request.source)?;
+    let formatted = format_messages_for_input(&sessions);
+    let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
+
+    let result = client
+        .create(ChatCompletionRequest::new(
+            request.model,
+            &system_instruction,
+            &input,
+        ))
+        .await?;
+
+    Ok(RememberResponse::new(
+        "openai-compatible",
+        result.model.unwrap_or_else(|| request.model.to_string()),
+        result.text,
+    ))
 }
 
 pub async fn summarize_formatted_messages(
-    agent: Agent,
     instructions: Option<&str>,
-    model: Option<&str>,
+    model: &str,
     formatted_messages: &str,
 ) -> Result<RememberResponse> {
+    let client = ChatCompletionsClient::from_env()?;
     let system_instruction = build_system_instruction(instructions);
     let input =
         format!("Analyze the following AI coding session transcript(s).\n\n{formatted_messages}");
 
-    match agent {
-        Agent::Gemini => {
-            let gemini = Gemini::new(model, None)?;
-            let result = gemini
-                .generate(GeminiGenerateRequest {
-                    input: vec![InteractionInput::new(InteractionInputType::Text, &input)],
-                    system_instruction: Some(&system_instruction),
-                })
-                .await?;
-            Ok(RememberResponse::new(Agent::Gemini, result.text))
-        }
-        Agent::Codex => {
-            let codex = CodexAgent::new().await;
-            let result = codex
-                .generate(CodexGenerateRequest {
-                    input: &input,
-                    developer_instructions: Some(&system_instruction),
-                })
-                .await?;
-            Ok(RememberResponse::new(
-                Agent::Codex,
-                result.get_text().to_string(),
-            ))
-        }
-        Agent::Cursor => {
-            let cursor = CursorAgent::new(model, None::<String>);
-            let result = cursor.generate(&format!(
-                "<system>\n{}\n</system>\n\n<user>{}</user>\n",
-                system_instruction, input
-            ))?;
-            Ok(RememberResponse::new(Agent::Cursor, result))
-        }
-    }
+    let result = client
+        .create(ChatCompletionRequest::new(
+            model,
+            &system_instruction,
+            &input,
+        ))
+        .await?;
+    Ok(RememberResponse::new(
+        "openai-compatible",
+        result.model.unwrap_or_else(|| model.to_string()),
+        result.text,
+    ))
 }
 
 #[cfg(test)]

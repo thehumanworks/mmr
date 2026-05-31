@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use super::domain::Agent;
-
 #[derive(Debug, Serialize)]
 pub struct ApiProject {
     pub name: String,
@@ -112,14 +110,20 @@ pub struct SkippedNewest {
 
 #[derive(Debug, Serialize)]
 pub struct RememberResponse {
-    pub agent: Agent,
+    pub backend: String,
+    pub model: String,
     pub text: String,
 }
 
 impl RememberResponse {
-    pub fn new(agent: Agent, text: impl Into<String>) -> Self {
+    pub fn new(
+        backend: impl Into<String>,
+        model: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
         Self {
-            agent,
+            backend: backend.into(),
+            model: model.into(),
             text: text.into(),
         }
     }

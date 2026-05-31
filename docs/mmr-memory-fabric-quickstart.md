@@ -114,10 +114,11 @@ mmr --source codex summarize source
 mmr summarize session <session-id> --project "$(pwd)"
 ```
 
-The default summary backend is Cursor unless `MMR_DEFAULT_REMEMBER_AGENT` is
-set. `mmr status --pretty` reports `diagnostics.summary_runner` so missing
-`CURSOR_API_KEY`, the Cursor `agent` CLI, Gemini keys, or the Codex CLI are
-visible before you run a summary.
+The summary backend is an OpenAI-compatible Chat Completions API. Set
+`OPENAI_API_KEY`, optionally set `OPENAI_BASE_URL` for OpenRouter or another
+compatible proxy, and set `MMR_SUMMARISER_MODEL` or pass `--model`.
+`mmr status --pretty` reports `diagnostics.summary_runner` so missing API
+configuration is visible before you run a summary.
 
 `summarize` and `assimilate` are stateless: they do not write active learned
 memory. Use `mmr assimilate` to generate a prompt, runbook, output contract, and
@@ -232,15 +233,15 @@ Summary provider unavailable:
 
 ```bash
 mmr status --pretty
-export MMR_DEFAULT_REMEMBER_AGENT=gemini
-export GOOGLE_API_KEY="<key>"
-mmr summarize project --agent gemini --project "$(pwd)"
+export OPENAI_API_KEY="<key>"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export MMR_SUMMARISER_MODEL="gpt-4o-mini"
+mmr summarize project --project "$(pwd)"
 ```
 
-For Cursor, set `CURSOR_API_KEY` and keep the `agent` CLI on `PATH`. For Codex,
-install/authenticate the `codex` CLI and use `mmr summarize project --agent codex`.
-`MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` changes which provider
-`status` checks by default; `--agent` overrides it for a single summary run.
+Use `OPENAI_BASE_URL` to point at a compatible proxy such as OpenRouter, and
+`MMR_SUMMARISER_MODEL` for the provider-specific model id. `--model` overrides
+the environment for a single summary run.
 
 Blocked sync:
 

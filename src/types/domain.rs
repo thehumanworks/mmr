@@ -80,15 +80,3 @@ pub struct MessageRecord {
     pub source_file: String,
     pub line_index: usize,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
-#[clap(rename_all = "kebab-case")]
-#[serde(rename_all = "kebab-case")]
-pub enum Agent {
-    #[clap(name = "gemini")]
-    Gemini,
-    #[clap(name = "codex")]
-    Codex,
-    #[clap(name = "cursor")]
-    Cursor,
-}

@@ -34,11 +34,19 @@ fn loopback_bind_available() -> bool {
 }
 
 fn first_input_text(body: &serde_json::Value) -> &str {
-    body["input"]
+    body["messages"]
         .as_array()
-        .and_then(|items| items.first())
-        .and_then(|item| item["text"].as_str())
-        .expect("first input text")
+        .and_then(|items| items.iter().find(|item| item["role"] == "user"))
+        .and_then(|item| item["content"].as_str())
+        .expect("user message text")
+}
+
+fn system_message_text(body: &serde_json::Value) -> &str {
+    body["messages"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["role"] == "system"))
+        .and_then(|item| item["content"].as_str())
+        .expect("system message text")
 }
 
 fn encode_claude_project_name(cwd: &str) -> String {
@@ -75,7 +83,7 @@ fn run_cli_with_home_and_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -
     command.output().expect("run mmr")
 }
 
-fn start_mock_gemini_server(
+fn start_mock_chat_completions_server(
     response_body: &str,
 ) -> (
     String,
@@ -1656,8 +1664,8 @@ fn remember_all_includes_claude_and_codex_messages() {
 {"type":"response_item","timestamp":"2025-01-04T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"remember codex answer"}]}}"#,
     );
 
-    let (base_url, captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-1","outputs":[{"text":"continuity summary"}]}"#,
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-1","model":"test-model","choices":[{"message":{"role":"assistant","content":"continuity summary"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -1666,14 +1674,12 @@ fn remember_all_includes_claude_and_codex_messages() {
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
             "-O",
             "json",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -1685,7 +1691,11 @@ fn remember_all_includes_claude_and_codex_messages() {
     handle.join().expect("mock server thread");
 
     let stdout_json = parse_stdout_json(&output);
-    assert_eq!(stdout_json["agent"].as_str().unwrap(), "gemini");
+    assert_eq!(
+        stdout_json["backend"].as_str().unwrap(),
+        "openai-compatible"
+    );
+    assert_eq!(stdout_json["model"].as_str().unwrap(), "test-model");
     assert_eq!(stdout_json["text"].as_str().unwrap(), "continuity summary");
     assert!(
         stdout_json.get("thread_or_interaction_id").is_none(),
@@ -1702,12 +1712,7 @@ fn remember_all_includes_claude_and_codex_messages() {
         input.contains("remember codex question"),
         "remember input should include codex transcript"
     );
-    assert!(
-        body["system_instruction"]
-            .as_str()
-            .unwrap()
-            .contains("Memory Agent")
-    );
+    assert!(system_message_text(&body).contains("Memory Agent"));
 }
 
 #[test]
@@ -1728,22 +1733,15 @@ fn summarize_project_without_selector_uses_project_history() {
 {"type":"response_item","timestamp":"2025-01-06T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"latest session answer"}]}}"#,
     );
 
-    let (base_url, captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-latest","outputs":[{"text":"latest summary"}]}"#,
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-latest","model":"test-model","choices":[{"message":{"role":"assistant","content":"latest summary"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
+        &["summarize", "project", "--project", "/Users/test/proj"],
         &[
-            "summarize",
-            "project",
-            "--project",
-            "/Users/test/proj",
-            "--agent",
-            "gemini",
-        ],
-        &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -1765,13 +1763,13 @@ fn summarize_project_without_selector_uses_project_history() {
 }
 
 #[test]
-fn remember_defaults_to_gemini_when_env_sets_it() {
+fn summarize_uses_model_from_env() {
     if !loopback_bind_available() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let (base_url, _captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-env-default","outputs":[{"text":"gemini env default"}]}"#,
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-env-default","model":"env-model","choices":[{"message":{"role":"assistant","content":"model env default"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -1784,9 +1782,9 @@ fn remember_defaults_to_gemini_when_env_sets_it() {
             "json",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
-            ("MMR_DEFAULT_REMEMBER_AGENT", "gemini"),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
+            ("MMR_SUMMARISER_MODEL", "env-model"),
         ],
     );
 
@@ -1798,18 +1796,18 @@ fn remember_defaults_to_gemini_when_env_sets_it() {
     handle.join().expect("mock server thread");
 
     let stdout_json = parse_stdout_json(&output);
-    assert_eq!(stdout_json["agent"].as_str().unwrap(), "gemini");
-    assert_eq!(stdout_json["text"].as_str().unwrap(), "gemini env default");
+    assert_eq!(stdout_json["model"].as_str().unwrap(), "env-model");
+    assert_eq!(stdout_json["text"].as_str().unwrap(), "model env default");
 }
 
 #[test]
-fn remember_explicit_agent_overrides_default_env() {
+fn summarize_model_flag_overrides_model_env() {
     if !loopback_bind_available() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let (base_url, _captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-env-override","outputs":[{"text":"explicit override"}]}"#,
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-env-override","model":"flag-model","choices":[{"message":{"role":"assistant","content":"explicit override"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -1818,15 +1816,15 @@ fn remember_explicit_agent_overrides_default_env() {
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
+            "--model",
+            "flag-model",
             "-O",
             "json",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
-            ("MMR_DEFAULT_REMEMBER_AGENT", "codex"),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
+            ("MMR_SUMMARISER_MODEL", "env-model"),
         ],
     );
 
@@ -1838,7 +1836,7 @@ fn remember_explicit_agent_overrides_default_env() {
     handle.join().expect("mock server thread");
 
     let stdout_json = parse_stdout_json(&output);
-    assert_eq!(stdout_json["agent"].as_str().unwrap(), "gemini");
+    assert_eq!(stdout_json["model"].as_str().unwrap(), "flag-model");
     assert_eq!(stdout_json["text"].as_str().unwrap(), "explicit override");
 }
 
@@ -1859,8 +1857,8 @@ fn remember_with_source_filter_only_includes_requested_source() {
 {"type":"event_msg","timestamp":"2025-01-05T00:00:01","payload":{"type":"user_message","message":"codex-only question"}} "#,
     );
 
-    let (base_url, captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-2","outputs":[{"text":"codex-only summary"}]}"#,
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-2","model":"test-model","choices":[{"message":{"role":"assistant","content":"codex-only summary"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -1871,12 +1869,10 @@ fn remember_with_source_filter_only_includes_requested_source() {
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -1902,8 +1898,8 @@ fn remember_session_selector_uses_requested_session() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let (base_url, captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-3","outputs":[{"text":"session summary"}]}"#,
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-3","model":"test-model","choices":[{"message":{"role":"assistant","content":"session summary"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -1913,12 +1909,10 @@ fn remember_session_selector_uses_requested_session() {
             "sess-claude-1",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -1934,10 +1928,10 @@ fn remember_session_selector_uses_requested_session() {
     assert!(input.contains("hello from claude"));
     assert!(!input.contains("remember codex question"));
     assert!(
-        body["previous_interaction_id"].is_null(),
-        "one-shot remember requests should not resume previous interactions"
+        body.get("previous_interaction_id").is_none(),
+        "one-shot summarize requests should not resume previous interactions"
     );
-    let system_instruction = body["system_instruction"].as_str().unwrap();
+    let system_instruction = system_message_text(&body);
     assert!(system_instruction.contains("Memory Agent"));
 }
 
@@ -1947,8 +1941,8 @@ fn remember_output_format_md_transforms_json_response_to_markdown() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let (base_url, _captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-md","outputs":[{"text":"Status\n- Item one"}]}"#,
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-md","model":"test-model","choices":[{"message":{"role":"assistant","content":"Status\n- Item one"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -1957,14 +1951,12 @@ fn remember_output_format_md_transforms_json_response_to_markdown() {
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
             "-O",
             "md",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -1991,8 +1983,8 @@ fn remember_output_format_md_trims_summary_and_interaction_id() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let (base_url, _captured, handle) = start_mock_gemini_server(
-        r#"{"id":"  interaction-trim  ","outputs":[{"text":"  status line\nnext line  "}]}"#,
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"  interaction-trim  ","model":"test-model","choices":[{"message":{"role":"assistant","content":"  status line\nnext line  "}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -2001,14 +1993,12 @@ fn remember_output_format_md_trims_summary_and_interaction_id() {
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
             "--output-format",
             "md",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -2030,8 +2020,8 @@ fn remember_custom_instructions_replace_default_output_section_in_system_prompt(
         return;
     }
     let fixture = TestFixture::seeded();
-    let (base_url, captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-custom","outputs":[{"text":"custom output"}]}"#,
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-custom","model":"test-model","choices":[{"message":{"role":"assistant","content":"custom output"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
@@ -2040,14 +2030,12 @@ fn remember_custom_instructions_replace_default_output_section_in_system_prompt(
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
             "--instructions",
             "Return only a single keyword.",
         ],
         &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -2059,7 +2047,7 @@ fn remember_custom_instructions_replace_default_output_section_in_system_prompt(
     handle.join().expect("mock server thread");
 
     let body = captured.lock().expect("captured body").clone().unwrap();
-    let system = body["system_instruction"].as_str().unwrap();
+    let system = system_message_text(&body);
     assert!(
         system.contains("Memory Agent"),
         "base identity must be preserved"
@@ -2092,22 +2080,15 @@ fn remember_without_instructions_includes_default_purpose_and_output_sections() 
         return;
     }
     let fixture = TestFixture::seeded();
-    let (base_url, captured, handle) = start_mock_gemini_server(
-        r#"{"id":"interaction-default","outputs":[{"text":"default output"}]}"#,
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-default","model":"test-model","choices":[{"message":{"role":"assistant","content":"default output"}}]}"#,
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
+        &["summarize", "project", "--project", "/Users/test/proj"],
         &[
-            "summarize",
-            "project",
-            "--project",
-            "/Users/test/proj",
-            "--agent",
-            "gemini",
-        ],
-        &[
-            ("GOOGLE_API_KEY", "test-key"),
-            ("GEMINI_API_BASE_URL", base_url.as_str()),
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
         ],
     );
 
@@ -2119,7 +2100,7 @@ fn remember_without_instructions_includes_default_purpose_and_output_sections() 
     handle.join().expect("mock server thread");
 
     let body = captured.lock().expect("captured body").clone().unwrap();
-    let system = body["system_instruction"].as_str().unwrap();
+    let system = system_message_text(&body);
     assert!(
         system.contains("Memory Agent"),
         "base identity must be present"

@@ -28,7 +28,7 @@ commit unsafe.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
 - `src/teleport/`: provider-profile native bundle pack/apply/resume/export (`provider.rs`, `providers/{codex,claude,cursor,grok,pi}.rs`); artifact paths are provider-qualified (`native/<provider>/…`); legacy flat `transcript.native.jsonl` bundles still verify on read.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
-- `src/agent/gemini.rs`: Gemini Interactions API client (model, API key resolution, HTTP transport).
+- `src/agent/chat_completions.rs`: strongly typed OpenAI-compatible Chat Completions client used by `summarize`.
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
@@ -95,14 +95,12 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for project-scoped list/read/recall commands; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor|grok|pi` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
-- `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` sets the default summarization backend where the legacy memory-agent runner is still used. When unset, the default backend is Cursor (`composer-2-fast` unless `--model` is set).
+- `MMR_SUMMARISER_MODEL=<model>` sets the default OpenAI-compatible model for `summarize`; `--model` overrides it for one command. `OPENAI_API_KEY` is required, and `OPENAI_BASE_URL` can point at OpenAI, OpenRouter, or a compatible proxy.
 
 ## Summarize command and `--instructions` system prompt architecture
 
-The `summarize` command sends selected transcripts to the backend selected with
-`--agent` (`cursor`, `codex`, or `gemini`; default `cursor` with
-`composer-2-fast` when `--model` is omitted). For each backend, the memory flow
-uses a system prompt composed of two parts:
+The `summarize` command sends selected transcripts to an OpenAI-compatible Chat
+Completions API. The memory flow uses a system prompt composed of two parts:
 
 1. **Base instruction** (`MEMORY_AGENT_BASE_INSTRUCTION` in `src/agent/ai.rs`): Always present. Contains only the agent's identity ("You are a Memory Agent") and the input format description. Must **never** contain output-directing language (e.g. "continuity brief", "sole purpose", output quality directives).
 
@@ -114,7 +112,10 @@ This separation ensures `--instructions` has full control over how the agent pro
 
 The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
 
-Environment: **Gemini** — `GOOGLE_API_KEY` or `GEMINI_API_KEY`; optional `GEMINI_API_BASE_URL` (integration tests use a mock server). **Codex** — Codex CLI auth as configured for `codex exec`. **Cursor** — `CURSOR_API_KEY` and the `agent` CLI on `PATH`.
+Environment: `OPENAI_API_KEY` is required. `OPENAI_BASE_URL` defaults to
+`https://api.openai.com/v1` and may point to a compatible proxy such as
+OpenRouter. `MMR_SUMMARISER_MODEL` defaults the model, and `--model` overrides
+it for one command.
 
 ## Coding Style & Naming Conventions
 

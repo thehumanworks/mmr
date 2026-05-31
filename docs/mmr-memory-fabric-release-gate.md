@@ -34,7 +34,8 @@ It proves, from a clean non-Git temp directory, that:
 - `mmr find` finds stored evidence with stable `mmr://event/...`
   citations.
 - `mmr summarize project`, `mmr summarize source`, and `mmr summarize session`
-  use the stateless continuity runner through a mock Gemini endpoint.
+  use the stateless continuity runner through a mock OpenAI-compatible Chat
+  Completions endpoint.
 - `mmr redact scan` and `mmr sync --dry-run` block fake secrets from both
   imported source history and human notes without printing the secret, and sync
   redacts PII before remote payloads are written.
@@ -54,15 +55,15 @@ require external network credentials.
 Summary provider examples:
 
 ```bash
-MMR_DEFAULT_REMEMBER_AGENT=gemini GOOGLE_API_KEY=<key> mmr summarize project --agent gemini
-CURSOR_API_KEY=<key> mmr summarize project --agent cursor
-mmr summarize project --agent codex
+OPENAI_API_KEY=<key> MMR_SUMMARISER_MODEL=gpt-4o-mini mmr summarize project
+OPENAI_API_KEY=<key> OPENAI_BASE_URL=https://openrouter.ai/api/v1 \
+  MMR_SUMMARISER_MODEL=openai/gpt-4o-mini mmr summarize project
 ```
 
-The automated optional Gemini smoke is gated by an explicit flag:
+The automated optional external summary smoke is gated by an explicit flag:
 
 ```bash
-MMR_RUN_EXTERNAL_SUMMARY_SMOKE=1 GOOGLE_API_KEY=<key> \
+MMR_RUN_EXTERNAL_SUMMARY_SMOKE=1 OPENAI_API_KEY=<key> \
   cargo test --test memory_fabric_contract optional_external_summary_provider_smoke_is_gated -- --nocapture
 ```
 

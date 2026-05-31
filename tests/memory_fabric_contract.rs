@@ -1113,11 +1113,8 @@ fn status_diagnostics_contract_is_implemented() {
         .env("XDG_DATA_HOME", &data_home)
         .env("MMR_FAKE_REMOTE_DIR", &remote)
         .env("MMR_FAKE_REMOTE_AUTH", "fail")
-        .env("MMR_DEFAULT_REMEMBER_AGENT", "gemini")
         .env("MMR_DEFAULT_DREAM_RUNNER", "command")
-        .env_remove("GOOGLE_API_KEY")
-        .env_remove("GEMINI_API_KEY")
-        .env_remove("CURSOR_API_KEY")
+        .env_remove("OPENAI_API_KEY")
         .current_dir(&project)
         .output()
         .expect("status diagnostics");
@@ -1164,8 +1161,8 @@ fn status_diagnostics_contract_is_implemented() {
         "missing_api_key"
     );
     assert_eq!(
-        status_json["diagnostics"]["summary_runner"]["agent"],
-        "gemini"
+        status_json["diagnostics"]["summary_runner"]["backend"],
+        "openai-compatible"
     );
     assert_eq!(
         status_json["diagnostics"]["dream_runner"]["command_env"],
@@ -1680,28 +1677,26 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     assert_eq!(structured_search_json["results"][0]["source"], "claude");
 
     let summary_response = format!(
-        r#"{{"id":"release-summary","outputs":[{{"text":"Release summary cites {evidence_ref}"}}]}}"#
+        r#"{{"id":"release-summary","model":"test-model","choices":[{{"message":{{"role":"assistant","content":"Release summary cites {evidence_ref}"}}}}]}}"#
     );
     let (summary_base_url, summary_request, summary_handle) =
-        start_mock_gemini_server(summary_response);
+        start_mock_chat_completions_server(summary_response);
     let summary = command("summarize project", &data_home, &project)
         .args([
             "--project",
             project.to_str().expect("project path UTF-8"),
-            "--agent",
-            "gemini",
             "-O",
             "json",
         ])
-        .env("GOOGLE_API_KEY", "test-key")
-        .env("GEMINI_API_BASE_URL", summary_base_url)
+        .env("OPENAI_API_KEY", "test-key")
+        .env("OPENAI_BASE_URL", summary_base_url)
         .output()
         .expect("release summary");
     assert_success_ref(&summary);
     summary_handle.join().expect("summary server thread");
     let summary_json: serde_json::Value =
         serde_json::from_slice(&summary.stdout).expect("summary JSON");
-    assert_eq!(summary_json["agent"], "gemini");
+    assert_eq!(summary_json["backend"], "openai-compatible");
     assert!(
         summary_json["text"]
             .as_str()
@@ -1718,27 +1713,25 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     assert!(summary_input.contains("Release Claude fixture"));
     assert!(summary_input.contains("Release Cursor fixture"));
 
-    let (remember_base_url, remember_request, remember_handle) = start_mock_gemini_server(
-        r#"{"id":"release-summarize","outputs":[{"text":"Summarize project works"}]}"#.to_string(),
+    let (remember_base_url, remember_request, remember_handle) = start_mock_chat_completions_server(
+        r#"{"id":"release-summarize","model":"test-model","choices":[{"message":{"role":"assistant","content":"Summarize project works"}}]}"#.to_string(),
     );
     let remember = command("summarize project", &data_home, &project)
         .args([
             "--project",
             project.to_str().expect("project path UTF-8"),
-            "--agent",
-            "gemini",
             "-O",
             "json",
         ])
-        .env("GOOGLE_API_KEY", "test-key")
-        .env("GEMINI_API_BASE_URL", remember_base_url)
+        .env("OPENAI_API_KEY", "test-key")
+        .env("OPENAI_BASE_URL", remember_base_url)
         .output()
         .expect("release summarize project");
     assert_success_ref(&remember);
     remember_handle.join().expect("remember server thread");
     let remember_json: serde_json::Value =
         serde_json::from_slice(&remember.stdout).expect("remember JSON");
-    assert_eq!(remember_json["agent"], "gemini");
+    assert_eq!(remember_json["backend"], "openai-compatible");
     assert_eq!(remember_json["text"], "Summarize project works");
     let remember_body = remember_request
         .lock()
@@ -2246,7 +2239,8 @@ fn summary_cli_contract_is_implemented() {
     assert_success_ref(&project_help);
     let project_help_text =
         String::from_utf8(project_help.stdout).expect("summarize project help UTF-8");
-    assert!(project_help_text.contains("--agent"));
+    assert!(!project_help_text.contains("--agent"));
+    assert!(project_help_text.contains("--model"));
     assert!(project_help_text.contains("--output-format"));
 }
 
@@ -3596,7 +3590,7 @@ fn summary_generation_contract_is_implemented() {
             .unwrap_or_default();
         let body_json: serde_json::Value = serde_json::from_str(body).expect("request JSON body");
         *captured_for_thread.lock().expect("lock captured body") = Some(body_json);
-        let response = r#"{"id":"summary-interaction","outputs":[{"text":"summary output"}]}"#;
+        let response = r#"{"id":"summary-interaction","model":"test-model","choices":[{"message":{"role":"assistant","content":"summary output"}}]}"#;
         let http_response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             response.len(),
@@ -3611,14 +3605,12 @@ fn summary_generation_contract_is_implemented() {
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
             "-O",
             "json",
         ])
         .env("HOME", &home)
-        .env("GOOGLE_API_KEY", "test-key")
-        .env("GEMINI_API_BASE_URL", base_url.as_str())
+        .env("OPENAI_API_KEY", "test-key")
+        .env("OPENAI_BASE_URL", base_url.as_str())
         .output()
         .expect("summary generation");
 
@@ -3626,24 +3618,16 @@ fn summary_generation_contract_is_implemented() {
     handle.join().expect("mock server thread");
     let stdout_json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("summary stdout JSON");
-    assert_eq!(stdout_json["agent"], "gemini");
+    assert_eq!(stdout_json["backend"], "openai-compatible");
+    assert_eq!(stdout_json["model"], "test-model");
     assert_eq!(stdout_json["text"], "summary output");
     assert!(stdout_json.get("thread_or_interaction_id").is_none());
 
     let body = captured.lock().expect("captured body").clone().unwrap();
-    let input = body["input"]
-        .as_array()
-        .and_then(|items| items.first())
-        .and_then(|item| item["text"].as_str())
-        .expect("first input text");
+    let input = first_input_text(&body);
     assert!(input.contains("hello from claude summary"));
     assert!(input.contains("hello from codex summary"));
-    assert!(
-        body["system_instruction"]
-            .as_str()
-            .unwrap()
-            .contains("Memory Agent")
-    );
+    assert!(system_message_text(&body).contains("Memory Agent"));
 }
 
 #[test]
@@ -3656,13 +3640,12 @@ fn optional_external_summary_provider_smoke_is_gated() {
         return;
     }
 
-    let has_gemini_key = std::env::var("GOOGLE_API_KEY")
-        .or_else(|_| std::env::var("GEMINI_API_KEY"))
+    let has_openai_key = std::env::var("OPENAI_API_KEY")
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     assert!(
-        has_gemini_key,
-        "set GOOGLE_API_KEY or GEMINI_API_KEY with MMR_RUN_EXTERNAL_SUMMARY_SMOKE=1"
+        has_openai_key,
+        "set OPENAI_API_KEY with MMR_RUN_EXTERNAL_SUMMARY_SMOKE=1"
     );
 
     let tmp = tempfile::tempdir().expect("temp dir");
@@ -3679,8 +3662,6 @@ fn optional_external_summary_provider_smoke_is_gated() {
             "project",
             "--project",
             project.to_str().expect("project path UTF-8"),
-            "--agent",
-            "gemini",
             "-O",
             "json",
         ])
@@ -3691,7 +3672,7 @@ fn optional_external_summary_provider_smoke_is_gated() {
     assert_success_ref(&output);
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("external summary JSON");
-    assert_eq!(json["agent"], "gemini");
+    assert_eq!(json["backend"], "openai-compatible");
     assert!(
         !json["text"].as_str().unwrap_or_default().trim().is_empty(),
         "external summary smoke should return non-empty text"
@@ -4120,14 +4101,22 @@ fn assert_success_ref(output: &std::process::Output) {
 }
 
 fn first_input_text(body: &serde_json::Value) -> &str {
-    body["input"]
+    body["messages"]
         .as_array()
-        .and_then(|items| items.first())
-        .and_then(|item| item["text"].as_str())
-        .expect("first input text")
+        .and_then(|items| items.iter().find(|item| item["role"] == "user"))
+        .and_then(|item| item["content"].as_str())
+        .expect("user message text")
 }
 
-fn start_mock_gemini_server(
+fn system_message_text(body: &serde_json::Value) -> &str {
+    body["messages"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["role"] == "system"))
+        .and_then(|item| item["content"].as_str())
+        .expect("system message text")
+}
+
+fn start_mock_chat_completions_server(
     response_body: String,
 ) -> (
     String,

@@ -1,4 +1,2 @@
 pub mod ai;
-pub mod codex;
-pub mod cursor;
-pub mod gemini_api;
+pub mod chat_completions;

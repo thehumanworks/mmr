@@ -37,8 +37,8 @@ use crate::teleport::{
     resume_bundle, send_session, serve_session,
 };
 use crate::types::{
-    Agent, ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection,
-    SortBy, SortOptions, SortOrder, SourceFilter,
+    ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection, SortBy,
+    SortOptions, SortOrder, SourceFilter,
 };
 
 #[derive(Debug, Clone)]
@@ -75,8 +75,9 @@ impl std::fmt::Display for CliFailure {
 impl std::error::Error for CliFailure {}
 
 const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
-const ENV_DEFAULT_REMEMBER_AGENT: &str = "MMR_DEFAULT_REMEMBER_AGENT";
 const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
+const ENV_SUMMARISER_MODEL: &str = "MMR_SUMMARISER_MODEL";
+const DEFAULT_SUMMARISER_MODEL: &str = "gpt-4o-mini";
 
 #[derive(Debug, Clone, Copy)]
 struct BundledSkillFile {
@@ -400,16 +401,13 @@ pub struct SummarizeSessionArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct SummaryRunnerArgs {
-    /// Agent to use (defaults to MMR_DEFAULT_REMEMBER_AGENT or cursor / composer-2-fast)
-    #[arg(long, value_enum)]
-    agent: Option<Agent>,
     /// Override the output format and rules portion of the system instructions
     #[arg(long)]
     instructions: Option<String>,
     /// Output format for summary results
     #[arg(short = 'O', long = "output-format", value_enum, default_value = "md")]
     output_format: RememberOutputFormatArg,
-    /// Model to use
+    /// Model to use (overrides MMR_SUMMARISER_MODEL)
     #[arg(long)]
     model: Option<String>,
 }
@@ -1352,15 +1350,15 @@ async fn summarize_command_response(
             let project = args
                 .project
                 .unwrap_or(current_dir_project().context("could not resolve current directory")?);
+            let model = effective_summariser_model(args.runner.model.as_deref());
             let response = ai::remember(
                 service,
                 RememberRequest {
-                    agent: effective_remember_agent(args.runner.agent),
                     project: project.as_str(),
                     selection: RememberSelection::All,
                     source: source_filter,
                     instructions: args.runner.instructions.as_deref(),
-                    model: args.runner.model.as_deref(),
+                    model: &model,
                 },
             )
             .await?;
@@ -1378,10 +1376,10 @@ async fn summarize_command_response(
                 ),
             )?;
             let formatted = format_messages_as_summary_input(&messages.messages);
+            let model = effective_summariser_model(args.runner.model.as_deref());
             let response = ai::summarize_formatted_messages(
-                effective_remember_agent(args.runner.agent),
                 args.runner.instructions.as_deref(),
-                args.runner.model.as_deref(),
+                &model,
                 &formatted,
             )
             .await?;
@@ -1400,10 +1398,10 @@ async fn summarize_command_response(
                 ),
             )?;
             let formatted = format_messages_as_summary_input(&messages.messages);
+            let model = effective_summariser_model(args.runner.model.as_deref());
             let response = ai::summarize_formatted_messages(
-                effective_remember_agent(args.runner.agent),
                 args.runner.instructions.as_deref(),
-                args.runner.model.as_deref(),
+                &model,
                 &formatted,
             )
             .await?;
@@ -2090,9 +2088,10 @@ struct StatusPrivacyDiagnostic {
 
 #[derive(Debug, Serialize)]
 struct StatusSummaryRunnerDiagnostic {
-    agent: Agent,
+    backend: String,
     status: String,
-    command: Option<String>,
+    endpoint: String,
+    model: String,
     api_key_env: Vec<String>,
     action: Option<String>,
 }
@@ -2497,73 +2496,31 @@ fn status_privacy_diagnostic() -> StatusPrivacyDiagnostic {
 }
 
 fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
-    let agent = effective_remember_agent(None);
-    match agent {
-        Agent::Gemini => {
-            let configured =
-                env_has_non_empty("GOOGLE_API_KEY") || env_has_non_empty("GEMINI_API_KEY");
-            StatusSummaryRunnerDiagnostic {
-                agent,
-                status: if configured {
-                    "configured"
-                } else {
-                    "missing_api_key"
-                }
-                .to_string(),
-                command: None,
-                api_key_env: vec!["GOOGLE_API_KEY".to_string(), "GEMINI_API_KEY".to_string()],
-                action: (!configured).then(|| {
-                    "Set GOOGLE_API_KEY or GEMINI_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|codex, or run one brief with `mmr summarize project --agent cursor|codex`."
-                        .to_string()
-                }),
-            }
+    let configured = env_has_non_empty("OPENAI_API_KEY");
+    StatusSummaryRunnerDiagnostic {
+        backend: "openai-compatible".to_string(),
+        status: if configured {
+            "configured"
+        } else {
+            "missing_api_key"
         }
-        Agent::Cursor => {
-            let api_key_configured = env_has_non_empty("CURSOR_API_KEY");
-            let command_available = command_on_path("agent");
-            let (status, action) = if !api_key_configured {
-                (
-                    "missing_api_key",
-                    Some(
-                        "Set CURSOR_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summarize project --agent gemini|codex`."
-                            .to_string(),
-                    ),
-                )
-            } else if !command_available {
-                (
-                    "missing_command",
-                    Some("Install the Cursor `agent` CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summarize project --agent gemini|codex`.".to_string()),
-                )
-            } else {
-                ("configured", None)
-            };
-            StatusSummaryRunnerDiagnostic {
-                agent,
-                status: status.to_string(),
-                command: Some("agent".to_string()),
-                api_key_env: vec!["CURSOR_API_KEY".to_string()],
-                action,
-            }
-        }
-        Agent::Codex => {
-            let command_available = command_on_path("codex");
-            StatusSummaryRunnerDiagnostic {
-                agent,
-                status: if command_available {
-                    "configured"
-                } else {
-                    "missing_command"
-                }
-                .to_string(),
-                command: Some("codex".to_string()),
-                api_key_env: Vec::new(),
-                action: (!command_available).then(|| {
-                    "Install the Codex CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|gemini, or run one brief with `mmr summarize project --agent cursor|gemini`."
-                        .to_string()
-                }),
-            }
-        }
+        .to_string(),
+        endpoint: openai_base_url_for_status(),
+        model: effective_summariser_model(None),
+        api_key_env: vec!["OPENAI_API_KEY".to_string()],
+        action: (!configured).then(|| {
+            "Set OPENAI_API_KEY; optionally set OPENAI_BASE_URL for a compatible proxy and MMR_SUMMARISER_MODEL for the target model."
+                .to_string()
+        }),
     }
+}
+
+fn openai_base_url_for_status() -> String {
+    std::env::var("OPENAI_BASE_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
 }
 
 fn status_dream_runner_diagnostic() -> StatusDreamRunnerDiagnostic {
@@ -2579,15 +2536,6 @@ fn status_dream_runner_diagnostic() -> StatusDreamRunnerDiagnostic {
 fn env_has_non_empty(name: &str) -> bool {
     std::env::var(name)
         .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-}
-
-fn command_on_path(command: &str) -> bool {
-    if command.contains(std::path::MAIN_SEPARATOR) {
-        return Path::new(command).is_file();
-    }
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|path| path.join(command).is_file()))
         .unwrap_or(false)
 }
 
@@ -3895,10 +3843,13 @@ fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
     }
 }
 
-fn effective_remember_agent(cli_agent: Option<Agent>) -> Agent {
-    cli_agent
-        .or_else(default_remember_agent_from_env)
-        .unwrap_or(Agent::Cursor)
+fn effective_summariser_model(cli_model: Option<&str>) -> String {
+    cli_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(default_summariser_model_from_env)
+        .unwrap_or_else(|| DEFAULT_SUMMARISER_MODEL.to_string())
 }
 
 #[cfg(test)]
@@ -3955,20 +3906,11 @@ fn validate_session_back(age: u32, include_newest: bool) -> Result<u32, SessionS
     Ok(age)
 }
 
-fn default_remember_agent_from_env() -> Option<Agent> {
-    std::env::var(ENV_DEFAULT_REMEMBER_AGENT)
+fn default_summariser_model_from_env() -> Option<String> {
+    std::env::var(ENV_SUMMARISER_MODEL)
         .ok()
-        .and_then(|value| parse_agent_env(&value))
-}
-
-fn parse_agent_env(value: &str) -> Option<Agent> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "" => None,
-        "codex" => Some(Agent::Codex),
-        "cursor" => Some(Agent::Cursor),
-        "gemini" => Some(Agent::Gemini),
-        _ => None,
-    }
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn effective_project_scope(explicit_project: Option<String>, all: bool) -> Option<String> {
@@ -4256,8 +4198,8 @@ mod tests {
             "project",
             "--project",
             "/Users/test/proj",
-            "--agent",
-            "gemini",
+            "--model",
+            "openrouter/auto",
             "-O",
             "json",
         ])
@@ -4269,7 +4211,7 @@ mod tests {
             panic!("expected summarize project command");
         };
         assert_eq!(project.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(project.runner.agent, Some(Agent::Gemini));
+        assert_eq!(project.runner.model.as_deref(), Some("openrouter/auto"));
         assert_eq!(project.runner.output_format, RememberOutputFormatArg::Json);
     }
 
@@ -4292,7 +4234,6 @@ mod tests {
         };
         assert_eq!(session.session_id, "sess-123");
         assert_eq!(session.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(session.runner.agent, None);
     }
 
     #[test]
@@ -4322,16 +4263,6 @@ mod tests {
         assert_eq!(parse_source_filter_env("PI"), Some(SourceFilter::Pi));
         assert_eq!(parse_source_filter_env(""), None);
         assert_eq!(parse_source_filter_env("invalid"), None);
-    }
-
-    #[test]
-    fn parse_agent_env_accepts_supported_values() {
-        assert_eq!(parse_agent_env("codex"), Some(Agent::Codex));
-        assert_eq!(parse_agent_env("cursor"), Some(Agent::Cursor));
-        assert_eq!(parse_agent_env("CURSOR"), Some(Agent::Cursor));
-        assert_eq!(parse_agent_env("GEMINI"), Some(Agent::Gemini));
-        assert_eq!(parse_agent_env(""), None);
-        assert_eq!(parse_agent_env("invalid"), None);
     }
 
     #[test]
@@ -4531,7 +4462,8 @@ mod tests {
     #[test]
     fn remember_markdown_transformation_includes_summary_only() {
         let response = RememberResponse {
-            agent: Agent::Gemini,
+            backend: "openai-compatible".to_string(),
+            model: "test-model".to_string(),
             text: "# Continuity Brief\n\nSummary body".to_string(),
         };
 
@@ -4545,7 +4477,8 @@ mod tests {
     #[test]
     fn remember_markdown_transformation_handles_empty_values() {
         let response = RememberResponse {
-            agent: Agent::Gemini,
+            backend: "openai-compatible".to_string(),
+            model: "test-model".to_string(),
             text: "  ".to_string(),
         };
 
@@ -4558,7 +4491,8 @@ mod tests {
     #[test]
     fn remember_markdown_transformation_trims_outer_whitespace() {
         let response = RememberResponse {
-            agent: Agent::Gemini,
+            backend: "openai-compatible".to_string(),
+            model: "test-model".to_string(),
             text: "\n  line one\nline two  \n".to_string(),
         };
 
