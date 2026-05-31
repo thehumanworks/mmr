@@ -1,0 +1,4 @@
+interface:
+  display_name: "mmr MCP Rust SDK"
+  short_description: "Build mmr MCP servers with rmcp"
+  default_prompt: "Use $mmr-mcp-rust-sdk to add or review mmr MCP server support."

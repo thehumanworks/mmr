@@ -112,7 +112,7 @@ const BUNDLED_MMR_SKILL_FILES: &[BundledSkillFile] = &[
 #[command(
     name = "mmr",
     about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
-    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --project /path/to/project\n  mmr recall --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr assimilate project --pretty\n  mmr skill load\n  mmr skill install --local\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON."
+    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --project /path/to/project\n  mmr recall --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr assimilate project --pretty\n  mmr skill load\n  mmr skill install --local\n  mmr mcp --transport stdio\n  mmr mcp --transport http\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -162,6 +162,8 @@ pub enum Commands {
     Sync(SyncArgs),
     /// Inspect local project, redaction, and sync state
     Status(StatusArgs),
+    /// Run mmr as a Model Context Protocol server
+    Mcp(crate::mcp::McpArgs),
     /// Inspect the local mmr database path and schema version
     #[command(name = "__db-info", hide = true)]
     DbInfo {
@@ -926,6 +928,10 @@ impl From<TeleportOutputFormatArg> for TeleportOutputFormat {
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
     let source_filter = effective_source(cli.source);
+    if let Commands::Mcp(args) = &cli.command {
+        crate::mcp::run_mcp(args).await?;
+        return Ok(String::new());
+    }
     if let Commands::Note { text } = &cli.command {
         return serialize(&note_response(text.clone())?, cli.pretty);
     }
@@ -1010,6 +1016,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
         Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
         Commands::Status(args) => serialize(&status_response(&args, source_filter)?, cli.pretty)?,
+        Commands::Mcp(_) => unreachable!("mcp handled before QueryService load"),
         Commands::DbInfo {
             project,
             smoke_event,

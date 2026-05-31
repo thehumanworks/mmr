@@ -2,6 +2,7 @@ pub mod agent;
 pub mod capture;
 pub mod cli;
 pub mod dream;
+pub mod mcp;
 pub mod messages;
 pub mod redaction;
 pub mod source;
