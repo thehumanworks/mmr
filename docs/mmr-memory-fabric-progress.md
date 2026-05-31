@@ -15,14 +15,14 @@
 - Local SQLite/libSQL-shaped storage is canonical for active work.
 - GitHub `github:<authenticated-user>/mmr-store` is the first remote/export
   adapter, not the hot database.
-- `projects`, `sessions`, `messages`, and `export` remain raw retrieval
+- `list projects`, `list sessions`, `read session`, `read project`, and `read source` remain raw retrieval
   surfaces.
-- `summary` replaces `remember`; `remember` remains a compatibility alias for
-  the MVP.
-- `dream` is the only public stateful learned-memory assimilation command.
+- `summarize` is the stateless summary surface; compatibility aliases are
+  removed in the breaking command taxonomy.
+- `assimilate` is the public stateless prompt/runbook handoff surface.
 - Redaction runs before sync by default and blocks sync on unresolved secrets.
 - Learned memory must carry resolvable evidence refs.
-- `mmr rg` preserves JSON stdout by default; any line-oriented POSIX mode must be
+- `mmr find` preserves JSON stdout by default; any line-oriented POSIX mode must be
   explicit opt-in.
 - Store implementation uses `rusqlite` with bundled SQLite and deterministic
   hash-derived ids.
@@ -35,14 +35,14 @@
 - Watcher emits complete-line byte deltas only; parsing and degraded warnings
   stay adapter-owned.
 - `mmr note` requires the cwd project to be linked, writes source `note` events
-  to the local store, and creates search document citations for later search.
+  to the local store, and creates find document citations for later search.
 - NHL-272 redaction uses deterministic local secret/PII scanners by default,
   records redaction runs/spans in SQLite, and exposes `mmr sync --dry-run` as a
   safety view before NHL-277 full remote sync.
 - NHL-273 search uses generated local `search_documents` rows, literal substring
   matching by default, `--ignore-case` for case-insensitive matching, and JSON
-  stdout except for explicit `mmr rg --line`.
-- `mmr export --format tree` writes each run into a fresh `mmr-tree-*`
+  stdout except for explicit `mmr find --format line`.
+- `mmr read project --format tree` writes each run into a fresh `mmr-tree-*`
   subdirectory and omits local raw refs from exported files.
 - NHL-274 imports Codex rollout JSONL through `CodexAdapter`, parser version
   `codex-rollout-v1`, scopes discovery to `session_meta.payload.cwd` matching
@@ -63,7 +63,7 @@
 - Cursor tool-call projections sanitize local path segments before search
   indexing. Tool calls, tool results, and unknown raw events require a future
   dedicated safe projection before remote sync eligibility.
-- NHL-277 adds `mmr link` as the first-run setup command for the current cwd
+- NHL-277 adds `mmr init` as the first-run setup command for the current cwd
   project. It ensures the local store/project link, hydrates from the remote,
   reconciles available Codex/Claude/Cursor source roots, rebuilds search
   documents, syncs redacted projections, and prints JSON status.
@@ -75,7 +75,7 @@
   blocks deterministic secrets, and continues to block tool calls, tool
   results, and unknown raw events until a dedicated safe projection exists.
 - Fresh-host hydration replays redacted remote events into the local SQLite
-  store and rebuilds usable search documents without exporting local raw refs,
+  store and rebuilds usable find documents without exporting local raw refs,
   including when the receiving machine links the project at a different local
   path.
 - Remote sync never exports local raw-derived event ids. Remote event ids are
@@ -85,7 +85,7 @@
 - `mmr status` reports remote-unavailable or remote-missing states when local
   rows are marked synced but the remote backing store is unavailable or missing
   expected event payloads.
-- NHL-278 introduces `src/dream.rs` as the provider-neutral dream runner
+- NHL-278 introduces `src/assimilation.rs` as the provider-neutral assimilation runner
   boundary. It defines strict structured output parsing, evidence-ref
   validation, runner config precedence, a deterministic mock runner, and a
   command runner adapter configured by `MMR_DREAM_COMMAND`.
@@ -96,40 +96,40 @@
 - Dream output evidence refs are validated against the submitted evidence bundle,
   not all project events. Command runners reject raw evidence requests even if a
   caller manually constructs one.
-- NHL-279 wires the public `mmr dream` assimilation command. It supports
+- NHL-279 wires the public `mmr assimilate project` assimilation command. It supports
   project-scoped analysis, `--dry-run`, `--review`, `--runner`, `--model`,
   `--evidence-mode`, and `--allow-raw-evidence`.
-- Mutating dream runs create a `dream_runs` audit row, persist internal
-  `dream_candidates`, and write `learned_memory` only for high-confidence,
+- Mutating assimilation runs create a `assimilation_runs` audit row, persist internal
+  `assimilation_candidates`, and write `learned_memory` only for high-confidence,
   non-sensitive, counterevidence-free claims with valid project-scoped evidence
   refs.
 - Top-level counterevidence and per-claim counterevidence keep proposed memory
   pending instead of active. Sensitive/identity-like or PII-bearing claims are
   rejected.
-- Active learned memory is discoverable through existing `search` results as
+- Active learned memory is discoverable through existing `find` results as
   `source: learned_memory`; no public learn/context/candidates/knowledge/promote
   or reject command was added.
 - Sync uploads active learned-memory payloads only after remapping local evidence
   refs to redacted remote event refs. Remote learned-memory payloads are
   validated against the remote event set during hydration, then remapped to the
   local hydrated event refs.
-- Plain dream `observations` are internal candidates/audit material and are not
+- Plain assimilation `observations` are internal candidates/audit material and are not
   promoted directly to active learned memory. Active learned memory must come
   from `learned_memory_updates` or explicit `claims`.
 - Replaying the same learned-memory claim/evidence tuple is idempotent: the
-  existing row is preserved rather than overwritten by a later dream run.
+  existing row is preserved rather than overwritten by a later assimilation run.
 - NHL-280 makes the lean MVP flow discoverable through command help, a
   quickstart/recovery guide, status diagnostics, and smoke-tested CLI examples.
 - `mmr status` now reports local DB path/existence, schema version and expected
   version, linked project state, source-root availability, remote/auth status,
-  privacy-filter coverage, continuity-provider readiness, dream-runner
+  privacy-filter coverage, continuity-provider readiness, assimilation-runner
   readiness, and consolidated recovery actions.
-- `mmr summary` routes through the existing stateless continuity brief runner,
-  while `remember` remains a compatibility alias.
+- `mmr summarize project` routes through the existing stateless continuity brief
+  runner; no compatibility alias is retained.
 - NHL-281 adds the final offline release gate:
   `mvp_release_gate_e2e_fixture_scenario` proves the blank non-Git path through
-  fixture-backed source import, notes, raw retrieval, search, summary/remember,
-  redaction blocking, dream assimilation, sync safety, and fresh HOME/store
+  fixture-backed source import, notes, raw retrieval, search, summarize,
+  redaction blocking, assimilation, sync safety, and fresh HOME/store
   hydration.
 
 ## Verification Commands And Results
@@ -142,15 +142,15 @@
   (`elapsed_ms=1008`)
 - `cargo clippy --all-targets --all-features -- -D warnings`: passed
 - `cargo build --release`: passed
-- NHL-281 adversarial review found direct `link` proof, all-source raw
+- NHL-281 adversarial review found direct `init` proof, all-source raw
   retrieval, imported-source privacy coverage, exact summary citation,
-  fresh-host evidence remapping, and optional dream-provider smoke gaps. Fixes
+  fresh-host evidence remapping, and optional assimilation-provider smoke gaps. Fixes
   are applied and verification was rerun successfully.
 - NHL-280 UX review found summary/docs drift, noisy status actions,
   copy/paste recovery gaps, fixture-specific auth wording, and non-diagnostic
   store existence reporting. Fixes are applied and verification was rerun
   successfully.
-- Adversarial review found issues in `rg` stdout semantics, downstream gate
+- Adversarial review found issues in `find --format line` stdout semantics, downstream gate
   specificity, malformed fixture coverage, and schema detail. Fixes are applied
   and verification was rerun successfully.
 - NHL-269 targeted checks so far:
@@ -216,7 +216,7 @@
   - `cargo test --test memory_fabric_contract search_document_contract_is_implemented -- --nocapture`:
     passed
 - Search/citation adversarial review found stale tree export files, raw local ref
-  leakage, `search --line` ambiguity, and colon-delimited `rg --line` parsing
+  leakage, `find --format line` parsing
   issues. Fixes are applied and verification was rerun successfully.
 - Latest NHL-273 full verification:
   - `cargo fmt`: passed
@@ -321,8 +321,8 @@
   - `cargo clippy --all-targets --all-features -- -D warnings`: passed
   - `cargo build --release`: passed
 - NHL-278 focused checks so far:
-  - `cargo test dream:: -- --nocapture`: passed, 9 dream runner unit tests
-  - `cargo test --test memory_fabric_contract dream_runner_contract_is_implemented -- --nocapture`:
+  - `cargo test assimilation:: -- --nocapture`: passed, 9 assimilation runner unit tests
+  - `cargo test --test memory_fabric_contract assimilation_runner_contract_is_implemented -- --nocapture`:
     passed
 - NHL-278 adversarial review found output validation against all project events
   instead of the submitted evidence bundle, possible raw evidence leakage if a
@@ -366,8 +366,8 @@
 - `docs/mmr-codex-importer.md`
 - `docs/mmr-claude-importer.md`
 - `docs/mmr-cursor-importer.md`
-- `src/dream.rs`
-- `docs/mmr-dream-runner.md`
+- `src/assimilation.rs`
+- `docs/mmr-assimilation-runner.md`
 
 ## Open Blockers
 
@@ -376,7 +376,7 @@
 ## Known Risks
 
 - MVP memory-fabric contract tests are active; NHL-280 removed the pending
-  summary/remember compatibility ignores.
+  summarize compatibility ignores.
 - NHL-269 locks the initial SQL schema, but future migrations must stay additive
   unless an ADR explicitly approves a breaking change.
 - NHL-277 ships a file-backed GitHub-layout adapter for deterministic local/E2E
@@ -395,7 +395,7 @@
   permission.
 - False-positive allowlist and hard-purge flows are documented as explicit
   future policy surfaces, not silent MVP behavior.
-- `mmr export --format tree` writes local raw search material for external
+- `mmr read project --format tree` writes local raw find material for external
   tools into a fresh run directory and requires explicit `--output-dir`; it is
   not a remote sync path.
 - Codex parser drift is handled by preserving unknown rows as local
@@ -410,10 +410,10 @@
 - Cursor import accepts current no-leading-dash Cursor project aliases, legacy
   dash aliases, and direct custom flat roots. Cursor tool-call path-like content
   is sanitized in normalized/search text.
-- `mmr dream` uses the deterministic mock runner by default for offline local
+- `mmr assimilate project` uses the deterministic mock runner by default for offline local
   use. Real provider behavior is available through the local `command` runner
   configured with `MMR_DREAM_COMMAND`.
-- Pending/rejected dream candidates remain internal for MVP. There is
+- Pending/rejected assimilation candidates remain internal for MVP. There is
   intentionally no public candidate review/promote/reject surface.
 - Learned-memory sync uploads active rows only; pending/rejected/superseded rows
   remain local until a future governance ticket defines remote behavior.
@@ -447,11 +447,11 @@ results and mark it Done.
   verified.
 - The Cursor importer adversarial review findings have already been fixed and
   verified.
-- The link/sync/status adversarial review findings have already been fixed and
+- The init/sync/status adversarial review findings have already been fixed and
   verified.
-- The dream runner adversarial review findings have already been fixed and
+- The assimilation runner adversarial review findings have already been fixed and
   verified.
-- The dream assimilation adversarial review findings have already been fixed and
+- The assimilation adversarial review findings have already been fixed and
   verified: sensitive `kind` values are blocked before local application/remote
   sync, duplicate learned memory cannot silently overwrite prior rows, plain
   observations are not directly promoted to active learned memory, top-level

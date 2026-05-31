@@ -153,6 +153,51 @@ pub async fn remember(
     }
 }
 
+pub async fn summarize_formatted_messages(
+    agent: Agent,
+    instructions: Option<&str>,
+    model: Option<&str>,
+    formatted_messages: &str,
+) -> Result<RememberResponse> {
+    let system_instruction = build_system_instruction(instructions);
+    let input =
+        format!("Analyze the following AI coding session transcript(s).\n\n{formatted_messages}");
+
+    match agent {
+        Agent::Gemini => {
+            let gemini = Gemini::new(model, None)?;
+            let result = gemini
+                .generate(GeminiGenerateRequest {
+                    input: vec![InteractionInput::new(InteractionInputType::Text, &input)],
+                    system_instruction: Some(&system_instruction),
+                })
+                .await?;
+            Ok(RememberResponse::new(Agent::Gemini, result.text))
+        }
+        Agent::Codex => {
+            let codex = CodexAgent::new().await;
+            let result = codex
+                .generate(CodexGenerateRequest {
+                    input: &input,
+                    developer_instructions: Some(&system_instruction),
+                })
+                .await?;
+            Ok(RememberResponse::new(
+                Agent::Codex,
+                result.get_text().to_string(),
+            ))
+        }
+        Agent::Cursor => {
+            let cursor = CursorAgent::new(model, None::<String>);
+            let result = cursor.generate(&format!(
+                "<system>\n{}\n</system>\n\n<user>{}</user>\n",
+                system_instruction, input
+            ))?;
+            Ok(RememberResponse::new(Agent::Cursor, result))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

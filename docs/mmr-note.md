@@ -5,7 +5,7 @@ Date: 2026-05-24
 
 `mmr note` records human-authored observations as first-class Memory Fabric
 events. Notes are not a separate note system; they use the same local store,
-search document, redaction, sync, summary, and dream path as imported agent
+search document, redaction, sync, summary, and assimilation path as imported agent
 events.
 
 ## Usage
@@ -25,9 +25,9 @@ cat decision.md | mmr note
 ## Project Scope
 
 `mmr note` writes to the currently linked project. If the cwd is not linked, the
-command fails with a diagnostic telling the user to run `mmr link`.
+command fails with a diagnostic telling the user to run `mmr init`.
 
-During pre-`link` implementation work, tests can create the project link through
+During pre-`init` implementation work, tests can create the project link through
 the hidden `mmr __db-info --project <path>` smoke command. Public setup remains
 owned by NHL-277.
 
@@ -45,6 +45,6 @@ Notes are inserted as normalized events with:
 - `raw_local_ref = "note://notes/<timestamp-and-content-hash>"`
 
 Each note is inserted atomically with a `search_documents` row and a
-`mmr://event/<event-id>` citation so search and rg can index it when NHL-273
+`mmr://event/<event-id>` citation so `mmr find` can index it when NHL-273
 lands. Note provenance avoids local project identifiers so future sync can
 hydrate or replay notes without depending on a host-specific path hash.

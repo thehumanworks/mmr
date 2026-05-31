@@ -73,6 +73,7 @@ pub struct DreamRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DreamEvidence {
     pub evidence_ref: String,
+    pub project_id: String,
     pub source: String,
     pub role: String,
     pub event_type: String,
@@ -478,6 +479,39 @@ pub fn build_evidence_bundle(
     })
 }
 
+pub fn build_source_evidence_bundle(
+    store: &Store,
+    source: &str,
+    mode: DreamEvidenceMode,
+    since: Option<&str>,
+    limit_per_project: Option<usize>,
+) -> Result<DreamEvidenceBundle> {
+    let access = EvidenceAccess::from(mode);
+    let events = store.events_for_source(source, since, limit_per_project)?;
+    let mut evidence = Vec::with_capacity(events.len());
+    let mut omitted_events = Vec::new();
+    let mut pii_coverage = PiiCoverageStatus::Available;
+    for event in events {
+        match event_to_evidence(&event, &access)? {
+            EvidenceProjection::Included(item, coverage) => {
+                pii_coverage = coverage;
+                evidence.push(item);
+            }
+            EvidenceProjection::Omitted(omitted, coverage) => {
+                pii_coverage = coverage;
+                omitted_events.push(omitted);
+            }
+        }
+    }
+    let evidence_hash = evidence_hash(&evidence);
+    Ok(DreamEvidenceBundle {
+        events: evidence,
+        omitted_events,
+        evidence_hash,
+        pii_coverage,
+    })
+}
+
 pub fn parse_dream_output_json(json: &str) -> Result<DreamRunnerOutput> {
     let value: Value = serde_json::from_str(json).context("parse dream runner JSON")?;
     reject_unknown_top_level_fields(&value)?;
@@ -649,6 +683,7 @@ fn event_to_evidence(event: &EventRecord, access: &EvidenceAccess) -> Result<Evi
     Ok(EvidenceProjection::Included(
         DreamEvidence {
             evidence_ref,
+            project_id: event.project_id.clone(),
             source: event.source.clone(),
             role: event.role.clone(),
             event_type: event.event_type.clone(),

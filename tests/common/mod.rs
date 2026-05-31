@@ -31,6 +31,14 @@ impl TestFixture {
             .expect("run mmr")
     }
 
+    pub fn run_cli_raw(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .args(args)
+            .env("HOME", &self.home)
+            .output()
+            .expect("run mmr")
+    }
+
     pub fn run_cli_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
         command.args(args).env("HOME", &self.home);

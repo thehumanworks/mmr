@@ -1,11 +1,11 @@
 ---
 name: session-mining
-description: "Use mmr's session selection features (--session-back, --session-range, --session, prev) to retrieve previous coding sessions, analyze them, and extract continuity context. Essential for surviving context compaction and full clearing. Load this when you need to remind an agent (or yourself) of prior work, decisions, architecture, open tasks, or rationale from earlier sessions."
+description: "Use mmr recall and read session to retrieve previous coding sessions, analyze them, and extract continuity context. Essential for surviving context compaction and full clearing. Load this when you need to remind an agent (or yourself) of prior work, decisions, architecture, open tasks, or rationale from earlier sessions."
 ---
 
 # mmr Session Mining
 
-Retrieve, analyze, and work from previous AI coding sessions using `mmr`'s powerful session axis.
+Retrieve, analyze, and work from previous AI coding sessions using `mmr recall` and `mmr read session`.
 
 ## Core Value
 
@@ -17,24 +17,22 @@ This subskill turns `mmr` into a reliable long-term memory layer. It lets you de
 
 ## Supported Retrieval Methods
 
-`mmr` offers several ways to select previous sessions (all supported by this skill):
+`mmr` offers two primary ways to select previous sessions:
 
-- `mmr prev` / `mmr prev N` — Sugar for the previous session (or N sessions back).
-- `mmr messages --session-back N` — The single session at recency age N (age 1 = previous).
-- `mmr messages --session-range FROM..TO` — A span of sessions (e.g. `3..1` for the three sessions before the newest).
-- `mmr messages --session <id>` — Explicit session ID(s) when you already know them.
+- `mmr recall` / `mmr recall N` — the previous stable session, or N sessions back.
+- `mmr read session <id>` — an explicit session ID when you already know it.
 
-Always prefer the recency-based selectors (`--session-back` / `--session-range`) when you are inside a project and want "the work we did yesterday / last week" without memorizing IDs.
+Prefer `mmr recall` when you are inside a project and want the immediate previous session without memorizing IDs.
 
 ## Quick Start
 
-1. Retrieve one or more prior sessions into a file. **Always pass an explicit large `--limit`** — the default is only 50 messages and will silently truncate any real session (this defeats the entire purpose of the skill):
+1. Retrieve the prior session into a file:
    ```bash
    # The single previous session (full content)
-   mmr messages --session-back 1 --source claude --limit 100000 > /tmp/prior-session.json
+   mmr recall --source claude --limit 100000 > /tmp/prior-session.json
 
-   # A range (e.g. the three sessions before the current one)
-   mmr messages --session-range 3..1 --source claude --limit 100000 > /tmp/recent-sessions.json
+   # A known session ID
+   mmr read session <session-id> --source claude > /tmp/session.json
    ```
 
 2. Confirm you actually got the complete data (not a truncated page). Compare `total_messages` against the array length and check `next_page`:
@@ -55,7 +53,7 @@ Always prefer the recency-based selectors (`--session-back` / `--session-range`)
 
 4. Produce a **reminder artifact** (continuity brief, key decisions list, task inventory, etc.) that can be fed back into the current session or stored for later.
 
-5. Use the results to improve long-term agent behavior (better handoff prompts, explicit memory notes via `mmr note`, improved `summary`/`remember` workflows, etc.).
+5. Use the results to improve long-term agent behavior (better handoff prompts, explicit memory notes via `mmr note`, improved `mmr summarize` workflows, etc.).
 
 ## Why This Skill Exists
 
@@ -66,11 +64,11 @@ This skill exists to make that retrieval + analysis + reminding loop repeatable,
 ## Core Rules
 
 - **Persist large retrievals to disk first.** Never rely on the model keeping the entire transcript in context.
-- **Prefer recency selectors** (`--session-back`, `--session-range`, `prev`) over raw session IDs when you are working inside a project.
+- **Prefer `mmr recall`** over raw session IDs when you are working inside a project and want immediate continuity.
 - **Age 0 is dangerous by default.** The newest session is often the caller's own live/incomplete session. Use `--include-newest` only when you deliberately want it.
 - **Focus on continuity value**, not just "what happened." Ask: What would a future version of me (or a new agent) need to know that is at risk of being lost?
 - **Produce reminder artifacts** that are actually usable (structured decisions, open tasks, rationale, invariants, etc.).
-- **Update durable memory** when useful (`mmr note`, `mmr dream`, project docs, etc.).
+- **Update durable memory** when useful (`mmr note`, `mmr assimilate project`, project docs, etc.).
 - **Subagent delegation is encouraged** for deep analysis of large ranges.
 
 ## Common Patterns
@@ -92,15 +90,15 @@ After using the skill on a real trace, you should be able to answer:
 
 ## When NOT to Use This Skill
 
-- You just need the raw messages from one known session for immediate context (use `mmr messages --session <id>` or `mmr prev` directly).
+- You just need the raw messages from one known session for immediate context (use `mmr read session <id>` directly).
 - The prior work is trivial or fully captured in current docs.
 - You are doing ordinary day-to-day work inside a well-maintained project with low risk of context loss.
 
 ## Related Assets
 
 - Parent: `.agents/skills/mmr/SKILL.md`
-- `mmr summary` / `mmr remember` — built-in continuity brief generators (this skill can feed richer input into them)
-- `mmr note` + `mmr dream` — for turning analysis into durable memory
+- `mmr summarize` — built-in continuity brief generator (this skill can feed richer input into it)
+- `mmr note` + `mmr assimilate project` — for turning analysis into durable memory
 - Other mmr siblings: `mmr-clap-colored-cli`, `mmr-teleport-providers`
 
 ## References

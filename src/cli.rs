@@ -4,14 +4,16 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use crate::agent::ai;
 use crate::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot,
 };
-use crate::dream::{DreamEvidence, DreamEvidenceMode, OmittedDreamEvidence, build_evidence_bundle};
+use crate::dream::{
+    DreamEvidence, DreamEvidenceMode, OmittedDreamEvidence, build_evidence_bundle,
+    build_source_evidence_bundle,
+};
 use crate::messages::service::{
     MessageIndexRange, MessageQueryOptions, QueryService, SessionAxis, SessionSelectionError,
 };
@@ -80,7 +82,7 @@ const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 #[command(
     name = "mmr",
     about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
-    after_help = "Examples:\n  mmr link\n  mmr status --pretty\n  mmr note \"Decision: keep the migration append-only.\"\n  mmr search \"migration append-only\" --pretty\n  mmr rg \"TODO\" --line\n  mmr summary all --project /path/to/project\n  mmr dream --pretty\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout. Use --pretty for indented JSON."
+    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --project /path/to/project\n  mmr recall --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr assimilate project --pretty\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -98,117 +100,22 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// List projects
-    Projects {
-        /// Maximum number of projects to return
-        #[arg(long, default_value_t = 10)]
-        limit: usize,
-        /// Number of projects to skip
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        /// Sort projects by
-        #[arg(short = 's', long, default_value = "timestamp")]
-        sort_by: SortBy,
-        /// Sort order: asc or desc
-        #[arg(short = 'o', long, default_value = "desc")]
-        order: SortOrder,
-    },
-    /// List sessions (defaults to the current project when cwd auto-discovery succeeds)
-    Sessions {
-        /// Project name or path
-        #[arg(long)]
-        project: Option<String>,
-        /// Return sessions across all projects instead of the auto-discovered cwd project
-        #[arg(long)]
-        all: bool,
-        /// Maximum number of sessions to return
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-        /// Number of sessions to skip
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        /// Sort sessions by
-        #[arg(short = 's', long, default_value = "timestamp")]
-        sort_by: SortBy,
-        /// Sort order: asc or desc
-        #[arg(short = 'o', long, default_value = "desc")]
-        order: SortOrder,
-    },
-    /// Get messages (defaults to the current project when cwd auto-discovery succeeds)
-    Messages {
-        /// Session ID (repeatable; pins the query to specific sessions)
-        #[arg(long)]
-        session: Vec<String>,
-        /// Project name or path
-        #[arg(long)]
-        project: Option<String>,
-        /// Return messages across all projects instead of the auto-discovered cwd project
-        #[arg(long)]
-        all: bool,
-        /// Return the newest N messages from the latest session in scope
-        #[arg(long, num_args = 0..=1, default_missing_value = "1")]
-        latest: Option<NonZeroUsize>,
-        /// Select the single session at recency-age N counting back from the newest (1 = previous)
-        #[arg(long, value_name = "N")]
-        session_back: Option<u32>,
-        /// Select a span of sessions by recency age, written older..newer (e.g. 2..1 = ages 1 and 2)
-        #[arg(long, value_name = "FROM..TO")]
-        session_range: Option<String>,
-        /// Make the newest (assumed-live, age 0) session addressable by the session axis
-        #[arg(long)]
-        include_newest: bool,
-        /// First zero-based message index to include after filtering and sorting
-        #[arg(long)]
-        from_message_index: Option<usize>,
-        /// Zero-based message index to stop before after filtering and sorting
-        #[arg(long)]
-        to_message_index: Option<usize>,
-        /// Return only the latest N messages
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-        /// Number of sorted messages to skip
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        /// Sort messages by
-        #[arg(short = 's', long, default_value = "timestamp")]
-        sort_by: SortBy,
-        /// Sort order: asc or desc
-        #[arg(short = 'o', long, default_value = "asc")]
-        order: SortOrder,
-    },
-    /// Show a previous session's messages by recency (sugar for `messages --session-back N`)
-    Prev {
-        /// How many sessions back to read (1 = the previous session)
-        #[arg(value_name = "N", default_value_t = 1)]
-        n: u32,
-        /// Project name or path (recency is computed within this scope)
-        #[arg(long)]
-        project: Option<String>,
-        /// Compute recency across all projects instead of the auto-discovered cwd project
-        #[arg(long)]
-        all: bool,
-        /// Maximum number of messages to return
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-    },
-    /// All messages for the current project (cwd) or --project, all sources, chronological
-    Export {
-        /// Project name or path (omit to use current directory)
-        #[arg(long)]
-        project: Option<String>,
-        /// Export format
-        #[arg(long, value_enum, default_value = "json")]
-        format: ExportFormatArg,
-        /// Output directory for --format tree
-        #[arg(long)]
-        output_dir: Option<PathBuf>,
-    },
-    /// Generate a stateless continuity brief from prior sessions
-    Summary(RememberArgs),
-    /// Generate a stateless continuity brief from prior sessions (compatibility alias)
-    Remember(RememberArgs),
-    /// First-run setup for the current project and default mmr-store remote
-    Link,
+    /// Set up or repair the local mmr store for the current project
+    Init(InitArgs),
+    /// List known projects or sessions
+    List(ListArgs),
+    /// Search normalized events and learned memory
+    Find(SearchTextArgs),
+    /// Retrieve a previous stable session for immediate continuity
+    Recall(RecallArgs),
+    /// Read raw session, project, or source history
+    Read(ReadArgs),
+    /// Produce scoped context for future agents
+    Context(ContextArgs),
+    /// Run a stateless summary over scoped history
+    Summarize(SummarizeArgs),
+    /// Return prompt/runbook/evidence for memory assimilation
+    Assimilate(AssimilateArgs),
     /// Import normalized events into the local memory store
     Import(ImportArgs),
     /// Add a human-authored note to the local memory store
@@ -217,12 +124,6 @@ pub enum Commands {
         #[arg(value_name = "TEXT", trailing_var_arg = true)]
         text: Vec<String>,
     },
-    /// POSIX-friendly exact search over local memory documents
-    Rg(SearchTextArgs),
-    /// Structured lexical search over local memory documents
-    Search(SearchTextArgs),
-    /// Assimilate project evidence into evidence-linked learned memory
-    Dream(DreamArgs),
     /// Inspect and apply local redaction policy before sync
     Redact(RedactArgs),
     /// Safely reconcile the linked project with the default mmr-store remote
@@ -244,31 +145,285 @@ pub enum Commands {
 }
 
 #[derive(Args, Debug)]
-pub struct RememberArgs {
-    /// Project name or path (omit to use current directory)
-    #[arg(long, short = 'p', global = true)]
+pub struct InitArgs {
+    /// Link the project and report suggested imports without ingesting source history
+    #[arg(long)]
+    link_only: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ListArgs {
+    #[command(subcommand)]
+    command: ListCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ListCommand {
+    /// List known projects with source coverage and recency metadata
+    Projects(ListProjectsArgs),
+    /// List sessions in a scope, defaulting to the cwd project
+    Sessions(ListSessionsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ListProjectsArgs {
+    /// Maximum number of projects to return
+    #[arg(long, default_value_t = 10)]
+    limit: usize,
+    /// Number of projects to skip
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+    /// Sort projects by
+    #[arg(short = 's', long, default_value = "timestamp")]
+    sort_by: SortBy,
+    /// Sort order: asc or desc
+    #[arg(short = 'o', long, default_value = "desc")]
+    order: SortOrder,
+}
+
+#[derive(Args, Debug)]
+pub struct ListSessionsArgs {
+    /// Project name or path
+    #[arg(long)]
     project: Option<String>,
+    /// Return sessions across all projects instead of the auto-discovered cwd project
+    #[arg(long)]
+    all: bool,
+    /// Maximum number of sessions to return
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+    /// Number of sessions to skip
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+    /// Sort sessions by
+    #[arg(short = 's', long, default_value = "timestamp")]
+    sort_by: SortBy,
+    /// Sort order: asc or desc
+    #[arg(short = 'o', long, default_value = "desc")]
+    order: SortOrder,
+}
+
+#[derive(Args, Debug)]
+pub struct RecallArgs {
+    /// How many sessions back to read (1 = the previous stable session)
+    #[arg(value_name = "N", default_value_t = 1)]
+    n: u32,
+    /// Project name or path (recency is computed within this scope)
+    #[arg(long)]
+    project: Option<String>,
+    /// Compute recency across all projects instead of the auto-discovered cwd project
+    #[arg(long)]
+    all: bool,
+    /// Maximum number of messages to return
+    #[arg(long, default_value_t = 50)]
+    limit: usize,
+    /// Make the newest (assumed-live, age 0) session addressable
+    #[arg(long)]
+    include_newest: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ReadArgs {
+    #[command(subcommand)]
+    command: ReadCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ReadCommand {
+    /// Read one explicit session by ID
+    Session(ReadSessionArgs),
+    /// Read project-scoped history across all sources
+    Project(ReadProjectArgs),
+    /// Read source-scoped history across all projects for one harness
+    Source(ReadSourceArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ReadSessionArgs {
+    /// Session ID to read
+    session_id: String,
+    /// Project name or path
+    #[arg(long)]
+    project: Option<String>,
+    /// Output format
+    #[arg(long, value_enum, default_value = "json")]
+    format: ReadFormatArg,
+    /// Output directory for --format tree
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
+    /// Maximum number of messages to return for JSON output
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Number of sorted messages to skip for JSON output
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct ReadProjectArgs {
+    /// Project name or path (omit to use current directory)
+    #[arg(long)]
+    project: Option<String>,
+    /// Output format
+    #[arg(long, value_enum, default_value = "json")]
+    format: ReadFormatArg,
+    /// Output directory for --format tree
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
+    /// Maximum number of messages to return for JSON output
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Number of sorted messages to skip for JSON output
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct ReadSourceArgs {
+    /// Output format
+    #[arg(long, value_enum, default_value = "json")]
+    format: ReadFormatArg,
+    /// Output directory for --format tree
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
+    /// Maximum number of messages to return for JSON output
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Number of sorted messages to skip for JSON output
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct ContextArgs {
+    #[command(subcommand)]
+    command: ContextCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ContextCommand {
+    /// Produce project-specific context across all sources
+    Project(ContextProjectArgs),
+    /// Produce harness-specific context across all projects
+    Source(ContextSourceArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ContextProjectArgs {
+    /// Project name or path (omit to use current directory)
+    #[arg(long)]
+    project: Option<String>,
+    /// Maximum number of recent messages to include
+    #[arg(long, default_value_t = 100)]
+    limit: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct ContextSourceArgs {
+    /// Maximum number of recent messages to include
+    #[arg(long, default_value_t = 200)]
+    limit: usize,
+}
+
+#[derive(Args, Debug)]
+pub struct SummarizeArgs {
+    #[command(subcommand)]
+    command: SummarizeCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SummarizeCommand {
+    /// Run a stateless summary over project-scoped history
+    Project(SummarizeProjectArgs),
+    /// Run a stateless summary over all history from one harness/source
+    Source(SummarizeSourceArgs),
+    /// Run a stateless summary over one explicit session
+    Session(SummarizeSessionArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SummarizeProjectArgs {
+    /// Project name or path (omit to use current directory)
+    #[arg(long, short = 'p')]
+    project: Option<String>,
+    #[command(flatten)]
+    runner: SummaryRunnerArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct SummarizeSourceArgs {
+    #[command(flatten)]
+    runner: SummaryRunnerArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct SummarizeSessionArgs {
+    /// Session ID to summarize
+    session_id: String,
+    /// Project name or path (optional; without it the session is searched globally)
+    #[arg(long, short = 'p')]
+    project: Option<String>,
+    #[command(flatten)]
+    runner: SummaryRunnerArgs,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SummaryRunnerArgs {
     /// Agent to use (defaults to MMR_DEFAULT_REMEMBER_AGENT or cursor / composer-2-fast)
-    #[arg(long, value_enum, global = true)]
+    #[arg(long, value_enum)]
     agent: Option<Agent>,
     /// Override the output format and rules portion of the system instructions
-    #[arg(long, global = true)]
+    #[arg(long)]
     instructions: Option<String>,
-    /// Output format for remember results
-    #[arg(
-        short = 'O',
-        long = "output-format",
-        value_enum,
-        default_value = "md",
-        global = true
-    )]
+    /// Output format for summary results
+    #[arg(short = 'O', long = "output-format", value_enum, default_value = "md")]
     output_format: RememberOutputFormatArg,
-    /// Gemini model to use
-    #[arg(long, global = true)]
+    /// Model to use
+    #[arg(long)]
     model: Option<String>,
-    /// Session selector (omit for latest)
+}
+
+#[derive(Args, Debug)]
+pub struct AssimilateArgs {
     #[command(subcommand)]
-    selection: Option<RememberSelectorCommand>,
+    command: AssimilateCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AssimilateCommand {
+    /// Return project prompt/runbook/output contract/evidence
+    Project(AssimilateProjectArgs),
+    /// Return source-wide prompt/runbook/output contract/evidence
+    Source(AssimilateSourceArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AssimilateProjectArgs {
+    /// Project path (omit to use current directory)
+    #[arg(long)]
+    project: Option<PathBuf>,
+    /// Evidence projection mode
+    #[arg(long = "evidence-mode", value_enum, default_value = "shared-safe")]
+    evidence_mode: DreamEvidenceModeArg,
+    /// Permit raw local evidence for local-only experiments
+    #[arg(long)]
+    allow_raw_evidence: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AssimilateSourceArgs {
+    /// Evidence projection mode
+    #[arg(long = "evidence-mode", value_enum, default_value = "shared-safe")]
+    evidence_mode: DreamEvidenceModeArg,
+    /// Permit raw local evidence for local-only experiments
+    #[arg(long)]
+    allow_raw_evidence: bool,
+    /// Maximum events retained per project before projection
+    #[arg(long, default_value_t = 200)]
+    per_project_limit: usize,
+    /// Keep only events at or after this RFC3339 timestamp
+    #[arg(long)]
+    since: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -304,35 +459,12 @@ pub struct SyncArgs {
 
 #[derive(Args, Debug)]
 #[command(
-    after_help = "Status JSON includes store.db_path, store.schema_version, store.expected_schema_version, store.schema_status, remote state, project link state, and diagnostics for sources, privacy filtering, schema, sync, continuity brief provider setup, and dream runner setup."
+    after_help = "Status JSON includes store.db_path, store.schema_version, store.expected_schema_version, store.schema_status, remote state, project link state, and diagnostics for sources, privacy filtering, schema, sync, continuity brief provider setup, and assimilation handoff readiness."
 )]
 pub struct StatusArgs {
     /// Project path (omit to use current directory)
     #[arg(long)]
     project: Option<PathBuf>,
-}
-
-impl RememberArgs {
-    fn selection(&self) -> RememberSelection {
-        match &self.selection {
-            None => RememberSelection::Latest,
-            Some(RememberSelectorCommand::All) => RememberSelection::All,
-            Some(RememberSelectorCommand::Session { session_id }) => RememberSelection::Session {
-                session_id: session_id.clone(),
-            },
-        }
-    }
-}
-
-#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
-pub enum RememberSelectorCommand {
-    /// Use all matching sessions
-    All,
-    /// Use one specific session
-    Session {
-        /// Session ID to use for the remember operation
-        session_id: String,
-    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -345,10 +477,18 @@ pub enum RememberOutputFormatArg {
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[clap(rename_all = "kebab-case")]
-pub enum ExportFormatArg {
+pub enum ReadFormatArg {
     #[default]
     Json,
     Tree,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[clap(rename_all = "kebab-case")]
+pub enum FindFormatArg {
+    #[default]
+    Json,
+    Line,
 }
 
 #[derive(Args, Debug)]
@@ -373,14 +513,14 @@ pub struct SearchTextArgs {
     /// Context lines before and after each match
     #[arg(short = 'C', long, default_value_t = 0)]
     context: usize,
-    /// Emit line-oriented output instead of JSON (rg only)
-    #[arg(long)]
-    line: bool,
+    /// Output format
+    #[arg(long, value_enum, default_value = "json")]
+    format: FindFormatArg,
 }
 
 #[derive(Args, Debug)]
 #[command(
-    after_help = "Behavior:\n  `mmr dream` returns a system prompt, runbook, output contract, and cited evidence bundle for the calling AI agent. It does not run a provider or write learned memory."
+    after_help = "Behavior:\n  `mmr assimilate project` returns a system prompt, runbook, output contract, and cited evidence bundle for the calling AI agent. It does not run a provider or write learned memory."
 )]
 pub struct DreamArgs {
     /// Project path (omit to use current directory)
@@ -653,7 +793,7 @@ pub struct TeleportResumeArgs {
 #[command(after_help = "Examples:\n  \
 mmr teleport export ./handoff.mmr --to ./out.jsonl --as same\n  \
 mmr teleport export ./grok.mmr --to ./grok-export-dir --as grok\n\
-Distinct from top-level `mmr export` (local history query).")]
+Distinct from top-level `mmr read project` (local history query).")]
 pub struct TeleportExportArgs {
     /// Bundle path or inbox locator to export
     #[arg(value_name = "REF")]
@@ -739,20 +879,17 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     if let Commands::Note { text } = &cli.command {
         return serialize(&note_response(text.clone())?, cli.pretty);
     }
-    if let Commands::Rg(args) = &cli.command {
-        return rg_output(args, source_filter, cli.pretty);
+    if let Commands::Find(args) = &cli.command {
+        return find_output(args, source_filter, cli.pretty);
     }
-    if let Commands::Search(args) = &cli.command {
-        if args.line {
-            bail!("--line is only supported for `mmr rg`");
-        }
-        return serialize(&search_response(args, source_filter)?, cli.pretty);
-    }
-    if let Commands::Dream(args) = &cli.command {
-        return serialize(&dream_response(args)?, cli.pretty);
+    if let Commands::Assimilate(args) = &cli.command {
+        return serialize(&assimilate_response(args, cli.source)?, cli.pretty);
     }
     if let Commands::Import(args) = &cli.command {
         return serialize(&import_response(args, source_filter)?, cli.pretty);
+    }
+    if let Commands::Init(args) = &cli.command {
+        return serialize(&init_response(args, source_filter)?, cli.pretty);
     }
     if let Commands::Redact(args) = &cli.command {
         return serialize(&redact_response(args, source_filter)?, cli.pretty);
@@ -780,145 +917,10 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     let service = QueryService::load()?;
 
     let response = match cli.command {
-        Commands::Projects {
-            limit,
-            offset,
-            sort_by,
-            order,
-        } => serialize(
-            &service.projects(
-                source_filter,
-                Some(limit),
-                offset,
-                SortOptions::new(sort_by, order),
-            ),
-            cli.pretty,
-        )?,
-        Commands::Sessions {
-            project,
-            all,
-            limit,
-            offset,
-            sort_by,
-            order,
-        } => serialize(
-            &service.sessions(
-                effective_project_scope(project, all).as_deref(),
-                source_filter,
-                Some(limit),
-                offset,
-                SortOptions::new(sort_by, order),
-            )?,
-            cli.pretty,
-        )?,
-        Commands::Messages {
-            session,
-            project,
-            all,
-            latest,
-            session_back,
-            session_range,
-            include_newest,
-            from_message_index,
-            to_message_index,
-            limit,
-            offset,
-            sort_by,
-            order,
-        } => {
-            let message_index_range =
-                validate_message_index_range(from_message_index, to_message_index)?;
-
-            // At most one session selector is allowed (mirror the teleport selector guard).
-            let selector_count = (!session.is_empty()) as u8
-                + latest.is_some() as u8
-                + session_back.is_some() as u8
-                + session_range.is_some() as u8;
-            if selector_count > 1 {
-                return Err(anyhow::Error::new(multiple_selectors_failure(cli.pretty)?));
-            }
-
-            let session_axis = match (session_back, session_range.as_deref()) {
-                (Some(age), _) => Some(SessionAxis::Back(age)),
-                (None, Some(range)) => Some(SessionAxis::Range(parse_session_range(range)?)),
-                (None, None) => None,
-            };
-
-            if let Some(axis) = session_axis {
-                let options =
-                    MessageQueryOptions::new(Some(limit), offset, SortOptions::new(sort_by, order))
-                        .with_message_index_range(message_index_range);
-                run_session_axis(
-                    &service,
-                    cli.source,
-                    source_filter,
-                    cli.pretty,
-                    project,
-                    all,
-                    axis,
-                    include_newest,
-                    options,
-                )?
-            } else {
-                // When session ID(s) are provided without an explicit project,
-                // skip cwd auto-discovery and search all projects instead.
-                let project_scope = if !session.is_empty() && project.is_none() {
-                    if source_filter.is_none() {
-                        eprintln!(
-                            "hint: searching all sources for session; pass --source to narrow the search"
-                        );
-                    }
-                    None
-                } else {
-                    effective_project_scope(project.clone(), all)
-                };
-
-                let mut response = if let Some(latest) = latest {
-                    service.latest_session_messages(
-                        &session,
-                        project_scope.as_deref(),
-                        source_filter,
-                        latest.get(),
-                        message_index_range,
-                    )?
-                } else {
-                    service.messages(
-                        &session,
-                        project_scope.as_deref(),
-                        source_filter,
-                        MessageQueryOptions::new(
-                            Some(limit),
-                            offset,
-                            SortOptions::new(sort_by, order),
-                        )
-                        .with_message_index_range(message_index_range),
-                    )?
-                };
-                if latest.is_none() && response.next_page {
-                    response.next_command = Some(build_next_messages_command(
-                        cli.source,
-                        cli.pretty,
-                        &session,
-                        project.as_deref(),
-                        all,
-                        message_index_range,
-                        limit,
-                        response.next_offset as usize,
-                        sort_by,
-                        order,
-                    ));
-                }
-                serialize(&response, cli.pretty)?
-            }
-        }
-        Commands::Prev {
-            n,
-            project,
-            all,
-            limit,
-        } => {
+        Commands::List(args) => list_command_response(&service, args, source_filter, cli.pretty)?,
+        Commands::Recall(args) => {
             let options = MessageQueryOptions::new(
-                Some(limit),
+                Some(args.limit),
                 0,
                 SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
             );
@@ -927,113 +929,30 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                 cli.source,
                 source_filter,
                 cli.pretty,
-                project,
-                all,
-                SessionAxis::Back(n),
-                false,
+                args.project,
+                args.all,
+                SessionAxis::Back(args.n),
+                args.include_newest,
                 options,
             )?
         }
-        Commands::Export {
-            project,
-            format,
-            output_dir,
-        } => {
-            if format == ExportFormatArg::Tree {
-                let response = export_tree_response(project, output_dir, source_filter)?;
-                serialize(&response, cli.pretty)?
-            } else {
-                let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
-                if let Some(proj) = project {
-                    let response = service.messages(
-                        &[],
-                        Some(proj.as_str()),
-                        source_filter,
-                        MessageQueryOptions::new(None, 0, sort),
-                    )?;
-                    serialize(&response, cli.pretty)?
-                } else {
-                    let (codex_path, claude_name) =
-                        resolve_project_from_cwd().context("could not get current directory")?;
-                    let cursor_name = claude_name.clone();
-                    let mut messages: Vec<ApiMessage> = Vec::new();
-                    if source_filter.is_none() || source_filter == Some(SourceFilter::Codex) {
-                        let codex = service.messages(
-                            &[],
-                            Some(&codex_path),
-                            Some(SourceFilter::Codex),
-                            MessageQueryOptions::new(None, 0, sort),
-                        )?;
-                        messages.extend(codex.messages);
-                    }
-                    if source_filter.is_none() || source_filter == Some(SourceFilter::Claude) {
-                        let claude = service.messages(
-                            &[],
-                            Some(&claude_name),
-                            Some(SourceFilter::Claude),
-                            MessageQueryOptions::new(None, 0, sort),
-                        )?;
-                        messages.extend(claude.messages);
-                    }
-                    if source_filter.is_none() || source_filter == Some(SourceFilter::Cursor) {
-                        let cursor = service.messages(
-                            &[],
-                            Some(&cursor_name),
-                            Some(SourceFilter::Cursor),
-                            MessageQueryOptions::new(None, 0, sort),
-                        )?;
-                        messages.extend(cursor.messages);
-                    }
-                    if source_filter.is_none() || source_filter == Some(SourceFilter::Grok) {
-                        let grok = service.messages(
-                            &[],
-                            Some(&codex_path),
-                            Some(SourceFilter::Grok),
-                            MessageQueryOptions::new(None, 0, sort),
-                        )?;
-                        messages.extend(grok.messages);
-                    }
-                    if source_filter.is_none() || source_filter == Some(SourceFilter::Pi) {
-                        let pi = service.messages(
-                            &[],
-                            Some(&codex_path),
-                            Some(SourceFilter::Pi),
-                            MessageQueryOptions::new(None, 0, sort),
-                        )?;
-                        messages.extend(pi.messages);
-                    }
-                    messages.sort_by(|a, b| {
-                        a.timestamp
-                            .cmp(&b.timestamp)
-                            .then_with(|| a.session_id.cmp(&b.session_id))
-                    });
-                    let total = messages.len() as i64;
-                    let response = ApiMessagesResponse {
-                        messages,
-                        total_messages: total,
-                        next_page: false,
-                        next_offset: total,
-                        next_command: None,
-                        session_selection: None,
-                    };
-                    serialize(&response, cli.pretty)?
-                }
-            }
+        Commands::Read(args) => {
+            read_command_response(&service, args, cli.source, source_filter, cli.pretty)?
         }
-        Commands::Summary(remember) | Commands::Remember(remember) => {
-            remember_command_response(&service, remember, source_filter, cli.pretty).await?
+        Commands::Context(args) => {
+            context_command_response(&service, args, cli.source, source_filter, cli.pretty)?
         }
-        Commands::Link => serialize(&link_response(source_filter)?, cli.pretty)?,
+        Commands::Summarize(args) => {
+            summarize_command_response(&service, args, cli.source, source_filter, cli.pretty)
+                .await?
+        }
         Commands::Import(args) => serialize(&import_response(&args, source_filter)?, cli.pretty)?,
         Commands::Note { text } => serialize(&note_response(text)?, cli.pretty)?,
-        Commands::Rg(args) => rg_output(&args, source_filter, cli.pretty)?,
-        Commands::Search(args) => {
-            if args.line {
-                bail!("--line is only supported for `mmr rg`");
-            }
-            serialize(&search_response(&args, source_filter)?, cli.pretty)?
+        Commands::Find(args) => find_output(&args, source_filter, cli.pretty)?,
+        Commands::Assimilate(args) => {
+            serialize(&assimilate_response(&args, cli.source)?, cli.pretty)?
         }
-        Commands::Dream(args) => serialize(&dream_response(&args)?, cli.pretty)?,
+        Commands::Init(args) => serialize(&init_response(&args, source_filter)?, cli.pretty)?,
         Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
         Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
         Commands::Status(args) => serialize(&status_response(&args, source_filter)?, cli.pretty)?,
@@ -1047,31 +966,413 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     Ok(response)
 }
 
-async fn remember_command_response(
+fn list_command_response(
     service: &QueryService,
-    remember: RememberArgs,
+    args: ListArgs,
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
-    let selection = remember.selection();
-    let project = match remember.project {
-        Some(project) => project,
-        None => current_dir_project().context("could not resolve current directory")?,
-    };
+    match args.command {
+        ListCommand::Projects(args) => serialize(
+            &service.projects(
+                source_filter,
+                Some(args.limit),
+                args.offset,
+                SortOptions::new(args.sort_by, args.order),
+            ),
+            pretty,
+        ),
+        ListCommand::Sessions(args) => serialize(
+            &service.sessions(
+                effective_project_scope(args.project, args.all).as_deref(),
+                source_filter,
+                Some(args.limit),
+                args.offset,
+                SortOptions::new(args.sort_by, args.order),
+            )?,
+            pretty,
+        ),
+    }
+}
 
-    let response = ai::remember(
-        service,
-        RememberRequest {
-            agent: effective_remember_agent(remember.agent),
-            project: project.as_str(),
-            selection,
-            source: source_filter,
-            instructions: remember.instructions.as_deref(),
-            model: remember.model.as_deref(),
-        },
-    )
-    .await?;
-    format_remember_response(&response, remember.output_format, pretty)
+fn read_command_response(
+    service: &QueryService,
+    args: ReadArgs,
+    cli_source: Option<SourceFilter>,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    match args.command {
+        ReadCommand::Session(args) => read_session_response(service, args, source_filter, pretty),
+        ReadCommand::Project(args) => read_project_response(service, args, source_filter, pretty),
+        ReadCommand::Source(args) => {
+            let source = require_explicit_source(cli_source, "read source")?;
+            read_source_response(service, args, source, pretty)
+        }
+    }
+}
+
+fn read_session_response(
+    service: &QueryService,
+    args: ReadSessionArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    if args.format == ReadFormatArg::Tree {
+        let store = Store::open_default()?;
+        let events =
+            store.events_for_source_session(&args.session_id, source_filter_name(source_filter))?;
+        let response = export_tree_events_response(events, args.output_dir, "session")?;
+        return serialize(&response, pretty);
+    }
+
+    if args.project.is_none() && source_filter.is_none() {
+        eprintln!("hint: searching all sources for session; pass --source to narrow the search");
+    }
+    let response = service.messages(
+        &[args.session_id],
+        args.project.as_deref(),
+        source_filter,
+        MessageQueryOptions::new(
+            args.limit,
+            args.offset,
+            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+        ),
+    )?;
+    serialize(&response, pretty)
+}
+
+fn read_project_response(
+    service: &QueryService,
+    args: ReadProjectArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    if args.format == ReadFormatArg::Tree {
+        let response = export_tree_project_response(args.project, args.output_dir, source_filter)?;
+        return serialize(&response, pretty);
+    }
+
+    let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
+    if let Some(project) = args.project {
+        let response = service.messages(
+            &[],
+            Some(project.as_str()),
+            source_filter,
+            MessageQueryOptions::new(args.limit, args.offset, sort),
+        )?;
+        let mut response = response;
+        if response.next_page {
+            response.next_command = Some(build_next_read_project_command(
+                source_filter,
+                Some(project.as_str()),
+                args.limit,
+                response.next_offset as usize,
+            ));
+        }
+        return serialize(&response, pretty);
+    }
+
+    let mut response = read_cwd_project_messages(service, source_filter, args.limit, args.offset)?;
+    if response.next_page {
+        response.next_command = Some(build_next_read_project_command(
+            source_filter,
+            None,
+            args.limit,
+            response.next_offset as usize,
+        ));
+    }
+    serialize(&response, pretty)
+}
+
+fn read_source_response(
+    service: &QueryService,
+    args: ReadSourceArgs,
+    source: SourceFilter,
+    pretty: bool,
+) -> Result<String> {
+    if args.format == ReadFormatArg::Tree {
+        let store = Store::open_default()?;
+        let events = store.events_for_source(source_name(source), None, None)?;
+        let response = export_tree_events_response(events, args.output_dir, "source")?;
+        return serialize(&response, pretty);
+    }
+
+    let response = service.messages(
+        &[],
+        None,
+        Some(source),
+        MessageQueryOptions::new(
+            args.limit,
+            args.offset,
+            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+        ),
+    )?;
+    serialize(&response, pretty)
+}
+
+fn read_cwd_project_messages(
+    service: &QueryService,
+    source_filter: Option<SourceFilter>,
+    limit: Option<usize>,
+    offset: usize,
+) -> Result<ApiMessagesResponse> {
+    let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
+    let (codex_path, claude_name) =
+        resolve_project_from_cwd().context("could not get current directory")?;
+    let cursor_name = claude_name.clone();
+    let mut messages: Vec<ApiMessage> = Vec::new();
+    let mut total_messages = 0;
+    for (source, project) in [
+        (SourceFilter::Codex, codex_path.as_str()),
+        (SourceFilter::Claude, claude_name.as_str()),
+        (SourceFilter::Cursor, cursor_name.as_str()),
+        (SourceFilter::Grok, codex_path.as_str()),
+        (SourceFilter::Pi, codex_path.as_str()),
+    ] {
+        if source_filter.is_none() || source_filter == Some(source) {
+            let response = service.messages(
+                &[],
+                Some(project),
+                Some(source),
+                MessageQueryOptions::new(None, 0, sort),
+            )?;
+            total_messages += response.total_messages;
+            messages.extend(response.messages);
+        }
+    }
+    messages.sort_by(|a, b| {
+        a.timestamp
+            .cmp(&b.timestamp)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
+
+    let total = messages.len();
+    let paged = apply_message_output_pagination(messages, limit, offset);
+    let next_offset = offset.saturating_add(paged.len()) as i64;
+    Ok(ApiMessagesResponse {
+        messages: paged,
+        total_messages: total_messages.max(total as i64),
+        next_page: next_offset < total as i64,
+        next_offset,
+        next_command: None,
+        session_selection: None,
+    })
+}
+
+fn apply_message_output_pagination(
+    messages: Vec<ApiMessage>,
+    limit: Option<usize>,
+    offset: usize,
+) -> Vec<ApiMessage> {
+    let iter = messages.into_iter().skip(offset);
+    match limit {
+        Some(limit) => iter.take(limit).collect(),
+        None => iter.collect(),
+    }
+}
+
+fn build_next_read_project_command(
+    source_filter: Option<SourceFilter>,
+    project: Option<&str>,
+    limit: Option<usize>,
+    next_offset: usize,
+) -> String {
+    let mut parts = vec!["mmr".to_string()];
+    if let Some(source) = source_filter {
+        parts.push(format!("--source {}", source_name(source)));
+    }
+    parts.push("read project".to_string());
+    if let Some(project) = project {
+        parts.push(format!("--project {project}"));
+    }
+    if let Some(limit) = limit {
+        parts.push(format!("--limit {limit}"));
+    }
+    parts.push(format!("--offset {next_offset}"));
+    parts.join(" ")
+}
+
+#[derive(Debug, Serialize)]
+struct ContextResponse {
+    command: String,
+    scope: String,
+    source: Option<String>,
+    project: Option<String>,
+    total_sessions: i64,
+    total_messages: i64,
+    sessions: Vec<crate::types::ApiSession>,
+    messages: Vec<ApiMessage>,
+}
+
+fn context_command_response(
+    service: &QueryService,
+    args: ContextArgs,
+    cli_source: Option<SourceFilter>,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    match args.command {
+        ContextCommand::Project(args) => {
+            let project = args
+                .project
+                .or_else(|| effective_project_scope(None, false));
+            let sessions = service.sessions(
+                project.as_deref(),
+                source_filter,
+                None,
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+            )?;
+            let messages = service.messages(
+                &[],
+                project.as_deref(),
+                source_filter,
+                MessageQueryOptions::new(
+                    Some(args.limit),
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )?;
+            serialize(
+                &ContextResponse {
+                    command: "context/project".to_string(),
+                    scope: "project".to_string(),
+                    source: source_filter.map(source_name).map(str::to_string),
+                    project,
+                    total_sessions: sessions.total_sessions,
+                    total_messages: messages.total_messages,
+                    sessions: sessions.sessions,
+                    messages: messages.messages,
+                },
+                pretty,
+            )
+        }
+        ContextCommand::Source(args) => {
+            let source = require_explicit_source(cli_source, "context source")?;
+            let sessions = service.sessions(
+                None,
+                Some(source),
+                None,
+                0,
+                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+            )?;
+            let messages = service.messages(
+                &[],
+                None,
+                Some(source),
+                MessageQueryOptions::new(
+                    Some(args.limit),
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )?;
+            serialize(
+                &ContextResponse {
+                    command: "context/source".to_string(),
+                    scope: "source".to_string(),
+                    source: Some(source_name(source).to_string()),
+                    project: None,
+                    total_sessions: sessions.total_sessions,
+                    total_messages: messages.total_messages,
+                    sessions: sessions.sessions,
+                    messages: messages.messages,
+                },
+                pretty,
+            )
+        }
+    }
+}
+
+async fn summarize_command_response(
+    service: &QueryService,
+    args: SummarizeArgs,
+    cli_source: Option<SourceFilter>,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    match args.command {
+        SummarizeCommand::Project(args) => {
+            let project = args
+                .project
+                .unwrap_or(current_dir_project().context("could not resolve current directory")?);
+            let response = ai::remember(
+                service,
+                RememberRequest {
+                    agent: effective_remember_agent(args.runner.agent),
+                    project: project.as_str(),
+                    selection: RememberSelection::All,
+                    source: source_filter,
+                    instructions: args.runner.instructions.as_deref(),
+                    model: args.runner.model.as_deref(),
+                },
+            )
+            .await?;
+            format_remember_response(&response, args.runner.output_format, pretty)
+        }
+        SummarizeCommand::Session(args) => {
+            let messages = service.messages(
+                &[args.session_id],
+                args.project.as_deref(),
+                source_filter,
+                MessageQueryOptions::new(
+                    None,
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )?;
+            let formatted = format_messages_as_summary_input(&messages.messages);
+            let response = ai::summarize_formatted_messages(
+                effective_remember_agent(args.runner.agent),
+                args.runner.instructions.as_deref(),
+                args.runner.model.as_deref(),
+                &formatted,
+            )
+            .await?;
+            format_remember_response(&response, args.runner.output_format, pretty)
+        }
+        SummarizeCommand::Source(args) => {
+            let source = require_explicit_source(cli_source, "summarize source")?;
+            let messages = service.messages(
+                &[],
+                None,
+                Some(source),
+                MessageQueryOptions::new(
+                    None,
+                    0,
+                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                ),
+            )?;
+            let formatted = format_messages_as_summary_input(&messages.messages);
+            let response = ai::summarize_formatted_messages(
+                effective_remember_agent(args.runner.agent),
+                args.runner.instructions.as_deref(),
+                args.runner.model.as_deref(),
+                &formatted,
+            )
+            .await?;
+            format_remember_response(&response, args.runner.output_format, pretty)
+        }
+    }
+}
+
+fn format_messages_as_summary_input(messages: &[ApiMessage]) -> String {
+    let mut output = String::new();
+    let mut current_session = String::new();
+    for message in messages {
+        if message.session_id != current_session {
+            current_session = message.session_id.clone();
+            output.push_str(&format!(
+                "\n## Session {} ({}, {})\n",
+                message.session_id, message.source, message.project_name
+            ));
+        }
+        output.push_str(&format!(
+            "- [{}] {}: {}\n",
+            message.timestamp, message.role, message.content
+        ));
+    }
+    output
 }
 
 fn teleport_command_response(
@@ -1468,7 +1769,7 @@ fn note_response(text: Vec<String>) -> Result<NoteResponse> {
     let mut store = Store::open_default()?;
     let cwd = std::env::current_dir().context("current_dir")?;
     let project = store.project_by_path(&cwd)?.ok_or_else(|| {
-        anyhow::anyhow!("current project is not linked; run `mmr link` before adding notes")
+        anyhow::anyhow!("current project is not linked; run `mmr init` before adding notes")
     })?;
     let content = read_note_text(text)?;
     let timestamp = now_rfc3339()?;
@@ -1524,6 +1825,7 @@ struct LinkResponse {
     rebuilt_search_documents: usize,
     sync: SyncReport,
     status: StatusProjectSnapshot,
+    suggested_import_commands: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1659,7 +1961,7 @@ struct StatusDreamRunnerDiagnostic {
     action: Option<String>,
 }
 
-fn link_response(source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
+fn init_response(args: &InitArgs, source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
     let mut store = Store::open_default()?;
     let info = store.info()?;
     let cwd = std::env::current_dir().context("current_dir")?;
@@ -1679,9 +1981,19 @@ fn link_response(source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
             existing_learned_memory: 0,
         }
     };
-    let imports = reconcile_default_sources(&mut store, &project, source_filter)?;
-    let rebuilt_search_documents = rebuild_search_documents(&store, &project, source_filter)?;
-    let sync = if remote_auth_ok {
+    let imports = if args.link_only {
+        Vec::new()
+    } else {
+        reconcile_default_sources(&mut store, &project, source_filter)?
+    };
+    let rebuilt_search_documents = if args.link_only {
+        0
+    } else {
+        rebuild_search_documents(&store, &project, source_filter)?
+    };
+    let sync = if args.link_only {
+        remote_pending_sync_report(&store, &project, &remote, source_filter)?
+    } else if remote_auth_ok {
         sync_project(
             &mut store,
             &project,
@@ -1693,7 +2005,7 @@ fn link_response(source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
     };
     let status = status_snapshot(&store, Some(&project), Some(&remote))?;
     Ok(LinkResponse {
-        command: "link".to_string(),
+        command: "init".to_string(),
         already_linked,
         store: StoreStatus {
             schema_version: info.schema_version,
@@ -1705,7 +2017,21 @@ fn link_response(source_filter: Option<SourceFilter>) -> Result<LinkResponse> {
         rebuilt_search_documents,
         sync,
         status,
+        suggested_import_commands: suggested_import_commands(source_filter),
     })
+}
+
+fn suggested_import_commands(source_filter: Option<SourceFilter>) -> Vec<String> {
+    match source_filter {
+        Some(source) => vec![format!(
+            "mmr import --source {}",
+            source_filter_name(Some(source)).expect("source name")
+        )],
+        None => ["codex", "claude", "cursor"]
+            .iter()
+            .map(|source| format!("mmr import --source {source}"))
+            .collect(),
+    }
 }
 
 fn remote_pending_sync_report(
@@ -1852,7 +2178,7 @@ fn push_action(actions: &mut Vec<String>, action: &str) {
 
 fn link_action(project_path: &Path) -> String {
     format!(
-        "Run `cd {} && mmr link --pretty` to link and reconcile this project.",
+        "Run `cd {} && mmr init --pretty` to link and reconcile this project.",
         shell_quote_path(project_path)
     )
 }
@@ -1897,7 +2223,7 @@ fn status_remote_diagnostic(remote: &RemoteSummary) -> StatusRemoteDiagnostic {
         (
             "missing_remote",
             Some(
-                "Run `mmr link` or `mmr sync` to create the default github:<user>/mmr-store remote.",
+                "Run `mmr init` or `mmr sync` to create the default github:<user>/mmr-store remote.",
             ),
         )
     };
@@ -2042,7 +2368,7 @@ fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
                 command: None,
                 api_key_env: vec!["GOOGLE_API_KEY".to_string(), "GEMINI_API_KEY".to_string()],
                 action: (!configured).then(|| {
-                    "Set GOOGLE_API_KEY or GEMINI_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|codex, or run one brief with `mmr summary --agent cursor|codex`."
+                    "Set GOOGLE_API_KEY or GEMINI_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|codex, or run one brief with `mmr summarize project --agent cursor|codex`."
                         .to_string()
                 }),
             }
@@ -2054,14 +2380,14 @@ fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
                 (
                     "missing_api_key",
                     Some(
-                        "Set CURSOR_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summary --agent gemini|codex`."
+                        "Set CURSOR_API_KEY; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summarize project --agent gemini|codex`."
                             .to_string(),
                     ),
                 )
             } else if !command_available {
                 (
                     "missing_command",
-                    Some("Install the Cursor `agent` CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summary --agent gemini|codex`.".to_string()),
+                    Some("Install the Cursor `agent` CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=gemini|codex, or run one brief with `mmr summarize project --agent gemini|codex`.".to_string()),
                 )
             } else {
                 ("configured", None)
@@ -2087,7 +2413,7 @@ fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
                 command: Some("codex".to_string()),
                 api_key_env: Vec::new(),
                 action: (!command_available).then(|| {
-                    "Install the Codex CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|gemini, or run one brief with `mmr summary --agent cursor|gemini`."
+                    "Install the Codex CLI on PATH; for status readiness with another backend set MMR_DEFAULT_REMEMBER_AGENT=cursor|gemini, or run one brief with `mmr summarize project --agent cursor|gemini`."
                         .to_string()
                 }),
             }
@@ -2409,7 +2735,11 @@ fn default_import_source_root(source_filter: Option<SourceFilter>) -> Result<Pat
 struct DreamResponse {
     command: String,
     mode: String,
-    project_id: String,
+    scope: String,
+    project_id: Option<String>,
+    source: Option<String>,
+    per_project_limit: Option<usize>,
+    since: Option<String>,
     evidence: DreamEvidenceResponse,
     system_prompt: String,
     runbook: Vec<DreamRunbookStep>,
@@ -2444,48 +2774,109 @@ struct DreamOutputContract {
     refusal_conditions: Vec<String>,
 }
 
-fn dream_response(args: &DreamArgs) -> Result<DreamResponse> {
+fn assimilate_response(
+    args: &AssimilateArgs,
+    cli_source: Option<SourceFilter>,
+) -> Result<DreamResponse> {
+    match &args.command {
+        AssimilateCommand::Project(args) => assimilate_project_response(args),
+        AssimilateCommand::Source(args) => {
+            let source = require_explicit_source(cli_source, "assimilate source")?;
+            assimilate_source_response(args, source)
+        }
+    }
+}
+
+fn assimilate_project_response(args: &AssimilateProjectArgs) -> Result<DreamResponse> {
     let store = Store::open_default()?;
     let project = linked_project(&store, args.project.as_deref())?;
     let evidence_mode: DreamEvidenceMode = args.evidence_mode.into();
     if evidence_mode == DreamEvidenceMode::LocalRaw && !args.allow_raw_evidence {
-        bail!("raw dream evidence requires explicit local-only opt-in");
+        bail!("raw assimilation evidence requires explicit local-only opt-in");
     }
     let bundle = build_evidence_bundle(&store, &project, evidence_mode.clone())?;
     if bundle.events.is_empty() {
-        bail!("dream requires at least one shared-safe evidence event");
+        bail!("assimilate project requires at least one shared-safe evidence event");
     }
 
     Ok(DreamResponse {
-        command: "dream".to_string(),
+        command: "assimilate/project".to_string(),
         mode: "prompt_runbook".to_string(),
-        project_id: project.id.clone(),
-        evidence: DreamEvidenceResponse {
-            access: match evidence_mode {
-                DreamEvidenceMode::SharedSafe => "shared_safe",
-                DreamEvidenceMode::LocalRaw => "local_raw",
-            }
-            .to_string(),
-            included_events: bundle.events.len(),
-            omitted_events: bundle.omitted_events.len(),
-            evidence_hash: bundle.evidence_hash,
-            pii_coverage: bundle.pii_coverage,
-            events: bundle.events,
-            omitted: bundle.omitted_events,
-        },
+        scope: "project".to_string(),
+        project_id: Some(project.id.clone()),
+        source: None,
+        per_project_limit: None,
+        since: None,
+        evidence: dream_evidence_response(bundle, evidence_mode),
         system_prompt: dream_system_prompt(),
         runbook: dream_runbook(),
         output_contract: dream_output_contract(),
         guardrails: dream_guardrails(),
-        suggested_commands: dream_suggested_commands(&project),
+        suggested_commands: assimilate_project_suggested_commands(&project),
     })
+}
+
+fn assimilate_source_response(
+    args: &AssimilateSourceArgs,
+    source: SourceFilter,
+) -> Result<DreamResponse> {
+    let store = Store::open_default()?;
+    let evidence_mode: DreamEvidenceMode = args.evidence_mode.into();
+    if evidence_mode == DreamEvidenceMode::LocalRaw && !args.allow_raw_evidence {
+        bail!("raw assimilation evidence requires explicit local-only opt-in");
+    }
+    let bundle = build_source_evidence_bundle(
+        &store,
+        source_name(source),
+        evidence_mode.clone(),
+        args.since.as_deref(),
+        Some(args.per_project_limit),
+    )?;
+    if bundle.events.is_empty() {
+        bail!("assimilate source requires at least one shared-safe evidence event");
+    }
+
+    Ok(DreamResponse {
+        command: "assimilate/source".to_string(),
+        mode: "prompt_runbook".to_string(),
+        scope: "source".to_string(),
+        project_id: None,
+        source: Some(source_name(source).to_string()),
+        per_project_limit: Some(args.per_project_limit),
+        since: args.since.clone(),
+        evidence: dream_evidence_response(bundle, evidence_mode),
+        system_prompt: source_assimilation_system_prompt(source),
+        runbook: source_assimilation_runbook(),
+        output_contract: dream_output_contract(),
+        guardrails: source_assimilation_guardrails(),
+        suggested_commands: source_assimilation_suggested_commands(source),
+    })
+}
+
+fn dream_evidence_response(
+    bundle: crate::dream::DreamEvidenceBundle,
+    evidence_mode: DreamEvidenceMode,
+) -> DreamEvidenceResponse {
+    DreamEvidenceResponse {
+        access: match evidence_mode {
+            DreamEvidenceMode::SharedSafe => "shared_safe",
+            DreamEvidenceMode::LocalRaw => "local_raw",
+        }
+        .to_string(),
+        included_events: bundle.events.len(),
+        omitted_events: bundle.omitted_events.len(),
+        evidence_hash: bundle.evidence_hash,
+        pii_coverage: bundle.pii_coverage,
+        events: bundle.events,
+        omitted: bundle.omitted_events,
+    }
 }
 
 fn dream_system_prompt() -> String {
     [
         "You are a Memory Assimilation Agent operating inside an mmr-linked project.",
         "Your job is to turn the supplied evidence bundle into durable, evidence-cited knowledge for future agents.",
-        "Perform memory deduplication, knowledge assimilation, and generalisation yourself; do not assume `mmr dream` already ran an AI provider or wrote memory.",
+        "Perform memory deduplication, knowledge assimilation, and generalisation yourself; do not assume `mmr assimilate project` already ran an AI provider or wrote memory.",
         "Prefer stable operating preferences, repeatable workflow lessons, project facts, and unresolved follow-ups over transcript summary.",
         "Every proposed memory must cite one or more supplied `mmr://event/...` refs and must identify counterevidence when present.",
         "Reject or quarantine claims that are personal, secret-bearing, identity-affecting, unsupported, too narrow to reuse, or contradicted by newer evidence.",
@@ -2577,12 +2968,57 @@ fn dream_guardrails() -> Vec<String> {
     ]
 }
 
-fn dream_suggested_commands(project: &ProjectRecord) -> Vec<String> {
+fn assimilate_project_suggested_commands(project: &ProjectRecord) -> Vec<String> {
     let project = shell_quote_path(Path::new(&project.canonical_path));
     vec![
-        format!("mmr search --project {project} <query> --pretty"),
-        format!("mmr summary all --project {project} --pretty"),
+        format!("mmr find --project {project} <query> --pretty"),
+        format!("mmr summarize project --project {project} --pretty"),
         format!("mmr sync --project {project} --dry-run --pretty"),
+    ]
+}
+
+fn source_assimilation_system_prompt(source: SourceFilter) -> String {
+    let source = source_name(source);
+    [
+        format!("You are a Memory Assimilation Agent improving the {source} coding-agent harness across projects."),
+        "Your job is to turn the supplied source-wide evidence bundle into durable, evidence-cited harness knowledge.".to_string(),
+        "Perform memory deduplication, knowledge assimilation, and generalisation yourself; do not assume `mmr assimilate source` already ran an AI provider or wrote memory.".to_string(),
+        "Prefer repeatable harness behavior, steering failures, tool-use lessons, recovery patterns, and source-specific operating constraints over project facts.".to_string(),
+        "Generalise across projects only when evidence supports the pattern; keep project-specific facts out of harness memory unless they are necessary counterevidence.".to_string(),
+        "Every proposed memory must cite one or more supplied `mmr://event/...` refs and must identify counterevidence when present.".to_string(),
+        "When evidence is insufficient, return the smallest missing fact or command needed to continue instead of inventing memory.".to_string(),
+    ]
+    .join("\n")
+}
+
+fn source_assimilation_runbook() -> Vec<DreamRunbookStep> {
+    let mut runbook = dream_runbook();
+    if let Some(step) = runbook.iter_mut().find(|step| step.step == "generalise") {
+        step.instructions.push(
+            "Look for cross-project harness patterns before proposing account-wide harness memory."
+                .to_string(),
+        );
+        step.instructions
+            .push("Do not turn one project's implementation fact into a harness rule.".to_string());
+    }
+    runbook
+}
+
+fn source_assimilation_guardrails() -> Vec<String> {
+    let mut guardrails = dream_guardrails();
+    guardrails.push(
+        "Keep source-scoped memories about the harness; quarantine project-specific claims."
+            .to_string(),
+    );
+    guardrails
+}
+
+fn source_assimilation_suggested_commands(source: SourceFilter) -> Vec<String> {
+    let source = source_name(source);
+    vec![
+        format!("mmr find --source {source} <query> --pretty"),
+        format!("mmr context source --source {source} --pretty"),
+        format!("mmr read source --source {source} --limit 200 --pretty"),
     ]
 }
 
@@ -2624,13 +3060,13 @@ struct ExportTreeFile {
     citation: String,
 }
 
-fn rg_output(
+fn find_output(
     args: &SearchTextArgs,
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
     let response = search_response(args, source_filter)?;
-    if !args.line {
+    if args.format == FindFormatArg::Json {
         return serialize(&response, pretty);
     }
 
@@ -2817,10 +3253,22 @@ fn truncate_snippet(line: &str) -> String {
     snippet
 }
 
-fn export_tree_response(
+fn export_tree_project_response(
     project: Option<String>,
     output_dir: Option<PathBuf>,
     source_filter: Option<SourceFilter>,
+) -> Result<ExportTreeResponse> {
+    let store = Store::open_default()?;
+    let project_path = project.as_deref().map(PathBuf::from);
+    let project = linked_project(&store, project_path.as_deref())?;
+    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    export_tree_events_response(events, output_dir, &project.id)
+}
+
+fn export_tree_events_response(
+    events: Vec<EventRecord>,
+    output_dir: Option<PathBuf>,
+    scope_key: &str,
 ) -> Result<ExportTreeResponse> {
     let base_output_dir =
         output_dir.ok_or_else(|| anyhow::anyhow!("--output-dir is required with --format tree"))?;
@@ -2832,15 +3280,12 @@ fn export_tree_response(
     })?;
 
     let store = Store::open_default()?;
-    let project_path = project.as_deref().map(PathBuf::from);
-    let project = linked_project(&store, project_path.as_deref())?;
-    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
     let run_dir = base_output_dir.join(format!(
         "mmr-tree-{}",
         sanitize_path_component(&content_hash(&format!(
             "{}:{}:{}",
-            project.id,
-            source_filter_name(source_filter).unwrap_or("all"),
+            scope_key,
+            events.len(),
             now_rfc3339()?
         )))
     ));
@@ -3082,7 +3527,7 @@ fn linked_project(store: &Store, project: Option<&Path>) -> Result<ProjectRecord
     };
     store.project_by_path(&path)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "project is not linked; run `mmr link` before redaction or pass a linked --project"
+            "project is not linked; run `mmr init` before redaction or pass a linked --project"
         )
     })
 }
@@ -3137,6 +3582,16 @@ fn source_filter_name(source_filter: Option<SourceFilter>) -> Option<&'static st
         Some(SourceFilter::Pi) => Some("pi"),
         None => None,
     }
+}
+
+fn source_name(source: SourceFilter) -> &'static str {
+    source_filter_name(Some(source)).expect("source name")
+}
+
+fn require_explicit_source(source: Option<SourceFilter>, command: &str) -> Result<SourceFilter> {
+    source.ok_or_else(|| {
+        anyhow::anyhow!("`mmr {command}` requires --source <claude|codex|cursor|grok|pi>")
+    })
 }
 
 fn dry_run_allows_sync(event: &EventRecord, outcome: &RedactionOutcome) -> bool {
@@ -3301,6 +3756,7 @@ fn effective_remember_agent(cli_agent: Option<Agent>) -> Agent {
         .unwrap_or(Agent::Cursor)
 }
 
+#[cfg(test)]
 fn validate_message_index_range(
     from: Option<usize>,
     to: Option<usize>,
@@ -3318,6 +3774,7 @@ fn validate_message_index_range(
 /// The argument is written older-bound `..` newer-bound (e.g. `2..1` selects ages 1 and 2),
 /// so `FROM >= TO >= 1`. Age 0 (the newest, assumed-live session) is never range-addressable.
 /// Returns the ages as `newest_bound..=oldest_bound` (`1..=2` for `2..1`).
+#[cfg(test)]
 fn parse_session_range(input: &str) -> Result<std::ops::RangeInclusive<u32>> {
     let trimmed = input.trim();
     let (oldest_str, newest_str) = trimmed.split_once("..").with_context(|| {
@@ -3467,10 +3924,11 @@ fn build_next_messages_command(
         parts.push(format!("--source {name}"));
     }
 
-    parts.push("messages".to_string());
-
-    for sess in session {
-        parts.push(format!("--session {sess}"));
+    if session.len() == 1 {
+        parts.push("read session".to_string());
+        parts.push(session[0].clone());
+    } else {
+        parts.push("read project".to_string());
     }
     if let Some(proj) = project {
         parts.push(format!("--project {proj}"));
@@ -3581,7 +4039,7 @@ fn run_session_axis(
 /// out-of-range / age-0 session-axis request, naming the relevant counts.
 fn session_selection_cli_failure(error: SessionSelectionError, pretty: bool) -> Result<CliFailure> {
     let mut value = serde_json::json!({
-        "command": "messages",
+        "command": "recall",
         "status": "failed",
         "error_kind": error.error_kind(),
         "message": error.to_string(),
@@ -3611,21 +4069,6 @@ fn session_selection_cli_failure(error: SessionSelectionError, pretty: bool) -> 
     }
     let stdout = serialize(&value, pretty)?;
     Ok(CliFailure::new(2, stdout, error.to_string()))
-}
-
-/// Reject more than one session selector (`--session`, `--latest`, `--session-back`,
-/// `--session-range`) with a usage error mirroring the teleport selector guard.
-fn multiple_selectors_failure(pretty: bool) -> Result<CliFailure> {
-    let message =
-        "pass only one session selector: --session, --latest, --session-back, or --session-range";
-    let value = serde_json::json!({
-        "command": "messages",
-        "status": "failed",
-        "error_kind": "multiple_session_selectors",
-        "message": message,
-    });
-    let stdout = serialize(&value, pretty)?;
-    Ok(CliFailure::new(2, stdout, message))
 }
 
 fn serialize<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
@@ -3661,118 +4104,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remember_all_selector_parses() {
+    fn summarize_project_parses() {
         let parsed = Cli::try_parse_from([
             "mmr",
-            "remember",
-            "all",
-            "--project",
-            "/Users/test/proj",
-            "--agent",
-            "gemini",
-        ]);
-
-        let parsed = parsed.expect("remember all should parse successfully");
-        let Commands::Remember(remember) = parsed.command else {
-            panic!("expected remember command");
-        };
-        assert_eq!(remember.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(remember.agent, Some(Agent::Gemini));
-        assert_eq!(remember.output_format, RememberOutputFormatArg::Md);
-        assert!(matches!(
-            remember.selection,
-            Some(RememberSelectorCommand::All)
-        ));
-    }
-
-    #[test]
-    fn remember_session_selector_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "remember",
-            "session",
-            "sess-123",
-            "--project",
-            "/Users/test/proj",
-            "--agent",
-            "gemini",
-            "-O",
-            "md",
-        ]);
-
-        let parsed = parsed.expect("remember session <id> should parse successfully");
-        let Commands::Remember(remember) = parsed.command else {
-            panic!("expected remember command");
-        };
-        assert_eq!(remember.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(remember.agent, Some(Agent::Gemini));
-        assert_eq!(remember.output_format, RememberOutputFormatArg::Md);
-        assert!(matches!(
-            remember.selection,
-            Some(RememberSelectorCommand::Session { session_id }) if session_id == "sess-123"
-        ));
-    }
-
-    #[test]
-    fn summary_all_selector_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "summary",
-            "all",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
             "gemini",
             "-O",
             "json",
-        ]);
-
-        let parsed = parsed.expect("summary all should parse successfully");
-        let Commands::Summary(summary) = parsed.command else {
-            panic!("expected summary command");
+        ])
+        .expect("summarize project should parse");
+        let Commands::Summarize(args) = parsed.command else {
+            panic!("expected summarize command");
         };
-        assert_eq!(summary.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(summary.agent, Some(Agent::Gemini));
-        assert_eq!(summary.output_format, RememberOutputFormatArg::Json);
-        assert!(matches!(
-            summary.selection,
-            Some(RememberSelectorCommand::All)
-        ));
+        let SummarizeCommand::Project(project) = args.command else {
+            panic!("expected summarize project command");
+        };
+        assert_eq!(project.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(project.runner.agent, Some(Agent::Gemini));
+        assert_eq!(project.runner.output_format, RememberOutputFormatArg::Json);
     }
 
     #[test]
-    fn summary_session_selector_parses() {
+    fn summarize_session_parses() {
         let parsed = Cli::try_parse_from([
             "mmr",
-            "summary",
+            "summarize",
             "session",
             "sess-123",
             "--project",
             "/Users/test/proj",
-        ]);
-
-        let parsed = parsed.expect("summary session <id> should parse successfully");
-        let Commands::Summary(summary) = parsed.command else {
-            panic!("expected summary command");
+        ])
+        .expect("summarize session should parse");
+        let Commands::Summarize(args) = parsed.command else {
+            panic!("expected summarize command");
         };
-        assert_eq!(summary.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(summary.agent, None);
-        assert!(matches!(
-            summary.selection,
-            Some(RememberSelectorCommand::Session { session_id }) if session_id == "sess-123"
-        ));
+        let SummarizeCommand::Session(session) = args.command else {
+            panic!("expected summarize session command");
+        };
+        assert_eq!(session.session_id, "sess-123");
+        assert_eq!(session.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(session.runner.agent, None);
     }
 
     #[test]
-    fn remember_without_agent_flag_leaves_agent_unset_for_runtime_defaulting() {
-        let parsed =
-            Cli::try_parse_from(["mmr", "remember", "--project", "/Users/test/proj", "all"]);
-
-        let parsed = parsed.expect("remember without --agent should parse successfully");
-        let Commands::Remember(remember) = parsed.command else {
-            panic!("expected remember command");
-        };
-        assert_eq!(remember.agent, None);
+    fn old_summary_and_remember_do_not_parse() {
+        assert!(Cli::try_parse_from(["mmr", "summary", "all"]).is_err());
+        assert!(Cli::try_parse_from(["mmr", "remember", "all"]).is_err());
     }
 
     #[test]
@@ -3844,64 +4225,43 @@ mod tests {
     }
 
     #[test]
-    fn prev_defaults_to_one_session_back() {
-        let parsed = Cli::try_parse_from(["mmr", "prev"]).expect("prev should parse");
-        let Commands::Prev { n, all, .. } = parsed.command else {
-            panic!("expected prev command");
+    fn recall_defaults_to_one_session_back() {
+        let parsed = Cli::try_parse_from(["mmr", "recall"]).expect("recall should parse");
+        let Commands::Recall(args) = parsed.command else {
+            panic!("expected recall command");
         };
-        assert_eq!(n, 1);
-        assert!(!all);
+        assert_eq!(args.n, 1);
+        assert!(!args.all);
     }
 
     #[test]
-    fn prev_accepts_explicit_count_and_scope() {
+    fn recall_accepts_explicit_count_and_scope() {
+        let parsed = Cli::try_parse_from(["mmr", "recall", "2", "--all"])
+            .expect("recall 2 --all should parse");
+        let Commands::Recall(args) = parsed.command else {
+            panic!("expected recall command");
+        };
+        assert_eq!(args.n, 2);
+        assert!(args.all);
+    }
+
+    #[test]
+    fn read_session_parses() {
         let parsed =
-            Cli::try_parse_from(["mmr", "prev", "2", "--all"]).expect("prev 2 --all should parse");
-        let Commands::Prev { n, all, .. } = parsed.command else {
-            panic!("expected prev command");
+            Cli::try_parse_from(["mmr", "read", "session", "sess-123"]).expect("read session");
+        let Commands::Read(args) = parsed.command else {
+            panic!("expected read command");
         };
-        assert_eq!(n, 2);
-        assert!(all);
+        let ReadCommand::Session(session) = args.command else {
+            panic!("expected read session command");
+        };
+        assert_eq!(session.session_id, "sess-123");
     }
 
     #[test]
-    fn messages_session_flag_is_repeatable() {
-        let parsed = Cli::try_parse_from(["mmr", "messages", "--session", "a", "--session", "b"])
-            .expect("repeated --session should parse");
-        let Commands::Messages { session, .. } = parsed.command else {
-            panic!("expected messages command");
-        };
-        assert_eq!(session, vec!["a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn messages_session_axis_flags_parse() {
-        let parsed =
-            Cli::try_parse_from(["mmr", "messages", "--session-back", "3", "--include-newest"])
-                .expect("--session-back should parse");
-        let Commands::Messages {
-            session_back,
-            include_newest,
-            ..
-        } = parsed.command
-        else {
-            panic!("expected messages command");
-        };
-        assert_eq!(session_back, Some(3));
-        assert!(include_newest);
-
-        let ranged =
-            Cli::try_parse_from(["mmr", "messages", "--session-range", "2..1"]).expect("range");
-        let Commands::Messages { session_range, .. } = ranged.command else {
-            panic!("expected messages command");
-        };
-        assert_eq!(session_range.as_deref(), Some("2..1"));
-    }
-
-    #[test]
-    fn messages_strawman_index_flags_do_not_parse() {
-        assert!(Cli::try_parse_from(["mmr", "messages", "--from-index", "-1"]).is_err());
-        assert!(Cli::try_parse_from(["mmr", "messages", "--to-index", "-1"]).is_err());
+    fn old_messages_and_prev_do_not_parse() {
+        assert!(Cli::try_parse_from(["mmr", "messages", "--session", "a"]).is_err());
+        assert!(Cli::try_parse_from(["mmr", "prev"]).is_err());
     }
 
     #[test]
@@ -4069,23 +4429,28 @@ mod tests {
     }
 
     #[test]
-    fn rg_and_search_commands_parse() {
-        let rg = Cli::try_parse_from(["mmr", "rg", "panic", "--role", "assistant", "-i"])
-            .expect("rg should parse");
-        let Commands::Rg(args) = rg.command else {
-            panic!("expected rg command");
+    fn find_command_parses_json_and_line_formats() {
+        let find = Cli::try_parse_from([
+            "mmr",
+            "find",
+            "panic",
+            "--role",
+            "assistant",
+            "-i",
+            "--format",
+            "line",
+        ])
+        .expect("find should parse");
+        let Commands::Find(args) = find.command else {
+            panic!("expected find command");
         };
         assert_eq!(args.query, "panic");
         assert_eq!(args.role.as_deref(), Some("assistant"));
         assert!(args.ignore_case);
+        assert_eq!(args.format, FindFormatArg::Line);
 
-        let search = Cli::try_parse_from(["mmr", "search", "decision", "--session", "notes"])
-            .expect("search should parse");
-        let Commands::Search(args) = search.command else {
-            panic!("expected search command");
-        };
-        assert_eq!(args.query, "decision");
-        assert_eq!(args.session.as_deref(), Some("notes"));
+        assert!(Cli::try_parse_from(["mmr", "rg", "panic"]).is_err());
+        assert!(Cli::try_parse_from(["mmr", "search", "decision"]).is_err());
     }
 
     #[test]

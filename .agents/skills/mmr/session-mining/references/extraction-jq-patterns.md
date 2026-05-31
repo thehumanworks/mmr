@@ -1,6 +1,6 @@
 # Extraction jq Patterns for mmr Session Transcripts
 
-These patterns are tuned for the shape returned by `mmr messages` (ApiMessagesResponse) when a session-axis selector (`--session-back`, `--session-range`, or `--session`) is used. They assume the file has been saved because the full payload is frequently >100k lines when pretty-printed or when many turns contain large tool outputs / file pastes.
+These patterns are tuned for the `ApiMessagesResponse` shape returned by `mmr recall` and `mmr read session`. They assume the file has been saved because the full payload is frequently >100k lines when pretty-printed or when many turns contain large tool outputs / file pastes.
 
 ## Basic hygiene & structure
 

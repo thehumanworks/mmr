@@ -11,7 +11,8 @@ When implementing or reviewing behavior:
 
 ## Index
 
-- [Messages command](messages.md)
+- [Command taxonomy](../docs/mmr-command-taxonomy.md)
+- [Recall and read session behavior](messages.md)
 - [Teleport command](teleport.md)
 - [Teleport user guide](../docs/mmr-teleport.md)
 - [Teleport E2E validation](../docs/mmr-teleport-validation.md)
@@ -22,8 +23,8 @@ When implementing or reviewing behavior:
 - [Source adapter framework](../docs/mmr-source-adapters.md)
 - [Note command](../docs/mmr-note.md)
 - [Redaction before sync](../docs/mmr-redaction.md)
-- [Search commands](../docs/mmr-search.md)
+- [Find command](../docs/mmr-search.md)
 - [Codex importer](../docs/mmr-codex-importer.md)
 - [Claude importer](../docs/mmr-claude-importer.md)
 - [Cursor importer](../docs/mmr-cursor-importer.md)
-- [Dream runner and assimilation](../docs/mmr-dream-runner.md)
+- [Assimilation prompt/runbook handoff](../docs/mmr-dream-runner.md)

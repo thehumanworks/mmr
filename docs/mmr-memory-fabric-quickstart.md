@@ -4,7 +4,7 @@ Status: implemented through NHL-281. See
 `docs/mmr-memory-fabric-release-gate.md` for final release evidence.
 
 This guide covers the lean MVP flow from a blank non-Git directory to linked,
-synced, searchable, and dreamed local memory.
+synced, searchable, and assimilation-ready local memory.
 
 ## One-Time Setup
 
@@ -26,15 +26,15 @@ export GITHUB_USER="$(whoami)"
 The MVP remote is addressed as `github:<user>/mmr-store`. Tests can override the
 file-backed remote location with `MMR_FAKE_REMOTE_DIR`.
 
-## Link
+## Init
 
 Run first-run setup from the project directory:
 
 ```bash
-mmr link --pretty
+mmr init --pretty
 ```
 
-`link` is idempotent. It creates or reuses the local store, links the current
+`init` is idempotent. It creates or reuses the local store, links the current
 project, hydrates any existing remote payloads, imports available
 Codex/Claude/Cursor roots, rebuilds search documents, applies redaction during
 sync, and prints status JSON.
@@ -69,14 +69,14 @@ Key fields:
 - `diagnostics.privacy_filter`: optional privacy-filter coverage state.
 - `diagnostics.remote`: remote availability and auth state.
 - `diagnostics.summary_runner`: continuity brief provider availability for
-  `summary` and the `remember` compatibility alias.
-- `diagnostics.dream_runner`: reports that no dream runner is required.
+  `summarize`.
+- `diagnostics.dream_runner`: reports that no assimilation runner is required.
 - `diagnostics.actions`: concrete recovery commands or environment fixes.
 
 ## Add Local Notes
 
 Notes are first-class events and are searchable, redacted, synced, summarized,
-and dreamed through the same pipeline as imported agent events.
+and assimilated through the same pipeline as imported agent events.
 
 ```bash
 mmr note "Decision: keep the migration append-only and cover it with fixtures."
@@ -93,27 +93,25 @@ cat decision.md | mmr note
 Structured JSON search:
 
 ```bash
-mmr search "migration append-only" --pretty
+mmr find "migration append-only" --pretty
 ```
 
 POSIX-oriented line output is explicit:
 
 ```bash
-mmr rg "migration append-only" --line
+mmr find "migration append-only" --format line
 ```
 
-Default `rg` and `search` output remains JSON on stdout. Use `--pretty` for
-indented JSON.
+Default `find` output remains JSON on stdout. Use `--pretty` for indented JSON.
 
 ## Summarize
 
-`summary` is the stateless continuity brief command. `remember` remains a
-compatibility alias for existing scripts.
+`summarize` is the stateless continuity brief command.
 
 ```bash
-mmr summary --project "$(pwd)"
-mmr summary all --project "$(pwd)"
-mmr summary session <session-id> --project "$(pwd)"
+mmr summarize project --project "$(pwd)"
+mmr --source codex summarize source
+mmr summarize session <session-id> --project "$(pwd)"
 ```
 
 The default summary backend is Cursor unless `MMR_DEFAULT_REMEMBER_AGENT` is
@@ -121,20 +119,21 @@ set. `mmr status --pretty` reports `diagnostics.summary_runner` so missing
 `CURSOR_API_KEY`, the Cursor `agent` CLI, Gemini keys, or the Codex CLI are
 visible before you run a summary.
 
-`summary`, `remember`, and `dream` are stateless: they do not write active
-learned memory. Use `mmr dream` to generate a prompt, runbook, output contract,
-and cited evidence bundle for the calling AI agent.
+`summarize` and `assimilate` are stateless: they do not write active learned
+memory. Use `mmr assimilate` to generate a prompt, runbook, output contract, and
+cited evidence bundle for the calling AI agent.
 
-## Dream
+## Assimilate
 
 Generate the memory assimilation prompt and runbook:
 
 ```bash
-mmr dream --pretty
+mmr assimilate project --pretty
+mmr --source codex assimilate source --pretty
 ```
 
-`mmr dream` does not run an AI provider and does not write learned memory. The
-JSON response includes:
+`mmr assimilate` does not run an AI provider and does not write learned memory.
+The JSON response includes:
 
 - `system_prompt`: role and guardrails for the calling AI agent.
 - `runbook`: ordered steps for deduplication, assimilation, and generalisation.
@@ -168,14 +167,17 @@ Raw history browsing remains available and does not require the Memory Fabric
 store:
 
 ```bash
-mmr projects --pretty
-mmr sessions --pretty
-mmr messages --latest 5 --pretty
-mmr export --pretty
+mmr list projects --pretty
+mmr list sessions --pretty
+mmr recall --pretty
+mmr read project --pretty
+mmr read session <session-id> --pretty
+mmr --source codex read source --pretty
 ```
 
-`sessions`, `messages`, and `export` default to the current project when cwd
-auto-discovery succeeds. Use `--all` for cross-project session/message queries.
+`list sessions`, `recall`, and `read project` default to the current project
+when cwd auto-discovery succeeds. Use `--all` for cross-project session listing
+or recall, and use `read source` for source-wide raw reads across projects.
 
 ## Recovery
 
@@ -183,7 +185,7 @@ Unlinked cwd:
 
 ```bash
 mmr status --pretty
-mmr link --pretty
+mmr init --pretty
 ```
 
 Remote auth failure:
@@ -218,11 +220,11 @@ Summary provider unavailable:
 mmr status --pretty
 export MMR_DEFAULT_REMEMBER_AGENT=gemini
 export GOOGLE_API_KEY="<key>"
-mmr summary --agent gemini --project "$(pwd)"
+mmr summarize project --agent gemini --project "$(pwd)"
 ```
 
 For Cursor, set `CURSOR_API_KEY` and keep the `agent` CLI on `PATH`. For Codex,
-install/authenticate the `codex` CLI and use `mmr summary --agent codex`.
+install/authenticate the `codex` CLI and use `mmr summarize project --agent codex`.
 `MMR_DEFAULT_REMEMBER_AGENT=cursor|codex|gemini` changes which provider
 `status` checks by default; `--agent` overrides it for a single summary run.
 
@@ -242,4 +244,5 @@ mmr status --pretty
 Back up the database shown in `store.db_path`, update `mmr`, and rerun the
 command so migrations can complete.
 
-`mmr dream` does not require `MMR_DREAM_COMMAND` or a configured local runner.
+`mmr assimilate` does not require `MMR_DREAM_COMMAND` or a configured local
+runner.

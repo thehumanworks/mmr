@@ -5,8 +5,8 @@ Date: 2026-05-26
 
 `mmr teleport` moves **exactly one selected coding-agent session** between your
 machines so you can continue work on another host. It is **selected-session
-handoff**, not ongoing sync (`mmr sync`), store setup (`mmr link`), or
-host-wide history export (`mmr export`).
+handoff**, not ongoing sync (`mmr sync`), store setup (`mmr init`), or
+host-wide history export (`mmr read project`).
 
 **Current release scope (provider-capable native teleport):**
 
@@ -43,19 +43,19 @@ Cursor native teleport is **pack / apply / export** with **manual resume only**:
 - Cross-provider resume/export (`--as` other than bundle source) returns
   `status: "unsupported"` (exit 3).
 - Path remap rewrites transcript path strings; Cursor project directory names use the
-  slash-to-hyphen encoding (same as `mmr export` / Cursor loader).
+  slash-to-hyphen encoding (same as `mmr read project` / Cursor loader).
 
 Canonical contract: [specs/teleport.md](../specs/teleport.md).
 
 ## Discover the session first
 
 ```bash
-mmr sessions --project /path/to/project
-mmr messages --session sess-abc --project /path/to/project
+mmr list sessions --project /path/to/project
+mmr read session sess-abc --project /path/to/project
 ```
 
-Omit `--project` to use cwd auto-discovery (same as `mmr sessions` / `mmr
-messages`). Omit `--session` on teleport commands to select the latest session in scope
+Omit `--project` to use cwd auto-discovery (same as `mmr list sessions` and
+`mmr read project`). Omit `--session` on teleport commands to select the latest session in scope
 (default source filter is codex when `--session` is omitted; pass `--source` for
 other providers).
 
@@ -86,7 +86,7 @@ mmr teleport read 'mmtp://100.x.x.x:54321/<token>'
 
 `read` downloads the bundle, verifies `X-MMR-Bundle-Sha256`, caches under
 `~/.mmr/teleport/cache/<bundle_id>/bundle.mmr`, and returns session metadata plus
-the normalized `messages` array (same shape as `mmr messages`). Use `-O md` for a
+the normalized `messages` array (same shape as `mmr read project`). Use `-O md` for a
 Markdown `text` field. Re-reading the same cached path is idempotent
 (`status: "skipped"`) and still returns messages from cache. It does not write native
 provider session files.
@@ -214,7 +214,7 @@ mmr teleport resume ./handoff.mmr --as grok --no-agent-exec
   errors (exit **2**).
 
 **Export** writes native transcript artifact(s) from a bundle (distinct from
-top-level `mmr export`, which queries local history):
+top-level `mmr read project`, which queries local history):
 
 ```bash
 mmr teleport export ./handoff.mmr --to ./exported.jsonl --as codex
@@ -330,7 +330,7 @@ sequence to verify status before changing behavior:
 | NHL-322 | TELEPORT-001 | `pack` / `inspect` / `apply` round-trip |
 | NHL-323 | TELEPORT-002 | Fast session discovery reused by `pack` / latest-session selection |
 | NHL-324 | TELEPORT-003 | Apply path remap, `--force`, Codex resume hints |
-| NHL-325 | TELEPORT-004 | Applied bundles readable through `mmr sessions` / `mmr messages` |
+| NHL-325 | TELEPORT-004 | Applied bundles readable through `mmr list sessions` / `mmr read project` |
 | NHL-326 | TELEPORT-005 | `send --to user@host`, partial inbox fallback |
 | NHL-327 | TELEPORT-006 | `send --to file://...`, inbox `receive` |
 | NHL-328 | TELEPORT-007 | `serve` + `receive mmtp://...` |

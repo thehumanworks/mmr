@@ -6,7 +6,7 @@ This plan was authored in accordance with `/Users/mish/.agents/skills/exec-plan/
 
 ## Purpose / Big Picture
 
-After this change, `mmr sessions` and `mmr messages` will prefer the current working directory as the default project scope instead of scanning every project. That makes the common case match the directory the user is standing in, while still providing an escape hatch through `--all`, through an opt-out environment variable, and through graceful fallback to the existing global behavior when automatic project discovery fails. The visible proof is that running `cargo run -- sessions` or `cargo run -- messages` from a seeded project directory returns only that project by default, that `cargo run -- sessions --all` and `cargo run -- messages --all` return cross-project results, and that `cargo run -- remember ...` picks up the configured default agent and source when the new environment variables are present.
+After this change, `mmr list sessions` and `mmr read project` will prefer the current working directory as the default project scope instead of scanning every project. That makes the common case match the directory the user is standing in, while still providing an escape hatch through `--all`, through an opt-out environment variable, and through graceful fallback to the existing global behavior when automatic project discovery fails. The visible proof is that running `cargo run -- list sessions` or `cargo run -- read project` from a seeded project directory returns only that project by default, that `cargo run -- list sessions --all` and `cargo run -- read project --all` return cross-project results, and that `cargo run -- summarize project ...` picks up the configured default agent and source when the new environment variables are present.
 
 The acceptance bar is behavioral, not internal. A user must be able to stand in a project directory and observe project-scoped results by default, disable that behavior explicitly or via environment, and still receive an empty JSON list rather than a silent fallback when the discovered project exists but has no messages.
 
@@ -57,7 +57,7 @@ The acceptance bar is behavioral, not internal. A user must be able to stand in 
   Date/Author: 2026-03-18 / Codex
 
 - Decision: Apply `MMR_DEFAULT_REMEMBER_AGENT` only to the `remember` subcommand default, leaving explicit `--agent` untouched.
-  Rationale: The request scopes that environment variable to `mmr remember --agent`, and clap defaults alone cannot express env parsing with graceful invalid-value fallback in the exact requested way.
+  Rationale: The request scopes that environment variable to `mmr summarize --agent`, and clap defaults alone cannot express env parsing with graceful invalid-value fallback in the exact requested way.
   Date/Author: 2026-03-18 / Codex
 
 - Decision: Update `AGENTS.md`, `.cursor/rules/cli-contract.mdc`, and the ADR set in the same change.
@@ -70,7 +70,7 @@ The acceptance bar is behavioral, not internal. A user must be able to stand in 
 
 ## Outcomes & Retrospective
 
-Completed. `mmr sessions` and `mmr messages` now scope to the auto-discovered cwd project by default, with `--all` and `MMR_AUTO_DISCOVER_PROJECT=0` restoring the previous global behavior. `MMR_DEFAULT_SOURCE` now supplies the default source filter when `--source` is omitted, and `MMR_DEFAULT_REMEMBER_AGENT` now supplies the default `remember` agent when `--agent` is omitted. The repository guidance and ADR set were updated so the behavior is documented where future contributors will read it.
+Completed. `mmr list sessions` and `mmr read project` now scope to the auto-discovered cwd project by default, with `--all` and `MMR_AUTO_DISCOVER_PROJECT=0` restoring the previous global behavior. `MMR_DEFAULT_SOURCE` now supplies the default source filter when `--source` is omitted, and `MMR_DEFAULT_REMEMBER_AGENT` now supplies the default `remember` agent when `--agent` is omitted. The repository guidance and ADR set were updated so the behavior is documented where future contributors will read it.
 
 The final implementation kept the query engine unchanged and localized all policy changes to the CLI boundary. That made the change smaller, preserved the response schemas, and avoided turning a user-facing defaulting change into a deeper service refactor. The integration suite now proves the new defaults from valid project directories, and the unit suite proves the discovery-failure branch for missing paths without relying on flaky global-cwd mutation.
 
@@ -147,22 +147,22 @@ Run the mandatory verification loop before completion:
 
 Expected observable examples after implementation:
 
-    cargo run -- sessions
+    cargo run -- list sessions
     # when run from a seeded project directory, returns only that project's sessions
 
-    cargo run -- sessions --all
+    cargo run -- list sessions --all
     # returns sessions across all projects, subject to source filters and pagination
 
-    cargo run -- messages
+    cargo run -- read project
     # when run from a seeded project directory, returns only that project's messages
 
-    MMR_AUTO_DISCOVER_PROJECT=0 cargo run -- messages
+    MMR_AUTO_DISCOVER_PROJECT=0 cargo run -- read project
     # returns cross-project results because auto-discovery is disabled
 
-    MMR_DEFAULT_SOURCE=codex cargo run -- sessions --all
+    MMR_DEFAULT_SOURCE=codex cargo run -- list sessions --all
     # returns only codex sessions unless --source overrides it
 
-    MMR_DEFAULT_REMEMBER_AGENT=gemini cargo run -- remember --project /Users/test/proj
+    MMR_DEFAULT_REMEMBER_AGENT=gemini cargo run -- summarize project --project /Users/test/proj
     # uses gemini unless --agent overrides it
 
 ## Validation and Acceptance

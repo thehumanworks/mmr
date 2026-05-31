@@ -67,6 +67,6 @@ secret.
 
 ## Search
 
-Imported events are immediately discoverable through `mmr search` and `mmr rg`.
+Imported events are immediately discoverable through `mmr find` and `mmr find`.
 Search commands rebuild missing `search_documents` rows from normalized events on
 demand, so historical imports do not need a separate document rebuild step.

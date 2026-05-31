@@ -223,8 +223,8 @@ Key fields:
 These rows are local-only source material until a redacted sync projection is
 explicitly generated. Sync code must not export `document_text` directly.
 
-NHL-273 search commands rebuild missing rows from normalized events on demand.
-`mmr rg` and `mmr search` read these documents for lexical matches and return
+Find rebuilds missing rows from normalized events on demand.
+`mmr find` reads these documents for lexical matches and returns
 `mmr://event/<event-id>` citations.
 
 ### `summaries`
@@ -284,11 +284,13 @@ Key fields:
 - optional `dream_run_id`
 - optional `superseded_by`
 
-`mmr dream` writes active learned memory only for high-confidence,
-non-sensitive, counterevidence-free claims. Lower-confidence or disputed items
-remain candidates unless a later repair/review workflow promotes them.
+`mmr assimilate project` and `mmr assimilate source` are stateless public
+handoff commands. They return prompts, runbooks, output contracts, and evidence
+bundles for the calling agent; they do not write active learned memory. Store
+rows in this table are still used by lower-level sync and hydration paths.
 Replaying the same learned-memory claim/evidence tuple is idempotent: the
-existing memory row is preserved rather than overwritten by a later dream run.
+existing memory row is preserved rather than overwritten by a later store-level
+run.
 
 ### `sync_manifests`
 

@@ -1195,6 +1195,86 @@ impl Store {
         Ok(events)
     }
 
+    pub fn events_for_source(
+        &self,
+        source: &str,
+        since: Option<&str>,
+        limit_per_project: Option<usize>,
+    ) -> Result<Vec<EventRecord>> {
+        let mut sql = String::from(
+            "SELECT id, project_id, session_id, source, source_session_id, source_event_id, event_type, role,
+                    timestamp, content_text, content_hash, parent_hash, parser_version,
+                    raw_local_ref, sync_status
+             FROM events
+             WHERE source = ?1",
+        );
+        if since.is_some() {
+            sql.push_str(" AND timestamp >= ?2");
+        }
+        sql.push_str(" ORDER BY project_id ASC, timestamp ASC, id ASC");
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = match since {
+            Some(since) => stmt.query_map(params![source, since], event_record_from_row)?,
+            None => stmt.query_map(params![source], event_record_from_row)?,
+        };
+        let mut events = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("read events for source")?;
+
+        if let Some(limit) = limit_per_project {
+            if limit == 0 {
+                return Ok(Vec::new());
+            }
+            let mut by_project: Vec<EventRecord> = Vec::new();
+            let mut current_project = String::new();
+            let mut current_events = Vec::new();
+            for event in events {
+                if current_project.is_empty() {
+                    current_project = event.project_id.clone();
+                }
+                if event.project_id != current_project {
+                    append_project_window(&mut by_project, current_events, limit);
+                    current_events = Vec::new();
+                    current_project = event.project_id.clone();
+                }
+                current_events.push(event);
+            }
+            append_project_window(&mut by_project, current_events, limit);
+            events = by_project;
+        }
+
+        Ok(events)
+    }
+
+    pub fn events_for_source_session(
+        &self,
+        source_session_id: &str,
+        source: Option<&str>,
+    ) -> Result<Vec<EventRecord>> {
+        let mut sql = String::from(
+            "SELECT id, project_id, session_id, source, source_session_id, source_event_id, event_type, role,
+                    timestamp, content_text, content_hash, parent_hash, parser_version,
+                    raw_local_ref, sync_status
+             FROM events
+             WHERE source_session_id = ?1",
+        );
+        if source.is_some() {
+            sql.push_str(" AND source = ?2");
+        }
+        sql.push_str(" ORDER BY project_id ASC, timestamp ASC, id ASC");
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = match source {
+            Some(source) => {
+                stmt.query_map(params![source_session_id, source], event_record_from_row)?
+            }
+            None => stmt.query_map(params![source_session_id], event_record_from_row)?,
+        };
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read events for source session")
+    }
+
     pub fn set_source_cursor(
         &self,
         project_id: &str,
@@ -1682,6 +1762,18 @@ fn event_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EventRecor
         raw_local_ref: row.get(13)?,
         sync_status: row.get(14)?,
     })
+}
+
+fn append_project_window(
+    target: &mut Vec<EventRecord>,
+    mut events: Vec<EventRecord>,
+    limit: usize,
+) {
+    if events.len() > limit {
+        let start = events.len() - limit;
+        events = events.split_off(start);
+    }
+    target.extend(events);
 }
 
 fn search_document_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchDocumentRecord> {

@@ -4,7 +4,7 @@ This document specifies the invariant behavior when looking up messages by sessi
 
 ## Invariant: `--session` bypasses cwd project auto-discovery
 
-When `mmr messages --session <ID>` is called **without** an explicit `--project`, the command must search across **all projects** — the default cwd-based project auto-discovery is not applied.
+When `mmr read session <ID>` is called **without** an explicit `--project`, the command must search across **all projects** — the default cwd-based project auto-discovery is not applied.
 
 ### Rationale
 
@@ -28,7 +28,7 @@ session they want, so it bypasses cwd auto-discovery and searches all projects.
 
 The recency selectors `--session-back` and `--session-range` are **not** identity
 lookups — "age 1" only has meaning relative to a scope. They therefore keep the
-default cwd-project scope (ADR-002): a bare `mmr messages --session-back 1` means
+default cwd-project scope (ADR-002): a bare `mmr recall` means
 "the previous session in this cwd project". Widen the recency scope explicitly
 with `--all` or `--project`. See ADR-004 for the full rationale, including why
 age 0 (the assumed-live newest session) is held back by default.

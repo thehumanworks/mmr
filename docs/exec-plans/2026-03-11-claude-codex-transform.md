@@ -204,7 +204,7 @@ First, the direct CLI behavior must work. From the repository root, create one s
 
 Each command must exit successfully and create the requested output file.
 
-Second, the transformed file must be observable through `mmr`’s existing ingest path. The integration tests should copy the output into the correct fake `HOME` tree and then run `mmr messages` or `mmr export` against that seeded location. The normalized results must preserve:
+Second, the transformed file must be observable through `mmr`’s existing ingest path. The integration tests should copy the output into the correct fake `HOME` tree and then run `mmr read project` or `mmr read project` against that seeded location. The normalized results must preserve:
 
 Message count.
 

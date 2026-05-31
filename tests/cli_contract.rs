@@ -254,7 +254,7 @@ fn seed_empty_discovered_project(fixture: &TestFixture) -> PathBuf {
 #[test]
 fn projects_without_source_returns_all_sources() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["projects"]);
+    let output = fixture.run_cli(&["list", "projects"]);
 
     assert!(
         output.status.success(),
@@ -287,7 +287,7 @@ fn projects_without_source_returns_all_sources() {
 #[test]
 fn projects_with_source_codex_filters() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "projects"]);
+    let output = fixture.run_cli(&["--source", "codex", "list", "projects"]);
 
     assert!(
         output.status.success(),
@@ -309,6 +309,7 @@ fn projects_with_source_codex_filters() {
 fn projects_sort_and_pagination() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[
+        "list",
         "projects",
         "-s",
         "message-count",
@@ -339,6 +340,7 @@ fn projects_sort_and_pagination() {
 fn projects_sort_by_message_count_asc_is_monotonic() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[
+        "list",
         "projects",
         "--sort-by",
         "message-count",
@@ -367,7 +369,7 @@ fn projects_sort_by_message_count_asc_is_monotonic() {
 #[test]
 fn source_all_is_rejected() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "all", "projects"]);
+    let output = fixture.run_cli(&["--source", "all", "list", "projects"]);
     assert!(
         !output.status.success(),
         "--source all should not be accepted"
@@ -375,9 +377,140 @@ fn source_all_is_rejected() {
 }
 
 #[test]
+fn removed_top_level_commands_are_rejected() {
+    let fixture = TestFixture::seeded();
+    for command in [
+        "projects", "sessions", "messages", "export", "prev", "summary", "remember", "dream",
+        "search", "rg", "link",
+    ] {
+        let output = fixture.run_cli_raw(&[command]);
+        assert!(
+            !output.status.success(),
+            "{command} should be removed as a top-level command"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand") || stderr.contains("unknown subcommand"),
+            "stderr should reject removed {command}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn list_projects_replaces_projects() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["list", "projects"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert!(json["projects"].as_array().unwrap().len() >= 5);
+}
+
+#[test]
+fn list_sessions_replaces_sessions() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["--source", "codex", "list", "sessions", "--all"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_sessions"].as_i64().unwrap(), 3);
+}
+
+#[test]
+fn read_session_replaces_messages_session_lookup() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["read", "session", "sess-claude-1"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert!(messages.iter().all(|m| m["session_id"] == "sess-claude-1"));
+}
+
+#[test]
+fn read_project_replaces_export_project_history() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["read", "project", "--project", "Users/test/codex-proj"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
+    let timestamps = json["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|message| message["timestamp"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    let mut sorted = timestamps.clone();
+    sorted.sort();
+    assert_eq!(timestamps, sorted);
+}
+
+#[test]
+fn read_source_requires_explicit_source_and_reads_across_projects() {
+    let fixture = TestFixture::seeded();
+    let missing_source = fixture.run_cli(&["read", "source"]);
+    assert!(!missing_source.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_source.stderr).contains("requires --source"),
+        "stderr={}",
+        String::from_utf8_lossy(&missing_source.stderr)
+    );
+
+    let output = fixture.run_cli(&["--source", "grok", "read", "source"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["total_messages"].as_i64().unwrap(), 3);
+    assert!(
+        json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| message["source"] == "grok")
+    );
+}
+
+#[test]
+fn recall_replaces_prev_for_previous_stable_session() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let output =
+        fixture.run_cli_in_dir_with_env(&["recall"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    let selected = json["session_selection"]["selected"].as_array().unwrap();
+    assert_eq!(selected[0]["age"].as_u64().unwrap(), 1);
+    assert_eq!(
+        selected[0]["session_id"].as_str().unwrap(),
+        "sess-cwd-codex"
+    );
+}
+
+#[test]
 fn projects_with_source_cursor_filters() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "cursor", "projects"]);
+    let output = fixture.run_cli(&["--source", "cursor", "list", "projects"]);
 
     assert!(
         output.status.success(),
@@ -396,7 +529,7 @@ fn projects_with_source_cursor_filters() {
 #[test]
 fn messages_filtered_by_source_cursor() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "cursor", "messages", "--all"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "cursor", "read", "source"], &[]);
 
     assert!(
         output.status.success(),
@@ -415,7 +548,8 @@ fn messages_filtered_by_source_cursor() {
 #[test]
 fn sessions_with_source_cursor() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "cursor", "sessions", "--all"], &[]);
+    let output =
+        fixture.run_cli_with_env(&["--source", "cursor", "list", "sessions", "--all"], &[]);
 
     assert!(
         output.status.success(),
@@ -434,7 +568,7 @@ fn sessions_with_source_cursor() {
 #[test]
 fn projects_with_source_grok_filters() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "grok", "projects"]);
+    let output = fixture.run_cli(&["--source", "grok", "list", "projects"]);
 
     assert!(
         output.status.success(),
@@ -461,7 +595,7 @@ fn projects_with_source_grok_filters() {
 #[test]
 fn messages_filtered_by_source_grok() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "grok", "messages", "--all"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "grok", "read", "source"], &[]);
 
     assert!(
         output.status.success(),
@@ -495,7 +629,7 @@ fn messages_filtered_by_source_grok() {
 #[test]
 fn sessions_with_source_grok() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "grok", "sessions", "--all"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "grok", "list", "sessions", "--all"], &[]);
 
     assert!(
         output.status.success(),
@@ -519,7 +653,7 @@ fn sessions_with_source_grok() {
 #[test]
 fn projects_with_source_pi_filters() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "pi", "projects"]);
+    let output = fixture.run_cli(&["--source", "pi", "list", "projects"]);
 
     assert!(
         output.status.success(),
@@ -546,7 +680,7 @@ fn projects_with_source_pi_filters() {
 #[test]
 fn messages_filtered_by_source_pi() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "pi", "messages", "--all"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "pi", "read", "source"], &[]);
 
     assert!(
         output.status.success(),
@@ -577,7 +711,7 @@ fn messages_filtered_by_source_pi() {
 #[test]
 fn sessions_with_source_pi() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "pi", "sessions", "--all"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "pi", "list", "sessions", "--all"], &[]);
 
     assert!(
         output.status.success(),
@@ -604,8 +738,11 @@ fn sessions_with_source_pi() {
 fn sessions_defaults_to_cwd_project_when_discovery_succeeds() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);
-    let output =
-        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["list", "sessions"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
 
     assert!(
         output.status.success(),
@@ -631,7 +768,7 @@ fn sessions_all_bypasses_cwd_discovery() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);
     let output = fixture.run_cli_in_dir_with_env(
-        &["sessions", "--all"],
+        &["list", "sessions", "--all"],
         &cwd,
         &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
     );
@@ -662,8 +799,11 @@ fn sessions_returns_empty_for_discovered_but_empty_project() {
     let fixture = TestFixture::seeded();
     let cwd = seed_empty_discovered_project(&fixture);
 
-    let output =
-        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["list", "sessions"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
 
     assert!(
         output.status.success(),
@@ -678,12 +818,15 @@ fn sessions_returns_empty_for_discovered_but_empty_project() {
 }
 
 #[test]
-fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() {
+fn auto_discover_project_env_controls_default_scope_for_list_sessions() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);
 
-    let disabled_sessions =
-        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "0")]);
+    let disabled_sessions = fixture.run_cli_in_dir_with_env(
+        &["list", "sessions"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "0")],
+    );
     assert!(
         disabled_sessions.status.success(),
         "stderr={}",
@@ -695,8 +838,11 @@ fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() 
         9
     );
 
-    let enabled_sessions =
-        fixture.run_cli_in_dir_with_env(&["sessions"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    let enabled_sessions = fixture.run_cli_in_dir_with_env(
+        &["list", "sessions"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
     assert!(
         enabled_sessions.status.success(),
         "stderr={}",
@@ -705,34 +851,24 @@ fn auto_discover_project_env_controls_default_scope_for_sessions_and_messages() 
     let enabled_sessions_json = parse_stdout_json(&enabled_sessions);
     assert_eq!(enabled_sessions_json["total_sessions"].as_i64().unwrap(), 2);
 
-    let disabled_messages =
-        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "0")]);
+    let read_project = fixture.run_cli_in_dir_with_env(
+        &["read", "project"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "0")],
+    );
     assert!(
-        disabled_messages.status.success(),
+        read_project.status.success(),
         "stderr={}",
-        String::from_utf8_lossy(&disabled_messages.stderr)
+        String::from_utf8_lossy(&read_project.stderr)
     );
-    let disabled_messages_json = parse_stdout_json(&disabled_messages);
-    assert_eq!(
-        disabled_messages_json["total_messages"].as_i64().unwrap(),
-        21
-    );
-
-    let enabled_messages =
-        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
-    assert!(
-        enabled_messages.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&enabled_messages.stderr)
-    );
-    let enabled_messages_json = parse_stdout_json(&enabled_messages);
-    assert_eq!(enabled_messages_json["total_messages"].as_i64().unwrap(), 4);
+    let read_project_json = parse_stdout_json(&read_project);
+    assert_eq!(read_project_json["total_messages"].as_i64().unwrap(), 4);
 }
 
 #[test]
 fn sessions_with_source_only() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "codex", "sessions", "--all"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "codex", "list", "sessions", "--all"], &[]);
 
     assert!(
         output.status.success(),
@@ -751,7 +887,7 @@ fn sessions_with_source_only() {
 #[test]
 fn sessions_with_project_only_searches_both_sources() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["sessions", "--project", "Users/test/codex-proj"]);
+    let output = fixture.run_cli(&["list", "sessions", "--project", "Users/test/codex-proj"]);
 
     assert!(
         output.status.success(),
@@ -777,6 +913,7 @@ fn sessions_with_source_and_project() {
     let output = fixture.run_cli(&[
         "--source",
         "codex",
+        "list",
         "sessions",
         "--project",
         "Users/test/codex-proj",
@@ -815,6 +952,7 @@ fn sessions_sort_by_message_count_desc_is_monotonic() {
         &[
             "--source",
             "codex",
+            "list",
             "sessions",
             "--project",
             "/Users/test/sort-proj",
@@ -852,6 +990,7 @@ fn sessions_sort_by_message_count_asc_is_monotonic() {
         &[
             "--source",
             "codex",
+            "list",
             "sessions",
             "--project",
             "/Users/test/sort-proj",
@@ -889,6 +1028,7 @@ fn sessions_sort_by_message_count_asc_long_flag_matches_expected_order() {
         &[
             "--source",
             "codex",
+            "list",
             "sessions",
             "--project",
             "/Users/test/sort-proj",
@@ -920,8 +1060,11 @@ fn sessions_sort_by_message_count_asc_long_flag_matches_expected_order() {
 fn messages_defaults_to_cwd_project_when_discovery_succeeds() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);
-    let output =
-        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["read", "project"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
 
     assert!(
         output.status.success(),
@@ -942,44 +1085,15 @@ fn messages_defaults_to_cwd_project_when_discovery_succeeds() {
 }
 
 #[test]
-fn messages_all_bypasses_cwd_discovery() {
-    let fixture = TestFixture::seeded();
-    let cwd = seed_cwd_project_with_history(&fixture);
-    let output = fixture.run_cli_in_dir_with_env(
-        &["messages", "--all"],
-        &cwd,
-        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
-    );
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 21);
-    assert_eq!(messages.len(), 21);
-    assert!(
-        messages
-            .iter()
-            .any(|message| message["session_id"].as_str().unwrap() == "sess-claude-1")
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message["session_id"].as_str().unwrap() == "sess-cwd-codex")
-    );
-}
-
-#[test]
 fn messages_returns_empty_for_discovered_but_empty_project() {
     let fixture = TestFixture::seeded();
     let cwd = seed_empty_discovered_project(&fixture);
 
-    let output =
-        fixture.run_cli_in_dir_with_env(&["messages"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["read", "project"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
 
     assert!(
         output.status.success(),
@@ -994,134 +1108,10 @@ fn messages_returns_empty_for_discovered_but_empty_project() {
 }
 
 #[test]
-fn messages_latest_selects_newest_message_from_latest_session() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--latest", "1"]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
-    assert_eq!(messages.len(), 1);
-    assert_eq!(
-        messages[0]["session_id"].as_str().unwrap(),
-        "sess-codex-recent-1"
-    );
-    assert_eq!(
-        messages[0]["content"].as_str().unwrap(),
-        "recent project answer"
-    );
-    assert!(!json["next_page"].as_bool().unwrap());
-    assert!(json["next_command"].is_null());
-}
-
-#[test]
-fn messages_latest_without_value_defaults_to_one() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--latest"]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
-    assert_eq!(messages.len(), 1);
-    assert_eq!(
-        messages[0]["session_id"].as_str().unwrap(),
-        "sess-codex-recent-1"
-    );
-    assert_eq!(
-        messages[0]["content"].as_str().unwrap(),
-        "recent project answer"
-    );
-}
-
-#[test]
-fn messages_latest_window_returns_chronological_tail_of_latest_session() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
-        "--project",
-        "/Users/test/codex-proj",
-        "--latest",
-        "5",
-    ]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 2);
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0]["session_id"].as_str().unwrap(), "sess-codex-1");
-    assert_eq!(messages[0]["content"].as_str().unwrap(), "hello from codex");
-    assert_eq!(
-        messages[1]["content"].as_str().unwrap(),
-        "short codex answer"
-    );
-}
-
-#[test]
-fn messages_message_index_range_slices_chronological_filtered_messages() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
-        "--project",
-        "/Users/test/codex-proj",
-        "--from-message-index",
-        "1",
-        "--to-message-index",
-        "4",
-    ]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
-    assert_eq!(messages.len(), 3);
-    let contents = messages
-        .iter()
-        .map(|message| message["content"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        contents,
-        vec![
-            "start longer codex thread",
-            "first long codex answer",
-            "follow-up question"
-        ]
-    );
-    assert!(!json["next_page"].as_bool().unwrap());
-    assert!(json["next_command"].is_null());
-}
-
-#[test]
-fn messages_with_session_are_chronological_and_paginated() {
+fn read_session_is_chronological_and_paginated() {
     let fixture = TestFixture::seeded();
 
-    let all_output = fixture.run_cli(&["messages", "--session", "sess-claude-1", "--all"]);
+    let all_output = fixture.run_cli(&["read", "session", "sess-claude-1"]);
     assert!(
         all_output.status.success(),
         "stderr={}",
@@ -1141,10 +1131,9 @@ fn messages_with_session_are_chronological_and_paginated() {
 
     // Pagination: offset 1 from newest → should get the first (oldest) message
     let paged_output = fixture.run_cli(&[
-        "messages",
-        "--session",
+        "read",
+        "session",
         "sess-claude-1",
-        "--all",
         "--limit",
         "1",
         "--offset",
@@ -1162,62 +1151,9 @@ fn messages_with_session_are_chronological_and_paginated() {
 }
 
 #[test]
-fn messages_order_desc_returns_newest_first() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "messages",
-        "--session",
-        "sess-claude-1",
-        "--all",
-        "-o",
-        "desc",
-    ]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0]["role"].as_str().unwrap(), "assistant");
-    assert_eq!(messages[1]["role"].as_str().unwrap(), "user");
-}
-
-#[test]
-fn messages_sort_by_message_count_is_supported() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
-        "--all",
-        "-s",
-        "message-count",
-        "-o",
-        "desc",
-        "--limit",
-        "1",
-    ]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["session_id"].as_str().unwrap(), "sess-codex-2");
-}
-
-#[test]
 fn messages_filtered_by_source() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "claude", "messages", "--all"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "claude", "read", "source"], &[]);
 
     assert!(
         output.status.success(),
@@ -1239,7 +1175,8 @@ fn messages_filtered_by_project() {
     let output = fixture.run_cli(&[
         "--source",
         "codex",
-        "messages",
+        "read",
+        "project",
         "--project",
         "/Users/test/codex-proj",
     ]);
@@ -1265,7 +1202,14 @@ fn messages_filtered_by_project() {
 #[test]
 fn messages_filtered_by_project_basename_alias() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "messages", "--project", "codex-proj"]);
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "read",
+        "project",
+        "--project",
+        "codex-proj",
+    ]);
 
     assert!(
         output.status.success(),
@@ -1291,6 +1235,7 @@ fn sessions_filtered_by_generated_project_alias() {
     let output = fixture.run_cli(&[
         "--source",
         "codex",
+        "list",
         "sessions",
         "--project=-Users-test-codex-proj",
     ]);
@@ -1317,7 +1262,7 @@ fn default_source_empty_string_keeps_both_sources() {
     let cwd = seed_cwd_project_with_history(&fixture);
 
     let output = fixture.run_cli_in_dir_with_env(
-        &["sessions", "--all"],
+        &["list", "sessions", "--all"],
         &cwd,
         &[
             ("MMR_AUTO_DISCOVER_PROJECT", "1"),
@@ -1352,7 +1297,7 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
     let cwd = seed_cwd_project_with_history(&fixture);
 
     let codex_output = fixture.run_cli_in_dir_with_env(
-        &["sessions", "--all"],
+        &["list", "sessions", "--all"],
         &cwd,
         &[
             ("MMR_AUTO_DISCOVER_PROJECT", "1"),
@@ -1376,7 +1321,7 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
     );
 
     let override_output = fixture.run_cli_in_dir_with_env(
-        &["--source", "claude", "messages", "--all"],
+        &["--source", "claude", "read", "source"],
         &cwd,
         &[
             ("MMR_AUTO_DISCOVER_PROJECT", "1"),
@@ -1405,7 +1350,7 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
 #[test]
 fn export_with_project_returns_all_messages_for_project() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["export", "--project", "Users/test/codex-proj"]);
+    let output = fixture.run_cli(&["read", "project", "--project", "Users/test/codex-proj"]);
 
     assert!(
         output.status.success(),
@@ -1441,7 +1386,8 @@ fn export_with_source_and_project_filters_by_source() {
     let output = fixture.run_cli(&[
         "--source",
         "codex",
-        "export",
+        "read",
+        "project",
         "--project",
         "/Users/test/codex-proj",
     ]);
@@ -1466,7 +1412,8 @@ fn export_with_source_grok_and_project_filters_by_source() {
     let output = fixture.run_cli(&[
         "--source",
         "grok",
-        "export",
+        "read",
+        "project",
         "--project",
         "/Users/test/grok-proj",
     ]);
@@ -1524,7 +1471,7 @@ fn export_without_project_uses_cwd() {
         ),
     );
 
-    let output = fixture.run_cli_in_dir(&["export"], &proj_dir);
+    let output = fixture.run_cli_in_dir(&["read", "project"], &proj_dir);
 
     assert!(
         output.status.success(),
@@ -1578,7 +1525,7 @@ fn export_without_project_can_read_grok_cwd() {
 {"timestamp":1736380802,"method":"session/update","params":{"sessionId":"sess-cwd-grok","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"cwd grok answer"}},"_meta":{"agentTimestampMs":1736380802000}}}"#,
     );
 
-    let output = fixture.run_cli_in_dir(&["--source", "grok", "export"], &proj_dir);
+    let output = fixture.run_cli_in_dir(&["--source", "grok", "read", "project"], &proj_dir);
 
     assert!(
         output.status.success(),
@@ -1624,8 +1571,8 @@ fn remember_all_includes_claude_and_codex_messages() {
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
-            "all",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -1673,7 +1620,7 @@ fn remember_all_includes_claude_and_codex_messages() {
 }
 
 #[test]
-fn remember_without_selector_uses_latest_session() {
+fn summarize_project_without_selector_uses_project_history() {
     if !loopback_bind_available() {
         return;
     }
@@ -1696,7 +1643,8 @@ fn remember_without_selector_uses_latest_session() {
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -1719,10 +1667,10 @@ fn remember_without_selector_uses_latest_session() {
     let input = first_input_text(&body);
     assert!(input.contains("latest session question"));
     assert!(
-        !input.contains("hello from claude"),
-        "default remember selection should only include the latest session"
+        input.contains("hello from claude"),
+        "project summaries should include project history across sources"
     );
-    assert_eq!(input.matches("=== Session:").count(), 1);
+    assert!(input.matches("=== Session:").count() > 1);
 }
 
 #[test]
@@ -1736,7 +1684,14 @@ fn remember_defaults_to_gemini_when_env_sets_it() {
     );
     let output = run_cli_with_home_and_env(
         &fixture.home,
-        &["remember", "--project", "/Users/test/proj", "-O", "json"],
+        &[
+            "summarize",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "-O",
+            "json",
+        ],
         &[
             ("GOOGLE_API_KEY", "test-key"),
             ("GEMINI_API_BASE_URL", base_url.as_str()),
@@ -1768,7 +1723,8 @@ fn remember_explicit_agent_overrides_default_env() {
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -1820,8 +1776,8 @@ fn remember_with_source_filter_only_includes_requested_source() {
         &[
             "--source",
             "codex",
-            "remember",
-            "all",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -1861,7 +1817,7 @@ fn remember_session_selector_uses_requested_session() {
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
+            "summarize",
             "session",
             "sess-claude-1",
             "--project",
@@ -1906,7 +1862,8 @@ fn remember_output_format_md_transforms_json_response_to_markdown() {
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -1949,7 +1906,8 @@ fn remember_output_format_md_trims_summary_and_interaction_id() {
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -1987,7 +1945,8 @@ fn remember_custom_instructions_replace_default_output_section_in_system_prompt(
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -2048,7 +2007,8 @@ fn remember_without_instructions_includes_default_purpose_and_output_sections() 
     let output = run_cli_with_home_and_env(
         &fixture.home,
         &[
-            "remember",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -2096,33 +2056,9 @@ fn remember_without_instructions_includes_default_purpose_and_output_sections() 
 }
 
 #[test]
-fn remember_rejects_legacy_flags() {
+fn summarize_session_requires_session_id() {
     let fixture = TestFixture::seeded();
-    let legacy_invocations = [
-        vec!["remember", "--mode", "all"],
-        vec!["remember", "--session-id", "sess-claude-1"],
-        vec!["remember", "--continue-from", "interaction-previous"],
-        vec!["remember", "--follow-up", "what next?"],
-    ];
-
-    for args in legacy_invocations {
-        let output = fixture.run_cli(&args);
-        assert!(
-            !output.status.success(),
-            "legacy remember flags should be rejected: {args:?}"
-        );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("unexpected argument"),
-            "stderr should report an unexpected argument for {args:?}: {stderr}"
-        );
-    }
-}
-
-#[test]
-fn remember_rejects_session_selector_without_id() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["remember", "session"]);
+    let output = fixture.run_cli_raw(&["summarize", "session"]);
 
     assert!(
         !output.status.success(),
@@ -2133,7 +2069,7 @@ fn remember_rejects_session_selector_without_id() {
     assert!(
         stderr.contains("required arguments were not provided")
             || stderr.contains("a value is required"),
-        "stderr should explain that the session selector requires an ID: {stderr}"
+        "stderr should explain that the session command requires an ID: {stderr}"
     );
 }
 
@@ -2184,13 +2120,14 @@ fn sync_command_is_rejected() {
 // --- pagination metadata ---
 
 #[test]
-fn messages_pagination_includes_next_page_and_next_command() {
+fn read_project_pagination_includes_next_page_and_next_command() {
     let fixture = TestFixture::seeded();
     // codex-proj has 6 messages (sess-codex-1: 2 + sess-codex-2: 4)
     let output = fixture.run_cli(&[
         "--source",
         "codex",
-        "messages",
+        "read",
+        "project",
         "--project",
         "/Users/test/codex-proj",
         "--limit",
@@ -2209,7 +2146,7 @@ fn messages_pagination_includes_next_page_and_next_command() {
     assert!(json["next_page"].as_bool().unwrap());
     assert_eq!(json["next_offset"].as_i64().unwrap(), 2);
     let next_cmd = json["next_command"].as_str().unwrap();
-    assert!(next_cmd.contains("messages"), "next_command={next_cmd}");
+    assert!(next_cmd.contains("read project"), "next_command={next_cmd}");
     assert!(next_cmd.contains("--limit 2"), "next_command={next_cmd}");
     assert!(next_cmd.contains("--offset 2"), "next_command={next_cmd}");
     assert!(
@@ -2223,9 +2160,9 @@ fn messages_pagination_includes_next_page_and_next_command() {
 }
 
 #[test]
-fn messages_pagination_no_next_command_when_all_results_fit() {
+fn read_source_pagination_no_next_command_when_all_results_fit() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--limit", "100"]);
+    let output = fixture.run_cli(&["--source", "codex", "read", "source", "--limit", "100"]);
 
     assert!(
         output.status.success(),
@@ -2236,39 +2173,6 @@ fn messages_pagination_no_next_command_when_all_results_fit() {
     let json = parse_stdout_json(&output);
     assert!(!json["next_page"].as_bool().unwrap());
     assert!(json["next_command"].is_null());
-}
-
-#[test]
-fn messages_pagination_next_command_preserves_sort_and_order() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
-        "--all",
-        "--limit",
-        "2",
-        "-s",
-        "message-count",
-        "-o",
-        "desc",
-    ]);
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    assert!(json["next_page"].as_bool().unwrap());
-    let next_cmd = json["next_command"].as_str().unwrap();
-    assert!(
-        next_cmd.contains("--sort-by message-count"),
-        "next_command={next_cmd}"
-    );
-    assert!(next_cmd.contains("--order desc"), "next_command={next_cmd}");
-    assert!(next_cmd.contains("--all"), "next_command={next_cmd}");
 }
 
 // ---------------------------------------------------------------------------
@@ -2285,7 +2189,7 @@ fn messages_session_without_project_searches_all_projects() {
     // to a different project (the seeded claude session lives under
     // /Users/test/proj, not the cwd project).
     let output = fixture.run_cli_in_dir_with_env(
-        &["messages", "--session", "sess-claude-1"],
+        &["read", "session", "sess-claude-1"],
         &cwd,
         &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
     );
@@ -2310,7 +2214,7 @@ fn messages_session_without_project_searches_all_projects() {
 fn messages_session_without_project_or_source_prints_hint() {
     let fixture = TestFixture::seeded();
 
-    let output = fixture.run_cli(&["messages", "--session", "sess-claude-1"]);
+    let output = fixture.run_cli(&["read", "session", "sess-claude-1"]);
     assert!(
         output.status.success(),
         "stderr={}",
@@ -2328,13 +2232,7 @@ fn messages_session_without_project_or_source_prints_hint() {
 fn messages_session_with_source_does_not_print_hint() {
     let fixture = TestFixture::seeded();
 
-    let output = fixture.run_cli(&[
-        "--source",
-        "claude",
-        "messages",
-        "--session",
-        "sess-claude-1",
-    ]);
+    let output = fixture.run_cli(&["--source", "claude", "read", "session", "sess-claude-1"]);
     assert!(
         output.status.success(),
         "stderr={}",
@@ -2355,8 +2253,8 @@ fn messages_session_with_explicit_project_uses_project_scope() {
     // When --project is explicitly provided alongside --session, the project
     // filter should apply (no bypass).
     let output = fixture.run_cli(&[
-        "messages",
-        "--session",
+        "read",
+        "session",
         "sess-claude-1",
         "--project=-Users-test-proj",
     ]);
@@ -2372,8 +2270,8 @@ fn messages_session_with_explicit_project_uses_project_scope() {
 
     // Asking for a project that doesn't contain the session → 0 messages
     let empty_output = fixture.run_cli(&[
-        "messages",
-        "--session",
+        "read",
+        "session",
         "sess-claude-1",
         "--project",
         "/Users/test/codex-proj",
@@ -2384,10 +2282,10 @@ fn messages_session_with_explicit_project_uses_project_scope() {
 }
 
 // ---------------------------------------------------------------------------
-// reverse session selection: --session-back / --session-range / mmr prev
+// previous stable session recall
 // ---------------------------------------------------------------------------
 
-fn assert_messages_failure(output: &Output, expected_error_kind: &str) {
+fn assert_recall_failure(output: &Output, expected_error_kind: &str) {
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -2396,7 +2294,7 @@ fn assert_messages_failure(output: &Output, expected_error_kind: &str) {
     );
     let json = parse_stdout_json(output);
     assert_eq!(json["status"], "failed");
-    assert_eq!(json["command"], "messages");
+    assert_eq!(json["command"], "recall");
     assert_eq!(
         json["error_kind"],
         expected_error_kind,
@@ -2407,12 +2305,12 @@ fn assert_messages_failure(output: &Output, expected_error_kind: &str) {
 }
 
 #[test]
-fn prev_returns_previous_session_in_cwd_project() {
+fn recall_returns_previous_session_in_cwd_project() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);
 
     let output =
-        fixture.run_cli_in_dir_with_env(&["prev"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
+        fixture.run_cli_in_dir_with_env(&["recall"], &cwd, &[("MMR_AUTO_DISCOVER_PROJECT", "1")]);
     assert!(
         output.status.success(),
         "stderr={}",
@@ -2446,15 +2344,14 @@ fn prev_returns_previous_session_in_cwd_project() {
 }
 
 #[test]
-fn messages_session_back_one_reports_age_one() {
+fn recall_one_reports_age_one() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[
         "--source",
         "codex",
-        "messages",
+        "recall",
         "--project",
         "/Users/test/codex-proj",
-        "--session-back",
         "1",
         "--pretty",
     ]);
@@ -2473,7 +2370,7 @@ fn messages_session_back_one_reports_age_one() {
     assert_eq!(selected[0]["session_id"].as_str().unwrap(), "sess-codex-2");
     assert_eq!(
         selected[0]["equivalent_command"].as_str().unwrap(),
-        "mmr messages --session sess-codex-2"
+        "mmr read session sess-codex-2"
     );
     assert!(
         json["messages"]
@@ -2485,108 +2382,28 @@ fn messages_session_back_one_reports_age_one() {
 }
 
 #[test]
-fn messages_session_range_merges_two_previous_sessions() {
+fn recall_zero_is_rejected() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[
         "--source",
         "codex",
-        "messages",
-        "--all",
-        "--session-range",
-        "2..1",
-    ]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let selection = &json["session_selection"];
-    assert_eq!(selection["axis"], "session-range");
-    assert_eq!(selection["total_sessions_in_scope"].as_i64().unwrap(), 3);
-    let ages: Vec<(u64, &str)> = selection["selected"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| {
-            (
-                s["age"].as_u64().unwrap(),
-                s["session_id"].as_str().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(ages, vec![(1, "sess-codex-1"), (2, "sess-codex-2")]);
-
-    let contents: Vec<&str> = json["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| m["content"].as_str().unwrap())
-        .collect();
-    // Merged chronologically across both sessions (age 1 oldest message is 00:00:01).
-    assert_eq!(contents.first().copied(), Some("hello from codex"));
-    assert_eq!(contents.last().copied(), Some("short codex answer"));
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 6);
-}
-
-#[test]
-fn messages_session_range_all_sources_carries_source_and_project() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["messages", "--all", "--session-range", "2..1"]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    let selection = &json["session_selection"];
-    assert!(selection["scope"]["all"].as_bool().unwrap());
-    assert!(selection["scope"]["source"].is_null());
-    let selected = selection["selected"].as_array().unwrap();
-    let ages: Vec<u64> = selected
-        .iter()
-        .map(|s| s["age"].as_u64().unwrap())
-        .collect();
-    assert_eq!(ages, vec![1, 2]);
-    for entry in selected {
-        assert!(
-            !entry["source"].as_str().unwrap().is_empty(),
-            "each selected entry self-describes its source"
-        );
-        assert!(
-            !entry["project_name"].as_str().unwrap().is_empty(),
-            "each selected entry self-describes its project_name"
-        );
-    }
-}
-
-#[test]
-fn messages_session_back_zero_is_rejected() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
+        "recall",
         "--project",
         "/Users/test/codex-proj",
-        "--session-back",
         "0",
     ]);
-    assert_messages_failure(&output, "age_zero_not_selectable");
+    assert_recall_failure(&output, "age_zero_not_selectable");
 }
 
 #[test]
-fn messages_session_back_zero_with_include_newest_returns_newest() {
+fn recall_zero_with_include_newest_returns_newest() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[
         "--source",
         "codex",
-        "messages",
+        "recall",
         "--project",
         "/Users/test/codex-proj",
-        "--session-back",
         "0",
         "--include-newest",
     ]);
@@ -2608,17 +2425,10 @@ fn messages_session_back_zero_with_include_newest_returns_newest() {
 }
 
 #[test]
-fn messages_session_back_out_of_range_names_counts() {
+fn recall_out_of_range_names_counts() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
-        "--all",
-        "--session-back",
-        "5",
-    ]);
-    assert_messages_failure(&output, "session_back_out_of_range");
+    let output = fixture.run_cli(&["--source", "codex", "recall", "--all", "5"]);
+    assert_recall_failure(&output, "session_back_out_of_range");
     let json = parse_stdout_json(&output);
     assert_eq!(json["total_sessions_in_scope"].as_i64().unwrap(), 3);
     assert_eq!(json["max_selectable_age"].as_u64().unwrap(), 2);
@@ -2626,25 +2436,9 @@ fn messages_session_back_out_of_range_names_counts() {
 }
 
 #[test]
-fn messages_rejects_multiple_session_selectors() {
+fn read_source_omits_session_selection_field() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "messages",
-        "--all",
-        "--session-back",
-        "1",
-        "--latest",
-        "5",
-    ]);
-    assert_messages_failure(&output, "multiple_session_selectors");
-}
-
-#[test]
-fn messages_without_session_axis_omits_session_selection_field() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "messages", "--all", "--limit", "5"]);
+    let output = fixture.run_cli(&["--source", "codex", "read", "source", "--limit", "5"]);
     assert!(
         output.status.success(),
         "stderr={}",
@@ -2658,9 +2452,9 @@ fn messages_without_session_axis_omits_session_selection_field() {
 }
 
 #[test]
-fn messages_strawman_from_index_flags_are_rejected_by_clap() {
+fn read_project_strawman_from_index_flags_are_rejected_by_clap() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["messages", "--from-index", "-1", "--to-index", "-1"]);
+    let output = fixture.run_cli(&["read", "project", "--from-index", "-1", "--to-index", "-1"]);
     assert!(
         !output.status.success(),
         "strawman --from-index/--to-index must not be accepted"
@@ -2680,10 +2474,9 @@ fn session_axis_pagination_pins_to_concrete_session_not_recency_age() {
     let page1 = fixture.run_cli(&[
         "--source",
         "codex",
-        "messages",
+        "recall",
         "--project",
         "/Users/test/codex-proj",
-        "--session-back",
         "1",
         "--limit",
         "2",
@@ -2698,7 +2491,7 @@ fn session_axis_pagination_pins_to_concrete_session_not_recency_age() {
     let next_cmd = page1_json["next_command"].as_str().unwrap().to_string();
     // The next command must pin to the concrete session id, never echo the unstable age axis.
     assert!(
-        next_cmd.contains("--session sess-codex-2"),
+        next_cmd.contains("read session sess-codex-2"),
         "next_command should pin to the resolved session id, got: {next_cmd}"
     );
     assert!(
@@ -2746,14 +2539,11 @@ fn session_axis_pagination_pins_to_concrete_session_not_recency_age() {
     let shifted = fixture.run_cli(&[
         "--source",
         "codex",
-        "messages",
+        "recall",
         "--project",
         "/Users/test/codex-proj",
-        "--session-back",
         "1",
         "--limit",
-        "2",
-        "--offset",
         "2",
     ]);
     let shifted_json = parse_stdout_json(&shifted);
@@ -3438,8 +3228,7 @@ fn teleport_apply_makes_session_visible_to_mmr_queries() {
     assert_eq!(apply_json["target_project"], target_project);
     assert_eq!(apply_json["store"]["imported_events"], 0);
 
-    let messages_output =
-        fixture.run_cli(&["messages", "--session", session_id, "--source", "codex"]);
+    let messages_output = fixture.run_cli(&["read", "session", session_id, "--source", "codex"]);
     assert!(
         messages_output.status.success(),
         "messages stderr={}",
@@ -3448,7 +3237,7 @@ fn teleport_apply_makes_session_visible_to_mmr_queries() {
     let messages_json = parse_stdout_json(&messages_output);
     assert!(
         messages_json["total_messages"].as_i64().unwrap() >= 1,
-        "applied session should be readable via mmr messages"
+        "applied session should be readable via mmr read session"
     );
     assert!(
         messages_json["messages"]
@@ -3460,6 +3249,7 @@ fn teleport_apply_makes_session_visible_to_mmr_queries() {
     );
 
     let sessions_output = fixture.run_cli(&[
+        "list",
         "sessions",
         "--project",
         "remapped-proj",
@@ -3481,7 +3271,7 @@ fn teleport_apply_makes_session_visible_to_mmr_queries() {
         "applied session should appear under basename project alias"
     );
 
-    let projects_output = fixture.run_cli(&["projects", "--source", "codex"]);
+    let projects_output = fixture.run_cli(&["list", "projects", "--source", "codex"]);
     assert!(
         projects_output.status.success(),
         "projects stderr={}",
@@ -3493,7 +3283,7 @@ fn teleport_apply_makes_session_visible_to_mmr_queries() {
         .expect("projects")
         .iter()
         .find(|project| project["name"] == target_project)
-        .expect("applied project should appear in mmr projects");
+        .expect("applied project should appear in mmr list projects");
     let aliases = remapped_project["aliases"]
         .as_array()
         .expect("project aliases");
@@ -4712,13 +4502,7 @@ fn teleport_provider_matrix_pack_inspect_apply() {
 
         let messages_output = run_cli_with_project_arg(
             &fixture,
-            &[
-                "messages",
-                "--source",
-                case.source,
-                "--session",
-                case.session_id,
-            ],
+            &["read", "session", case.session_id, "--source", case.source],
             case.query_project,
             &[],
         );
@@ -4731,7 +4515,7 @@ fn teleport_provider_matrix_pack_inspect_apply() {
         let messages_json = parse_stdout_json(&messages_output);
         assert!(
             messages_json["total_messages"].as_i64().unwrap() > 0,
-            "{} applied bundle should be visible through mmr messages",
+            "{} applied bundle should be visible through mmr read session",
             case.source
         );
 

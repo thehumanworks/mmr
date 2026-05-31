@@ -1,28 +1,32 @@
-# mmr Dream Guide
+# mmr Assimilation Guide
 
-`mmr dream` is a handoff command for AI agents. It prepares a shared-safe
+`mmr assimilate` is a handoff command for AI agents. It prepares a shared-safe
 evidence bundle and returns a system prompt, runbook, output contract, and
 guardrails. The calling agent then performs memory deduplication, knowledge
 assimilation, and generalisation in its own reasoning context.
 
 ## Boundary
 
-`mmr dream` is stateless. It does not:
+`mmr assimilate` is stateless. It does not:
 
 - run a mock, command, or provider-backed AI runner
-- read `MMR_DREAM_COMMAND`, `MMR_DREAM_MOCK_OUTPUT`, or
-  `MMR_DEFAULT_DREAM_RUNNER`
-- create `dream_runs` or `dream_candidates`
-- write `learned_memory`
+- read legacy runner environment variables
+- create run or candidate rows
+- write learned memory
 
-The local store still contains historical dream-run and learned-memory tables
-for sync, hydration, and lower-level store contracts, but the public command no
+The local store still contains historical run and learned-memory tables for
+sync, hydration, and lower-level store contracts, but the public command no
 longer mutates those tables.
 
-## Command Workflow
+## Project Workflow
 
-`mmr dream` analyzes the linked current project by default. Use `--project` to
-target another linked project path.
+`mmr assimilate project` analyzes the linked current project by default. Use
+`--project` to target another linked project path.
+
+```bash
+mmr assimilate project --pretty
+mmr assimilate project --project /path/to/project --pretty
+```
 
 Useful flags:
 
@@ -31,6 +35,25 @@ Useful flags:
 - `--evidence-mode shared-safe|local-raw`: shared-safe is the default. Raw
   evidence requires `--allow-raw-evidence`.
 - `--allow-raw-evidence`: explicit local-only opt-in for raw evidence.
+
+## Source Workflow
+
+`mmr assimilate source` prepares a harness-wide bundle across projects. It
+requires an explicit global source filter so the subject is unambiguous.
+
+```bash
+mmr --source codex assimilate source --pretty
+```
+
+Useful flags:
+
+- `--per-project-limit <N>`: bound the evidence retained from each project before
+  projection.
+- `--since <rfc3339>`: keep only events at or after a timestamp.
+- `--evidence-mode shared-safe|local-raw` and `--allow-raw-evidence`: same
+  privacy controls as project assimilation.
+
+## Response
 
 The JSON response includes:
 
@@ -49,8 +72,8 @@ Shared-safe bundles:
 
 - redact deterministic local PII such as private email addresses
 - omit events blocked by deterministic secret findings
-- include `mmr://event/<id>` citations, normalized metadata, and redacted
-  content
+- include `mmr://event/<id>` citations, normalized metadata, project identity,
+  and redacted content
 
 The calling agent must not treat omitted evidence as reviewed and must not infer
 private facts from redacted placeholders.
@@ -89,5 +112,5 @@ Learned memory whose evidence cannot be synced is skipped rather than uploaded
 with dangling refs.
 
 Hydration replays remote events first, then learned-memory payloads, so hydrated
-learned memory points at resolvable `mmr://event/...` citations. `mmr search`
-also inspects active learned-memory rows directly.
+learned memory points at resolvable `mmr://event/...` citations. `mmr find` also
+inspects active learned-memory rows directly.

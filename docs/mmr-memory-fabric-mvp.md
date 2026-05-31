@@ -18,22 +18,22 @@ abstraction.
 The central flow is:
 
 ```text
-raw history -> retrieval/search/summary -> dream prompt/runbook -> agent-led assimilation
+raw history -> retrieval/find/summarize -> assimilate prompt/runbook -> agent-led assimilation
 ```
 
 ## Goals
 
-- Preserve useful raw transcript retrieval through `projects`, `sessions`,
-  `messages`, and `export`.
+- Preserve useful raw transcript retrieval through `list projects`, `list sessions`, `read session`,
+  `read project`, and `read source`.
 - Add a canonical local SQLite/libSQL-shaped store for normalized memory events.
-- Make first-run setup one command: `mmr link`.
+- Make first-run setup one command: `mmr init`.
 - Make repeat reconciliation one command: `mmr sync`.
 - Make state inspection one command: `mmr status`.
 - Add human-authored observations with `mmr note`.
-- Add exact and structured discovery with `mmr rg` and `mmr search`.
-- Rename the stateless continuity brief command from `remember` to `summary`,
-  keeping `remember` as a compatibility alias unless explicitly removed later.
-- Add `mmr dream` as the public prompt/runbook handoff for agent-led
+- Add exact and structured discovery with `mmr find`.
+- Use `mmr summarize project`, `mmr summarize source`, and
+  `mmr summarize session` for stateless continuity briefs.
+- Add `mmr assimilate project` as the public prompt/runbook handoff for agent-led
   assimilation.
 - Redact before remote sync by default.
 - Keep learned memory evidence-linked and reversible.
@@ -46,8 +46,8 @@ raw history -> retrieval/search/summary -> dream prompt/runbook -> agent-led ass
   `reject` commands.
 - No GitHub organization support in the happy path.
 - No explicit GitHub repository argument in the happy path.
-- No destructive cleanup during `link` or `sync`.
-- No semantic/vector search requirement for the MVP. Exact and structured search
+- No destructive cleanup during `init` or `sync`.
+- No semantic/vector find requirement for the MVP. Exact and structured search
   ship first.
 
 ## Terminology
@@ -63,7 +63,7 @@ raw history -> retrieval/search/summary -> dream prompt/runbook -> agent-led ass
 - Blob: large raw or derived content stored out of the hot event row.
 - Source cursor: adapter progress state used to make import and watcher passes
   idempotent.
-- Evidence ref: a stable pointer from a summary, search result, dream handoff,
+- Evidence ref: a stable pointer from a summary, search result, assimilation handoff,
   or learned memory record back to source events.
 - Learned memory: an assimilated durable claim or preference derived from valid
   evidence refs and applied through a durable memory surface.
@@ -79,22 +79,22 @@ and colored output belong on stderr only.
 
 The current raw commands remain useful and keep their existing response contracts:
 
-- `mmr projects`
-- `mmr sessions`
-- `mmr messages`
-- `mmr export`
+- `mmr list projects`
+- `mmr list sessions`
+- `mmr read project`
+- `mmr read project`
 
 The existing default source/project rules still apply:
 
 - Omitting `--source` means all supported sources unless `MMR_DEFAULT_SOURCE`
   supplies a single source.
 - `--source all` remains invalid.
-- `sessions` and `messages` default to the cwd project when discovery succeeds,
+- `list sessions`, `recall`, and `read project` default to the cwd project when discovery succeeds,
   unless `--all` is set or `MMR_AUTO_DISCOVER_PROJECT=0`.
-- `export` with no `--project` infers the project from cwd and emits the same
-  `ApiMessagesResponse` shape as `messages`.
+- `read project` with no `--project` infers the project from cwd and emits the same
+  `ApiMessagesResponse` shape as `read project`.
 
-### `mmr link`
+### `mmr init`
 
 First-run setup for the current project.
 
@@ -106,7 +106,7 @@ Responsibilities:
 - Import/reconcile known local source history.
 - Run redaction for syncable data.
 - Sync redacted replayable state when credentials and network are available.
-- Rebuild derived state such as search documents.
+- Rebuild derived state such as find documents.
 - Print the same state shape as `mmr status`.
 
 Default behavior:
@@ -217,7 +217,7 @@ Minimum JSON fields:
       "api_key_env": ["CURSOR_API_KEY"],
       "action": "..."
     },
-    "dream_runner": {
+    "assimilation_runner": {
       "runner": "prompt_runbook",
       "status": "not_required",
       "command_configured": false,
@@ -231,7 +231,7 @@ Minimum JSON fields:
 
 `diagnostics.actions` is the human recovery checklist for common failure modes:
 unlinked cwd, missing source roots, remote auth failure, privacy-filter
-degradation, blocked sync, schema mismatch, or missing dream runner command.
+degradation, blocked sync, schema mismatch, or no assimilation runner command.
 
 ### `mmr note`
 
@@ -241,13 +241,13 @@ Behavior:
 
 - `mmr note <text>` records one note scoped to the linked or cwd project.
 - `mmr note` reads stdin for multiline terminal workflows.
-- Notes flow through the same store, search documents, redaction, sync, summary,
-  and dream contracts as imported source events.
+- Notes flow through the same store, find documents, redaction, sync, summary,
+  and assimilation contracts as imported source events.
 - Note events use source `note` and role `user`.
 
-### `mmr rg`
+### `mmr find`
 
-POSIX-friendly exact search.
+POSIX-friendly exact find.
 
 Behavior:
 
@@ -255,13 +255,13 @@ Behavior:
   repo-wide machine-readable stdout contract.
 - May add an explicit `--line` or equivalent line-oriented mode for shell
   pipelines, but that mode must be opt-in and documented as the exception.
-- Searches generated search documents, not raw provider files.
+- Searches generated find documents, not raw provider files.
 - Every result includes an evidence ref or citation that can be resolved back to
   a normalized event.
 
-### `mmr search`
+### `mmr find`
 
-Structured exact search over normalized memory.
+Structured exact find over normalized memory.
 
 Minimum filters:
 
@@ -292,21 +292,21 @@ Minimum JSON result fields:
 }
 ```
 
-### `mmr summary`
+### `mmr summarize project`
 
 Stateless continuity brief generation from prior sessions.
 
 Behavior:
 
-- Reuses the current `remember` selection model: latest, all, or one session.
-- Uses the same agent/provider options that `remember` currently supports unless
+- Uses explicit `project`, `source`, and `session` scopes.
+- Uses the same agent/provider options unless
   a downstream ticket narrows the surface intentionally.
 - Keeps `--instructions` semantics: custom text replaces the default output
   instruction while preserving the base identity/input-format instruction.
 - The user prompt stays neutral so the system instruction owns output behavior.
-- `remember` remains an alias for `summary` during the MVP compatibility window.
+- No compatibility alias is retained in the breaking command taxonomy.
 
-### `mmr dream`
+### `mmr assimilate project`
 
 Prompt/runbook handoff for memory assimilation.
 
@@ -317,7 +317,7 @@ Behavior:
 - Empowers the calling AI agent to perform memory deduplication, knowledge
   assimilation, and generalisation.
 - Does not run a provider, mock runner, or command runner.
-- Does not write `dream_runs`, `dream_candidates`, or `learned_memory`.
+- Does not write `assimilation_runs`, `assimilation_candidates`, or `learned_memory`.
 - Does not expose public `learn`, `context`, `candidates`, `knowledge`,
   `promote`, or `reject` commands in the MVP.
 
@@ -346,11 +346,11 @@ NHL-269 must lock SQL details without changing the product contract:
 - not-null requirements for ids, timestamps, provenance, hashes, and status
   fields
 - enum/status domains for sources, event types, redaction status, sync status,
-  learned-memory status, and dream-run status
+  learned-memory status, and assimilation-run status
 - indexes for project/session/source/timestamp lookup, event citation lookup,
   source cursor reconciliation, redaction blocking checks, and sync manifest
   replay
-- deterministic ID formats for project, session, blob, summary, dream-run,
+- deterministic ID formats for project, session, blob, summary, assimilation-run,
   learned-memory, and sync-manifest records
 
 ### `schema_migrations`
@@ -360,7 +360,7 @@ NHL-269 must lock SQL details without changing the product contract:
 - `applied_at`
 - `checksum`
 
-### `projects`
+### `list projects`
 
 - `id`
 - `canonical_path`
@@ -394,7 +394,7 @@ NHL-269 must lock SQL details without changing the product contract:
 - `created_at`
 - `updated_at`
 
-### `sessions`
+### `list sessions`
 
 - `id`
 - `project_id`
@@ -499,7 +499,7 @@ NHL-269 must lock SQL details without changing the product contract:
 - `output_text`
 - `created_at`
 
-### `dream_runs`
+### `assimilation_runs`
 
 - `id`
 - `project_id`
@@ -511,10 +511,10 @@ NHL-269 must lock SQL details without changing the product contract:
 - `created_at`
 - `completed_at`
 
-### `dream_candidates`
+### `assimilation_candidates`
 
 - `id`
-- `dream_run_id`
+- `assimilation_run_id`
 - `project_id`
 - `kind`
 - `claim`
@@ -532,7 +532,7 @@ NHL-269 must lock SQL details without changing the product contract:
 - `confidence`
 - `status`
 - `evidence_refs_json`
-- `dream_run_id`
+- `assimilation_run_id`
 - `created_at`
 - `superseded_by`
 
@@ -643,26 +643,26 @@ usable store without raw secrets.
 
 ## Summary Runner Contract
 
-`summary` is stateless. It may call an agent/provider, but it does not write
+`summarize` is stateless. It may call an agent/provider, but it does not write
 learned memory. It may write a `summaries` row only as an audit/cache record once
 the store exists.
 
-The output instruction replacement behavior from `remember --instructions` is
+The output instruction replacement behavior from `summarize --instructions` is
 part of the contract and must be preserved.
 
 ## Dream Guide Contract
 
 Dreaming is an AI-agent handoff, not a hidden provider call.
 
-NHL-278 implemented the provider-neutral runner layer in `src/dream.rs`; the
-public `mmr dream` command now avoids that side effect and returns the material
+NHL-278 implemented the provider-neutral runner layer in `src/assimilation.rs`; the
+public `mmr assimilate project` command now avoids that side effect and returns the material
 the calling AI agent needs to assimilate memory itself.
 
 Shared-safe evidence bundles redact deterministic local PII, omit events blocked
 by deterministic secret findings, and preserve normalized metadata plus
 `mmr://event/<id>` refs.
 
-`mmr dream` returns JSON containing `mode: "prompt_runbook"`, `system_prompt`,
+`mmr assimilate project` returns JSON containing `mode: "prompt_runbook"`, `system_prompt`,
 `runbook`, `output_contract`, `guardrails`, `suggested_commands`, and
 `evidence`. The calling agent should return structured memory candidates such
 as:
@@ -695,7 +695,7 @@ Agent rules:
 - Duplicate memory should be deduped or superseded explicitly.
 - Learned memory sync remaps local evidence refs to redacted remote event refs,
   and hydration restores learned-memory rows after replaying remote events.
-- Active learned memory is inspectable through existing `search`/`rg` surfaces;
+- Active learned memory is inspectable through `find` surface;
   the MVP does not expose public `learn`, `context`, `candidates`, `knowledge`,
   `promote`, or `reject` commands.
 
@@ -728,7 +728,7 @@ projects/<project-id>/
 
 Conflict strategy:
 
-- event and search payload files are immutable/content-addressed by event id
+- event and find payload files are immutable/content-addressed by event id
 - existing remote payloads are compared against the expected JSON before local
   events are marked synced
 - hydration rejects remote events whose content hash or event id no longer
@@ -754,7 +754,7 @@ Remote data must be replayable enough to hydrate a fresh host:
 - source/session/event metadata
 - redacted event content
 - redaction policy ids and run summaries
-- search document inputs or enough data to rebuild them
+- find document inputs or enough data to rebuild them
 - learned memory with evidence refs
 - manifest hashes for idempotent sync
 
@@ -814,12 +814,12 @@ Implemented contract ownership:
 - NHL-269: schema validation and migration replay.
 - NHL-270: source adapter normalization.
 - NHL-272: redaction policy application.
-- NHL-273: search document generation and citations.
-- NHL-278 and NHL-279: dream output validation and learned-memory writes.
+- NHL-273: find document generation and citations.
+- NHL-278 and NHL-279: assimilation output validation and learned-memory writes.
 - NHL-277: sync manifest generation and hydration.
-- NHL-280: summary command plus `remember` compatibility, status diagnostics,
+- NHL-280: summary command plus `summarize` compatibility, status diagnostics,
   quickstart/recovery docs, and integrated CLI command-surface tests for
-  `note`, `rg`, `search`, `link`, `sync`, `status`, `dream`, and `summary`.
+  `note`, `find`, `init`, `sync`, `status`, `assimilate`, and `summarize`.
 - NHL-281: offline end-to-end release gate, optional external summary smoke,
   adversarial review evidence, and final verification handoff.
 
@@ -827,24 +827,24 @@ Implemented contract ownership:
 
 1. NHL-268 architecture/schema/verification contract blocks all work.
 2. NHL-269 local store and migrations blocks capture, search, redaction, sync,
-   summary audit records, and dreaming.
+   summary audit records, and assimilation.
 3. NHL-270 source adapter framework blocks provider importers.
 4. NHL-271 notes, NHL-273 search, and NHL-272 redaction can proceed after the
    store contract is available.
 5. NHL-274, NHL-275, and NHL-276 source importers proceed after the adapter
    framework.
-6. NHL-277 link/sync/status and NHL-278 dream evidence projection proceed after
+6. NHL-277 init/sync/status and NHL-278 assimilation evidence projection proceed after
    redaction.
-7. NHL-279 dream handoff proceeds after search and evidence projection.
+7. NHL-279 assimilation handoff proceeds after search and evidence projection.
 8. NHL-280 integrated CLI/docs follows the command surfaces and adds the
-   `summary` compatibility path.
+   `summarize` path.
 9. NHL-281 final release verification follows all implementation tickets.
 
 ## Resolved Questions
 
 - Canonical hot store: local SQLite/libSQL-shaped storage.
 - First remote adapter: default authenticated-user GitHub repo `mmr-store`.
-- Public assimilation handoff: `mmr dream`.
+- Public assimilation handoff: `mmr assimilate project`.
 - Raw retrieval: remains a core product surface.
 - Redaction: blocks sync by default.
 
@@ -852,5 +852,5 @@ Implemented contract ownership:
 
 - Exact SQLite crate and optional libSQL/Turso feature flag: NHL-269.
 - Exact GitHub transport/auth crate or shell integration: NHL-277.
-- Whether semantic/vector search is added after lexical search: post-MVP.
-- Whether `remember` is removed after the compatibility window: post-MVP.
+- Whether semantic/vector find is added after lexical find: post-MVP.
+- Compatibility aliases are removed by the breaking command taxonomy.

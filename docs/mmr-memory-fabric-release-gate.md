@@ -25,26 +25,26 @@ The end-to-end release scenario is covered by
 
 It proves, from a clean non-Git temp directory, that:
 
-- `mmr link` creates the local store, links the project, imports Codex/Claude/
+- `mmr init` creates the local store, links the project, imports Codex/Claude/
   Cursor fixture history, reconciles the fake remote, rebuilds search documents,
   and prints status JSON.
 - `mmr note` adds safe and unsafe human-authored events.
-- `projects`, `sessions`, `messages`, and `export` still retrieve raw transcript
-  history.
-- `mmr rg` and `mmr search` find stored evidence with stable `mmr://event/...`
+- `mmr list projects`, `mmr list sessions`, `mmr read project`,
+  `mmr read session`, and `mmr read source` retrieve raw transcript history.
+- `mmr find` finds stored evidence with stable `mmr://event/...`
   citations.
-- `mmr summary` and `mmr remember` use the stateless continuity runner through a
-  mock Gemini endpoint, with `remember` retained as a compatibility alias.
+- `mmr summarize project`, `mmr summarize source`, and `mmr summarize session`
+  use the stateless continuity runner through a mock Gemini endpoint.
 - `mmr redact scan` and `mmr sync --dry-run` block fake secrets from both
   imported source history and human notes without printing the secret, and sync
   redacts PII before remote payloads are written.
-- `mmr dream` returns a prompt/runbook handoff with evidence-linked refs and
+- `mmr assimilate project` returns a prompt/runbook handoff with evidence-linked refs and
   does not run a provider or write learned memory.
 - `mmr sync` uploads safe redacted projections and any active learned memory
   created through store-level paths while blocking unsafe content.
-- A second empty local HOME/store can `mmr link` against the fake remote and
+- A second empty local HOME/store can `mmr init` against the fake remote and
   hydrate usable events, search documents, and evidence refs that still work in
-  a fresh `mmr dream`.
+  a fresh `mmr assimilate project`.
 
 ## Optional External Smoke
 
@@ -54,9 +54,9 @@ require external network credentials.
 Summary provider examples:
 
 ```bash
-MMR_DEFAULT_REMEMBER_AGENT=gemini GOOGLE_API_KEY=<key> mmr summary --agent gemini
-CURSOR_API_KEY=<key> mmr summary --agent cursor
-mmr summary --agent codex
+MMR_DEFAULT_REMEMBER_AGENT=gemini GOOGLE_API_KEY=<key> mmr summarize project --agent gemini
+CURSOR_API_KEY=<key> mmr summarize project --agent cursor
+mmr summarize project --agent codex
 ```
 
 The automated optional Gemini smoke is gated by an explicit flag:
@@ -69,17 +69,17 @@ MMR_RUN_EXTERNAL_SUMMARY_SMOKE=1 GOOGLE_API_KEY=<key> \
 Dream handoff example:
 
 ```bash
-mmr dream --pretty
+mmr assimilate project --pretty
 ```
 
-The automated optional dream handoff smoke is gated separately:
+The automated optional assimilation handoff smoke is gated separately:
 
 ```bash
 MMR_RUN_EXTERNAL_DREAM_SMOKE=1 \
   cargo test --test memory_fabric_contract optional_external_dream_command_smoke_is_gated -- --nocapture
 ```
 
-The built-in release gate uses local dream handoff generation and a local mock
+The built-in release gate uses local assimilation handoff generation and a local mock
 Gemini server so CI and local development do not depend on third-party accounts.
 
 ## Known Limitations

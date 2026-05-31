@@ -674,7 +674,7 @@ impl QueryService {
             .into_iter()
             .map(|(age, session)| SelectedSession {
                 age,
-                equivalent_command: format!("mmr messages --session {}", session.session_id),
+                equivalent_command: format!("mmr read session {}", session.session_id),
                 session_id: session.session_id,
                 source: session.source.as_str().to_string(),
                 project_name: session.project_name,
@@ -2287,7 +2287,7 @@ mod tests {
         assert_eq!(selection.selected[0].session_id, "sess-middle");
         assert_eq!(
             selection.selected[0].equivalent_command,
-            "mmr messages --session sess-middle"
+            "mmr read session sess-middle"
         );
         let skipped = selection
             .skipped_newest

@@ -78,7 +78,7 @@ spec explicitly supersedes it.
   `status: "unsupported"` with exit code 3
 - Fidelity/output tokens such as `--as native`, `--as shared-safe`, or `--as json` are usage errors
   on `resume` and `export` (exit 2 structured JSON)
-- Top-level `mmr export` remains a history query over local sources; `teleport export` transforms a
+- Top-level `mmr read project` remains a history query over local sources; `teleport export` transforms a
   bundle artifact using `--as` and `--to`
 
 **Shipped (NHL-332–NHL-341):** provider profile abstraction and native teleport for
@@ -110,17 +110,17 @@ user's own machines so work can continue in the same provider on another host.
 Teleport is **selected-session handoff**, not:
 
 - `mmr sync` (ongoing, project-scoped, redacted memory-fabric reconciliation)
-- `mmr link` (first-run store setup and import)
+- `mmr init` (first-run store setup and import)
 - host-wide history backfill
 - a background daemon or always-on relay
 
 The existing fast local discovery commands remain unchanged and stay the primary
 read path:
 
-- `mmr projects`
-- `mmr sessions`
-- `mmr messages`
-- `mmr export`
+- `mmr list projects`
+- `mmr list sessions`
+- `mmr read project`
+- `mmr read project`
 
 ## Goals
 
@@ -134,7 +134,7 @@ read path:
 
 ## Non-Goals
 
-- No automatic teleport during `link`, `sync`, or import.
+- No automatic teleport during `init`, `sync`, or import.
 - No multi-project or all-sessions backfill by default.
 - No guarantee that every provider can resume an in-flight agent thread on the
   target host (see `resume` semantics below).
@@ -151,7 +151,7 @@ read path:
 - **Native fidelity**: provider on-disk transcript and restore artifacts required
   for agent continuation; may include secrets, tool I/O, and machine-local paths.
 - **Shared-safe fidelity**: redacted, citation-safe projection aligned with sync
-  and dream evidence rules; not sufficient for agent-native resume.
+  and assimilation evidence rules; not sufficient for agent-native resume.
 - **Transport**: how a bundle moves between hosts (`http`, `ssh`, `file`, or a
   local filesystem path).
 - **Inbox**: receiver-local staging directory under `~/.mmr/teleport/inbox/`.
@@ -261,7 +261,7 @@ Agent rules (`resume` only):
 
 ### `-O` (output format)
 
-Teleport follows the existing mmr pattern (`remember -O md`):
+Teleport follows the existing mmr pattern (`summarize -O md`):
 
 - `-O json` (default): stdout is the command JSON object only.
 - `-O md`: stdout is **still** a JSON object; add a top-level string field `text`
@@ -285,9 +285,9 @@ Teleport reuses existing CLI scope rules:
 - Omitting `--source` means all supported sources unless `MMR_DEFAULT_SOURCE`
   supplies a default.
 - `--project` scopes session selection; omitting it uses cwd auto-discovery for
-  `sessions`/`messages` unless `MMR_AUTO_DISCOVER_PROJECT=0`.
+  `list sessions`/`read project` unless `MMR_AUTO_DISCOVER_PROJECT=0`.
 - `--session <id>` selects the handoff session; omitting it selects the latest
-  session in scope (same notion as `mmr remember` default).
+  session in scope (same notion as `mmr summarize` default).
 - `--latest` explicitly selects the latest session in scope; it is equivalent to
   omitting `--session` and MUST NOT be combined with `--session` (exit `2`,
   structured teleport failure JSON).
@@ -536,7 +536,7 @@ Includes:
 Excludes by default:
 
 - Unrelated sessions from the same project
-- Learned memory, dream candidates, and remote sync manifests
+- Learned memory, assimilation candidates, and remote sync manifests
 - Full mmr SQLite database files
 
 Security: native bundles bypass sync redaction. Commands MUST run a pre-flight
@@ -549,7 +549,7 @@ redaction is required.
 
 Includes:
 
-- Redacted normalized messages (same deterministic rules as sync/dream
+- Redacted normalized messages (same deterministic rules as sync/assimilation
   shared-safe evidence)
 - Manifest metadata and citation-safe summaries
 - No blocking-grade secret patterns in payload (scan MUST fail pack/send if
@@ -647,7 +647,7 @@ Rules:
 - `-O json` (default): stdout is only the JSON object documented below.
 - `-O md`: stdout is still the same JSON object, plus a required string field
   `text` containing a Markdown rendering for humans (same pattern as
-  `remember -O md`). Parsers MUST NOT assume stdout is raw Markdown.
+  `summarize -O md`). Parsers MUST NOT assume stdout is raw Markdown.
 - `--pretty` indents JSON; it does not change fields.
 - Progress, warnings, secret advisories, and agent manual steps go to **stderr**
   only and MUST NOT appear before or after the JSON payload on stdout.
@@ -835,7 +835,7 @@ When agent execution is skipped or unavailable:
 | `--as` on `inspect`, `apply`, or `receive` | 2 | `failed` | Use `-O` for output format |
 | `--as` domain mismatch (e.g. `pack --as same`) | 2 | `failed` | List allowed values for subcommand |
 | `-O md` with invalid value | 2 | (empty) | clap usage error |
-| Session not found in scope | 2 | `failed` | Suggest `mmr sessions --project …` |
+| Session not found in scope | 2 | `failed` | Suggest `mmr list sessions --project …` |
 | Multiple sessions matched | 2 | `failed` | Require explicit `--session` |
 | Bundle hash mismatch | 3 | `failed` | Do not apply; re-send |
 | Manifest version unsupported | 3 | `failed` | Upgrade mmr on receiver |
@@ -914,16 +914,16 @@ Teleport MUST NOT call sync export paths for native payloads.
 
 | Existing command | Interaction |
 |------------------|-------------|
-| `projects`, `sessions`, `messages`, `export` | Unchanged; used to discover `--session`. Top-level `mmr export` queries local history; `teleport export` transforms a bundle artifact with `--as` and `--to` |
-| `remember` / `summary` | Optional bundle input via `summary/continuity.md`; not required |
-| `link` | Receiver SHOULD link target project before store import |
+| `list projects`, `list sessions`, `read session`, `read project`, `read source` | Used to discover or inspect selected sessions. Top-level `mmr read project` queries local history; `teleport export` transforms a bundle artifact with `--as` and `--to` |
+| `summarize project` / `summarize session` / `summarize source` | Optional bundle input via `summary/continuity.md`; not required |
+| `init` | Receiver SHOULD initialize target project before store import |
 | `import` / capture adapters | `apply` SHOULD reuse `SourceAdapter::import_session` |
 | `sync` | Independent; no auto-trigger |
 | `redact scan` | Teleport MAY reuse detector; does not mutate store |
 
 Post-apply store visibility:
 
-- After native apply, run capture import (default) so `mmr messages --session …`
+- After native apply, run capture import (default) so `mmr read session …`
   reflects the teleported session on the target host.
 - `--skip-store-import` leaves only provider-native files updated.
 

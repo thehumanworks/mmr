@@ -82,10 +82,8 @@ const MALFORMED_CURSOR_AGENT: &str =
     include_str!("fixtures/memory_fabric/cursor_agent_malformed_tail.jsonl");
 
 const MVP_NON_GOAL_COMMANDS: &[&str] = &[
-    "init",
     "store",
     "learn",
-    "context",
     "candidates",
     "knowledge",
     "promote",
@@ -729,7 +727,7 @@ fn link_cli_contract_is_implemented() {
     std::fs::create_dir_all(&project).expect("create project");
 
     let link = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -752,7 +750,7 @@ fn link_cli_contract_is_implemented() {
             local_path.display()
         );
     }
-    assert_eq!(link_json["command"], "link");
+    assert_eq!(link_json["command"], "init");
     assert_eq!(link_json["already_linked"], false);
     assert_eq!(link_json["status"]["linked"], true);
     assert_eq!(link_json["status"]["sync_status"], "synced");
@@ -764,7 +762,7 @@ fn link_cli_contract_is_implemented() {
     assert!(remote.join("remote.json").exists());
 
     let relink = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -800,7 +798,7 @@ fn link_cli_contract_is_implemented() {
     )
     .expect("write conflict remote metadata");
     let conflict = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", tmp.path().join("conflict-data"))
         .env("MMR_FAKE_REMOTE_DIR", &conflict_remote)
@@ -829,7 +827,7 @@ fn sync_cli_contract_is_implemented() {
 
     assert_success(
         Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .arg("link")
+            .arg("init")
             .env("HOME", &home)
             .env("XDG_DATA_HOME", &data_home)
             .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -919,7 +917,7 @@ fn sync_cli_contract_is_implemented() {
     assert_eq!(remote_event_file_count(&remote), remote_event_count);
 
     let relink = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -1011,7 +1009,7 @@ fn status_cli_contract_is_implemented() {
 
     assert_success(
         Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .arg("link")
+            .arg("init")
             .env("HOME", &home)
             .env("XDG_DATA_HOME", &data_home)
             .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -1075,7 +1073,7 @@ fn status_cli_contract_is_implemented() {
     assert!(!remote_file_text(&remote).contains("hunter2"));
 
     let auth_failure = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", tmp.path().join("auth-data"))
         .env("MMR_FAKE_REMOTE_DIR", tmp.path().join("auth-remote"))
@@ -1180,7 +1178,7 @@ fn status_diagnostics_contract_is_implemented() {
     assert!(
         actions
             .iter()
-            .any(|action| action.as_str().unwrap_or_default().contains("mmr link")),
+            .any(|action| action.as_str().unwrap_or_default().contains("mmr init")),
         "unlinked status should tell the user how to link"
     );
     assert!(
@@ -1237,7 +1235,13 @@ fn cli_help_contract_is_lean_and_actionable() {
     assert_success_ref(&help);
     let help_text = String::from_utf8(help.stdout).expect("help UTF-8");
     for command in [
-        "link", "sync", "status", "note", "rg", "search", "summary", "remember", "dream",
+        "init",
+        "sync",
+        "status",
+        "note",
+        "find",
+        "summarize",
+        "assimilate",
     ] {
         assert!(
             help_text.contains(command),
@@ -1250,9 +1254,9 @@ fn cli_help_contract_is_lean_and_actionable() {
             "top-level help should not advertise non-goal command {command}"
         );
     }
-    assert!(help_text.contains("mmr link"));
+    assert!(help_text.contains("mmr init"));
     assert!(help_text.contains("mmr status --pretty"));
-    assert!(help_text.contains("mmr dream --pretty"));
+    assert!(help_text.contains("mmr assimilate project --pretty"));
 
     let status_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(["status", "--help"])
@@ -1265,12 +1269,12 @@ fn cli_help_contract_is_lean_and_actionable() {
     assert!(status_help_text.contains("diagnostics"));
 
     let dream_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["dream", "--help"])
+        .args(["assimilate", "project", "--help"])
         .output()
         .expect("dream help");
     assert_success_ref(&dream_help);
     let dream_help_text = String::from_utf8(dream_help.stdout).expect("dream help UTF-8");
-    assert!(dream_help_text.contains("system prompt"));
+    assert!(dream_help_text.contains("prompt"));
     assert!(dream_help_text.contains("runbook"));
     assert!(!dream_help_text.contains("--dry-run"));
     assert!(!dream_help_text.contains("--review"));
@@ -1290,7 +1294,7 @@ fn mvp_quickstart_flow_smoke_test() {
     let base_command = |name: &str| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
         command
-            .arg(name)
+            .args(name.split_whitespace())
             .env("HOME", &home)
             .env("XDG_DATA_HOME", &data_home)
             .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -1299,7 +1303,7 @@ fn mvp_quickstart_flow_smoke_test() {
         command
     };
 
-    let link = base_command("link").output().expect("quickstart link");
+    let link = base_command("init").output().expect("quickstart link");
     assert_success_ref(&link);
     let link_json: serde_json::Value =
         serde_json::from_slice(&link.stdout).expect("quickstart link JSON");
@@ -1311,7 +1315,7 @@ fn mvp_quickstart_flow_smoke_test() {
         .expect("quickstart note");
     assert_success_ref(&note);
 
-    let search = base_command("search")
+    let search = base_command("find")
         .arg("NHL-280 CLI flow")
         .output()
         .expect("quickstart search");
@@ -1320,14 +1324,14 @@ fn mvp_quickstart_flow_smoke_test() {
         serde_json::from_slice(&search.stdout).expect("quickstart search JSON");
     assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
 
-    let dream = base_command("dream")
+    let dream = base_command("assimilate project")
         .args(["--pretty"])
         .output()
         .expect("quickstart dream");
     assert_success_ref(&dream);
     let dream_json: serde_json::Value =
         serde_json::from_slice(&dream.stdout).expect("quickstart dream JSON");
-    assert_eq!(dream_json["command"], "dream");
+    assert_eq!(dream_json["command"], "assimilate/project");
     assert_eq!(dream_json["mode"], "prompt_runbook");
     assert!(
         dream_json["system_prompt"]
@@ -1365,7 +1369,7 @@ fn mvp_quickstart_flow_smoke_test() {
         "not_required"
     );
 
-    for command in ["projects", "sessions", "messages", "export"] {
+    for command in ["list projects", "list sessions", "read project"] {
         let output = base_command(command)
             .output()
             .unwrap_or_else(|err| panic!("quickstart raw retrieval {command}: {err}"));
@@ -1399,7 +1403,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     let command = |name: &str, data_home: &Path, cwd: &Path| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
         command
-            .arg(name)
+            .args(name.split_whitespace())
             .env("HOME", &home)
             .env("SIMPLEMMR_HOME", &home)
             .env("XDG_DATA_HOME", data_home)
@@ -1411,7 +1415,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     let fresh_command = |name: &str| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
         command
-            .arg(name)
+            .args(name.split_whitespace())
             .env("HOME", &fresh_home)
             .env("XDG_DATA_HOME", &fresh_data_home)
             .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -1420,7 +1424,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         command
     };
 
-    let link = command("link", &data_home, &project)
+    let link = command("init", &data_home, &project)
         .output()
         .expect("release link");
     assert_success_ref(&link);
@@ -1482,7 +1486,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     );
     drop(link_store);
 
-    let relink = command("link", &data_home, &project)
+    let relink = command("init", &data_home, &project)
         .output()
         .expect("release relink");
     assert_success_ref(&relink);
@@ -1561,7 +1565,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         assert!(!stderr.contains(RELEASE_NOTE_EMAIL));
     }
 
-    let projects_output = command("projects", &data_home, &project)
+    let projects_output = command("list projects", &data_home, &project)
         .output()
         .expect("release raw projects");
     assert_success_ref(&projects_output);
@@ -1580,7 +1584,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         );
     }
 
-    let sessions_output = command("sessions", &data_home, &project)
+    let sessions_output = command("list sessions", &data_home, &project)
         .arg("--all")
         .output()
         .expect("release raw sessions");
@@ -1600,8 +1604,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         );
     }
 
-    let messages_output = command("messages", &data_home, &project)
-        .arg("--all")
+    let messages_output = command("read project", &data_home, &project)
         .output()
         .expect("release raw messages");
     assert_success_ref(&messages_output);
@@ -1613,7 +1616,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         "messages should expose fixture-backed raw transcript history from every source"
     );
 
-    let export_output = command("export", &data_home, &project)
+    let export_output = command("read project", &data_home, &project)
         .output()
         .expect("release raw export");
     assert_success_ref(&export_output);
@@ -1634,7 +1637,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         );
     }
 
-    let search = command("search", &data_home, &project)
+    let search = command("find", &data_home, &project)
         .arg("Release gate safe note")
         .output()
         .expect("release search");
@@ -1654,8 +1657,8 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     );
     let evidence_ref = format!("mmr://event/{evidence_event_id}");
 
-    let rg = command("rg", &data_home, &project)
-        .args(["Release gate safe note", "--line"])
+    let rg = command("find", &data_home, &project)
+        .args(["Release gate safe note", "--format", "line"])
         .output()
         .expect("release rg");
     assert_success_ref(&rg);
@@ -1665,7 +1668,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
             .contains("mmr://event/")
     );
 
-    let structured_search = command("search", &data_home, &project)
+    let structured_search = command("find", &data_home, &project)
         .args(["Release Claude fixture", "--role", "assistant"])
         .env("MMR_DEFAULT_SOURCE", "claude")
         .output()
@@ -1681,9 +1684,8 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     );
     let (summary_base_url, summary_request, summary_handle) =
         start_mock_gemini_server(summary_response);
-    let summary = command("summary", &data_home, &project)
+    let summary = command("summarize project", &data_home, &project)
         .args([
-            "all",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--agent",
@@ -1717,12 +1719,10 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     assert!(summary_input.contains("Release Cursor fixture"));
 
     let (remember_base_url, remember_request, remember_handle) = start_mock_gemini_server(
-        r#"{"id":"release-remember","outputs":[{"text":"Remember compatibility alias works"}]}"#
-            .to_string(),
+        r#"{"id":"release-summarize","outputs":[{"text":"Summarize project works"}]}"#.to_string(),
     );
-    let remember = command("remember", &data_home, &project)
+    let remember = command("summarize project", &data_home, &project)
         .args([
-            "all",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--agent",
@@ -1733,13 +1733,13 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         .env("GOOGLE_API_KEY", "test-key")
         .env("GEMINI_API_BASE_URL", remember_base_url)
         .output()
-        .expect("release remember alias");
+        .expect("release summarize project");
     assert_success_ref(&remember);
     remember_handle.join().expect("remember server thread");
     let remember_json: serde_json::Value =
         serde_json::from_slice(&remember.stdout).expect("remember JSON");
     assert_eq!(remember_json["agent"], "gemini");
-    assert_eq!(remember_json["text"], "Remember compatibility alias works");
+    assert_eq!(remember_json["text"], "Summarize project works");
     let remember_body = remember_request
         .lock()
         .expect("remember request")
@@ -1802,7 +1802,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         "unsafe note secret should be blocked before sync"
     );
 
-    let dream = command("dream", &data_home, &project)
+    let dream = command("assimilate project", &data_home, &project)
         .env(
             "MMR_DREAM_MOCK_OUTPUT",
             dream_output_json(
@@ -1832,7 +1832,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
             .contains("Perform memory deduplication")
     );
 
-    let learned_search = command("search", &data_home, &project)
+    let learned_search = command("find", &data_home, &project)
         .arg("release-gate evidence checks")
         .output()
         .expect("release learned search");
@@ -1876,7 +1876,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     assert!(remote_text.contains("Release Codex imported contact [REDACTED:private_email]."));
     assert!(!remote_text.contains("Prefer release-gate evidence checks."));
 
-    let hydrate = fresh_command("link").output().expect("release hydrate");
+    let hydrate = fresh_command("init").output().expect("release hydrate");
     assert_success_ref(&hydrate);
     let hydrate_json: serde_json::Value =
         serde_json::from_slice(&hydrate.stdout).expect("hydrate JSON");
@@ -1901,7 +1901,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         "fresh host should hydrate from remote instead of local source fixtures: {hydrate_json}"
     );
 
-    let hydrated_event_search = fresh_command("search")
+    let hydrated_event_search = fresh_command("find")
         .arg("Release gate safe note")
         .output()
         .expect("hydrated event search");
@@ -1941,7 +1941,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         .expect("fresh learned memory");
     assert!(fresh_memory.is_empty());
 
-    let fresh_dream = fresh_command("dream")
+    let fresh_dream = fresh_command("assimilate project")
         .output()
         .expect("fresh release dream");
     assert_success_ref(&fresh_dream);
@@ -2089,7 +2089,7 @@ fn rg_cli_contract_is_implemented() {
     let (_tmp, home, data_home, project, codex_event_id, _) = seed_search_fixture();
 
     let exact = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["rg", "panic at src/main.rs:42"])
+        .args(["find", "panic at src/main.rs:42"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2112,7 +2112,7 @@ fn rg_cli_contract_is_implemented() {
     );
 
     let special = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["rg", "ERROR[abc]*"])
+        .args(["find", "ERROR[abc]*"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2132,7 +2132,7 @@ fn rg_cli_contract_is_implemented() {
     );
 
     let scoped = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["--source", "codex", "rg", "PANIC", "--ignore-case"])
+        .args(["--source", "codex", "find", "PANIC", "--ignore-case"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2155,7 +2155,7 @@ fn rg_cli_contract_is_implemented() {
     );
 
     let line = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["rg", "panic at src/main.rs:42", "--line"])
+        .args(["find", "panic at src/main.rs:42", "--format", "line"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2178,20 +2178,6 @@ fn rg_cli_contract_is_implemented() {
     assert_eq!(columns.len(), 4);
     assert!(columns[0].starts_with("mmr://event/"));
     assert_eq!(columns[1], "1");
-
-    let search_line = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["search", "decision", "--line"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("search line rejection");
-    assert!(!search_line.status.success(), "search --line should fail");
-    assert!(
-        String::from_utf8_lossy(&search_line.stderr).contains("--line is only supported"),
-        "stderr={}",
-        String::from_utf8_lossy(&search_line.stderr)
-    );
 }
 
 #[test]
@@ -2199,7 +2185,7 @@ fn search_cli_contract_is_implemented() {
     let (_tmp, home, data_home, project, _, note_event_id) = seed_search_fixture();
 
     let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["search", "decision", "--role", "user", "--session", "notes"])
+        .args(["find", "decision", "--role", "user", "--session", "notes"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2222,7 +2208,7 @@ fn search_cli_contract_is_implemented() {
 
     let project_scoped = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "search",
+            "find",
             "decision",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -2244,25 +2230,24 @@ fn search_cli_contract_is_implemented() {
 #[test]
 fn summary_cli_contract_is_implemented() {
     let summary_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["summary", "--help"])
+        .args(["summarize", "--help"])
         .output()
         .expect("summary help");
     assert_success_ref(&summary_help);
     let summary_help_text = String::from_utf8(summary_help.stdout).expect("summary help UTF-8");
-    assert!(summary_help_text.contains("all"));
+    assert!(summary_help_text.contains("project"));
+    assert!(summary_help_text.contains("source"));
     assert!(summary_help_text.contains("session"));
-    assert!(summary_help_text.contains("--agent"));
-    assert!(summary_help_text.contains("--output-format"));
 
-    let compatibility_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["remember", "--help"])
+    let project_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["summarize", "project", "--help"])
         .output()
-        .expect("remember help");
-    assert_success_ref(&compatibility_help);
-    let compatibility_help_text =
-        String::from_utf8(compatibility_help.stdout).expect("remember help UTF-8");
-    assert!(compatibility_help_text.contains("all"));
-    assert!(compatibility_help_text.contains("session"));
+        .expect("summarize project help");
+    assert_success_ref(&project_help);
+    let project_help_text =
+        String::from_utf8(project_help.stdout).expect("summarize project help UTF-8");
+    assert!(project_help_text.contains("--agent"));
+    assert!(project_help_text.contains("--output-format"));
 }
 
 #[test]
@@ -2364,7 +2349,7 @@ fn dream_cli_contract_is_implemented() {
 
     assert_success(
         Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .arg("link")
+            .arg("init")
             .env("HOME", &home)
             .env("XDG_DATA_HOME", &data_home)
             .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -2391,7 +2376,7 @@ fn dream_cli_contract_is_implemented() {
         .expect("add dream evidence note");
     assert_success_ref(&note);
     let note = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["search", "durable assimilation evidence"])
+        .args(["find", "durable assimilation evidence"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2412,7 +2397,7 @@ fn dream_cli_contract_is_implemented() {
         "",
     );
     let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("dream")
+        .args(["assimilate", "project"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .env("MMR_DREAM_MOCK_OUTPUT", &ignored_runner_output)
@@ -2424,7 +2409,7 @@ fn dream_cli_contract_is_implemented() {
     assert_success_ref(&dream);
     let dream_json: serde_json::Value =
         serde_json::from_slice(&dream.stdout).expect("dream stdout JSON");
-    assert_eq!(dream_json["command"], "dream");
+    assert_eq!(dream_json["command"], "assimilate/project");
     assert_eq!(dream_json["mode"], "prompt_runbook");
     assert_eq!(
         dream_json["evidence"]["included_events"].as_u64().unwrap(),
@@ -2462,7 +2447,7 @@ fn dream_cli_contract_is_implemented() {
     }
 
     let legacy_dry_run = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["dream", "--dry-run"])
+        .args(["assimilate", "project", "--dry-run"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2476,7 +2461,7 @@ fn dream_cli_contract_is_implemented() {
     );
 
     let legacy_runner = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["dream", "--runner", "command"])
+        .args(["assimilate", "project", "--runner", "command"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2485,7 +2470,7 @@ fn dream_cli_contract_is_implemented() {
     assert!(!legacy_runner.status.success());
 
     let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["search", "durable assimilation checks"])
+        .args(["find", "durable assimilation checks"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2497,7 +2482,7 @@ fn dream_cli_contract_is_implemented() {
     assert_eq!(search_json["total_results"].as_u64().unwrap(), 0);
 
     let reserved_flag = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["dream", "--best-of", "2"])
+        .args(["assimilate", "project", "--best-of", "2"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
         .current_dir(&project)
@@ -2528,7 +2513,7 @@ fn dream_cli_contract_is_implemented() {
     assert!(!remote_text.contains("Prefer durable assimilation checks."));
 
     let hydrate = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home_fresh)
         .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -2546,7 +2531,7 @@ fn dream_cli_contract_is_implemented() {
         0
     );
     let hydrated_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["search", "durable assimilation checks"])
+        .args(["find", "durable assimilation checks"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home_fresh)
         .current_dir(&fresh_project)
@@ -2845,7 +2830,8 @@ fn search_document_contract_is_implemented() {
     let output_dir = tempfile::tempdir().expect("export output dir");
     let export = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "export",
+            "read",
+            "project",
             "--format",
             "tree",
             "--project",
@@ -2980,7 +2966,7 @@ fn codex_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "codex",
-            "search",
+            "find",
             "CodexAdapter",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3003,7 +2989,7 @@ fn codex_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "codex",
-            "search",
+            "find",
             "Unrelated project should not import.",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3025,7 +3011,7 @@ fn codex_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "codex",
-            "search",
+            "find",
             project.to_str().expect("project path UTF-8"),
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3165,7 +3151,7 @@ fn claude_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "claude",
-            "search",
+            "find",
             "TodoWrite",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3188,7 +3174,7 @@ fn claude_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "claude",
-            "search",
+            "find",
             "Hyphen fallback Claude project imported.",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3210,7 +3196,7 @@ fn claude_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "claude",
-            "search",
+            "find",
             "Unrelated Claude project should not import.",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3232,7 +3218,7 @@ fn claude_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "claude",
-            "search",
+            "find",
             project.to_str().expect("project path UTF-8"),
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3371,7 +3357,7 @@ fn cursor_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "cursor",
-            "search",
+            "find",
             "CursorAdapter",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3394,7 +3380,7 @@ fn cursor_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "cursor",
-            "search",
+            "find",
             "Flat Cursor import found by encoded project directory.",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3416,7 +3402,7 @@ fn cursor_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "cursor",
-            "search",
+            "find",
             "Unrelated Cursor project should not import.",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3438,7 +3424,7 @@ fn cursor_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "cursor",
-            "search",
+            "find",
             project.to_str().expect("project path UTF-8"),
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3511,7 +3497,7 @@ fn cursor_import_cli_contract_is_implemented() {
         .args([
             "--source",
             "cursor",
-            "search",
+            "find",
             "Direct flat Cursor root imports without row cwd.",
             "--project",
             project.to_str().expect("project path UTF-8"),
@@ -3621,8 +3607,8 @@ fn summary_generation_contract_is_implemented() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "summary",
-            "all",
+            "summarize",
+            "project",
             "--project",
             "/Users/test/proj",
             "--agent",
@@ -3689,8 +3675,8 @@ fn optional_external_summary_provider_smoke_is_gated() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "summary",
-            "all",
+            "summarize",
+            "project",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--agent",
@@ -3732,7 +3718,7 @@ fn optional_external_dream_command_smoke_is_gated() {
     seed_release_gate_sources(&home, &project);
 
     let link = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("SIMPLEMMR_HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
@@ -3744,7 +3730,7 @@ fn optional_external_dream_command_smoke_is_gated() {
     assert_success_ref(&link);
 
     let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("dream")
+        .args(["assimilate", "project"])
         .env("HOME", &home)
         .env("SIMPLEMMR_HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
@@ -3755,7 +3741,7 @@ fn optional_external_dream_command_smoke_is_gated() {
     assert_success_ref(&dream);
     let json: serde_json::Value =
         serde_json::from_slice(&dream.stdout).expect("external dream JSON");
-    assert_eq!(json["command"], "dream");
+    assert_eq!(json["command"], "assimilate/project");
     assert_eq!(json["mode"], "prompt_runbook");
     assert!(json["evidence"]["included_events"].as_u64().unwrap() > 0);
     assert!(
@@ -3971,7 +3957,7 @@ fn sync_manifest_contract_is_implemented() {
 
     assert_success(
         Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .arg("link")
+            .arg("init")
             .env("HOME", &home)
             .env("XDG_DATA_HOME", &data_home_one)
             .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -4039,7 +4025,7 @@ fn sync_manifest_contract_is_implemented() {
     assert!(!remote_text.contains(&fresh_project.to_string_lossy().to_string()));
 
     let hydrate = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("link")
+        .arg("init")
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home_two)
         .env("MMR_FAKE_REMOTE_DIR", &remote)
@@ -4057,7 +4043,7 @@ fn sync_manifest_contract_is_implemented() {
     assert_eq!(hydrate_json["hydration"]["inserted_events"], 1);
 
     let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["search", "portable decision"])
+        .args(["find", "portable decision"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home_two)
         .current_dir(&fresh_project)

@@ -9,10 +9,11 @@ description: "mmr is the local tool for querying and retrieving AI coding sessio
 
 ## Core Use Cases
 
-- Discover and list projects and sessions
-- Retrieve previous sessions by recency (`mmr prev`, `--session-back`, `--session-range`)
-- Export full transcripts
-- Generate continuity briefs (`mmr summary` / `mmr remember`)
+- Discover and list projects and sessions (`mmr list projects`, `mmr list sessions`)
+- Retrieve the previous stable session (`mmr recall`, `mmr recall N`)
+- Read raw history (`mmr read session`, `mmr read project`, `mmr read source --source <source>`)
+- Generate summaries (`mmr summarize project|session|source`)
+- Prepare assimilation handoffs (`mmr assimilate project|source`)
 
 ## Subskills
 
@@ -25,12 +26,12 @@ This parent organizes specialized mmr workflows.
 This is the main subskill for **long-term session continuity**.
 
 Use `session-mining` when you need to:
-- Deliberately retrieve one or more prior sessions (via `--session-back`, `--session-range`, `prev`, or explicit IDs)
+- Deliberately retrieve prior sessions (via `mmr recall` or explicit `mmr read session <id>`)
 - Analyze them for decisions, architecture, open tasks, and rationale
 - Survive context **compaction** or full **clearing** by pulling relevant history back into the current context
-- Produce structured reminders or continuity briefs
+- Produce structured reminders or continuity briefs with `mmr summarize`
 
-It provides reusable patterns and guidance beyond what the basic `mmr` commands or `mmr summary` deliver on their own.
+It provides reusable patterns and guidance beyond what the basic `mmr` commands or `mmr summarize` deliver on their own.
 
 See the subskill documentation: `.agents/skills/mmr/session-mining/SKILL.md`
 
@@ -39,7 +40,7 @@ See the subskill documentation: `.agents/skills/mmr/session-mining/SKILL.md`
 Use the top-level `mmr` skill when:
 - You have a general question about mmr commands, flags, or behavior
 - You're not sure which specific capability or subskill applies
-- You're setting up, linking, or troubleshooting mmr itself
+- You're setting up, initializing, or troubleshooting mmr itself
 
 For most continuity and previous-session work, load the `session-mining` subskill directly.
 

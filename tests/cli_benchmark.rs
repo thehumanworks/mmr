@@ -91,7 +91,7 @@ fn benchmark_projects_query_parses_large_fixture() {
 
     let started = Instant::now();
     let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["--source", "codex", "projects"])
+        .args(["--source", "codex", "list", "projects"])
         .env("HOME", &home)
         .output()
         .expect("run mmr");
@@ -240,13 +240,13 @@ fn benchmark_teleport_pack_inspect_apply_readability() {
     let messages_output = run_mmr(
         &target_home,
         &[
-            "messages",
             "--source",
             "codex",
+            "read",
+            "session",
+            session_id,
             "--project",
             target_project,
-            "--session",
-            session_id,
         ],
     );
     assert!(

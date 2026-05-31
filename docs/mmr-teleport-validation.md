@@ -16,7 +16,7 @@ roots:
 | Role | Fixture | Purpose |
 |------|---------|---------|
 | Source | Temp `HOME` with seeded Codex session (`sess-codex-1`, project `/Users/test/codex-proj`) | `pack`, `send`, `serve` |
-| Target | Empty temp `HOME` (no pre-existing Codex history) | `apply`, `receive`, post-apply `mmr messages` |
+| Target | Empty temp `HOME` (no pre-existing Codex history) | `apply`, `receive`, post-apply `mmr read project` |
 | Shared | Temp directory outside both homes | Bundle file path or `file://` inbox |
 
 Real SSH proof uses the same commands against live hosts; only transport differs.
@@ -33,7 +33,7 @@ cargo test --test cli_contract teleport_apply_makes_session_visible_to_mmr_queri
 ```
 
 Contract: stdout JSON `status: "ok"`; applied session visible via
-`mmr messages --source codex --project <target> --session sess-codex-1`.
+`mmr --source codex read session sess-codex-1 --project <target>`.
 
 ### 2. File inbox send -> receive (Syncthing-style)
 
