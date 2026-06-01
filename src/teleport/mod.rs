@@ -17,7 +17,8 @@ mod ssh;
 
 pub use apply::{ApplyOptions, apply_bundle};
 pub use bundle::{
-    BundleLocatorError, METADATA_PATH, load_bundle, load_bundle_from_locator, write_bundle,
+    BundleLocatorError, METADATA_PATH, TeleportBundleFile, load_bundle, load_bundle_from_locator,
+    write_bundle,
 };
 pub use error::TeleportFailure;
 pub use export::{ExportOptions, ExportResponse, export_bundle, parse_export_as};

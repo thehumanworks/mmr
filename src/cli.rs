@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde::Serialize;
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,10 @@ use crate::dream::{
 use crate::messages::service::{
     MessageIndexRange, MessageQueryOptions, QueryService, SessionAxis, SessionSelectionError,
 };
+use crate::peer::{
+    PEER_PROTOCOL_VERSION, PeerProjectIdentity, PeerProjectRequest, PeerRecallRequest,
+    PeerRequestLimits, PeerStatusResponse, PeerTeleportPackRequest, peer_status, run_peer_json,
+};
 use crate::redaction::{
     PiiCoverage, PiiCoverageStatus, RedactionFinding, RedactionOutcome, scan_text,
 };
@@ -30,15 +34,15 @@ use crate::sync::{
 };
 use crate::teleport::{
     ApplyOptions, ExportOptions, InspectOptions, PackOptions, ReadOptions, ReceiveOptions,
-    ResumeOptions, SendOptions, SendTransport, ServeError, ServeOptions, TeleportFailure,
-    TeleportFidelity, TeleportOutputFormat, TeleportStatus, apply_bundle, export_bundle,
-    inspect_bundle, pack_session, parse_export_as, parse_resume_agent_as, read_bundle,
-    receive_bundle, resolve_bundle_locator, resolve_read_locator, resolve_receive_locator,
-    resume_bundle, send_session, serve_session,
+    ResumeOptions, SendOptions, SendTransport, ServeError, ServeOptions, TeleportBundleFile,
+    TeleportFailure, TeleportFidelity, TeleportOutputFormat, TeleportStatus, apply_bundle,
+    export_bundle, inspect_bundle, pack_session, parse_export_as, parse_resume_agent_as,
+    read_bundle, receive_bundle, resolve_bundle_locator, resolve_read_locator,
+    resolve_receive_locator, resume_bundle, send_session, serve_session, write_bundle,
 };
 use crate::types::{
-    ApiMessage, ApiMessagesResponse, RememberRequest, RememberResponse, RememberSelection, SortBy,
-    SortOptions, SortOrder, SourceFilter,
+    ApiMessage, ApiMessageOrigin, ApiMessagesResponse, ApiPeerResult, RememberRequest,
+    RememberResponse, RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter,
 };
 
 #[derive(Debug, Clone)]
@@ -176,6 +180,9 @@ pub enum Commands {
     },
     /// Move a selected coding-agent session between machines
     Teleport(TeleportArgs),
+    /// Implementation-facing SSH peer protocol
+    #[command(hide = true)]
+    Peer(PeerArgs),
 }
 
 #[derive(Args, Debug)]
@@ -251,9 +258,15 @@ pub struct RecallArgs {
     /// Maximum number of messages to return
     #[arg(long, default_value_t = 50)]
     limit: usize,
+    /// Number of sorted messages to skip
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
     /// Make the newest (assumed-live, age 0) session addressable
     #[arg(long)]
     include_newest: bool,
+    /// Query this explicit SSH target in addition to local history
+    #[arg(long = "host")]
+    hosts: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -310,6 +323,9 @@ pub struct ReadProjectArgs {
     /// Number of sorted messages to skip for JSON output
     #[arg(long, default_value_t = 0)]
     offset: usize,
+    /// Query this explicit SSH target in addition to local history
+    #[arg(long = "host")]
+    hosts: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -350,6 +366,9 @@ pub struct ContextProjectArgs {
     /// Maximum number of recent messages to include
     #[arg(long, default_value_t = 100)]
     limit: usize,
+    /// Query this explicit SSH target in addition to local history
+    #[arg(long = "host")]
+    hosts: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -519,6 +538,47 @@ pub struct StatusArgs {
     project: Option<PathBuf>,
 }
 
+#[derive(Args, Debug)]
+pub struct PeerArgs {
+    #[command(subcommand)]
+    command: PeerCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PeerCommand {
+    /// Report local or remote peer protocol capabilities
+    Status(PeerStatusArgs),
+    /// Hidden JSON-over-stdin project read endpoint
+    #[command(name = "read-project", hide = true)]
+    ReadProject(PeerRequestArgs),
+    /// Hidden JSON-over-stdin project context endpoint
+    #[command(name = "context-project", hide = true)]
+    ContextProject(PeerRequestArgs),
+    /// Hidden JSON-over-stdin recall endpoint
+    #[command(name = "recall", hide = true)]
+    Recall(PeerRequestArgs),
+    /// Hidden JSON-over-stdin native teleport pack endpoint
+    #[command(name = "teleport-pack", hide = true)]
+    TeleportPack(PeerRequestArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct PeerStatusArgs {
+    /// Query this explicit SSH target
+    #[arg(long)]
+    host: Option<String>,
+    /// Emit JSON; accepted for remote protocol stability
+    #[arg(long, hide = true)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PeerRequestArgs {
+    /// Read request JSON from stdin when set to '-'
+    #[arg(long = "request-json")]
+    request_json: String,
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[clap(rename_all = "kebab-case")]
 pub enum RememberOutputFormatArg {
@@ -622,6 +682,7 @@ mmr teleport serve --source grok --session sess-abc\n  \
 mmr teleport read mmtp://100.x.x.x:PORT/TOKEN\n  \
 mmr teleport receive mmtp://100.x.x.x:PORT/TOKEN\n  \
 mmr teleport send --source claude --session sess-abc --to user@host\n  \
+mmr teleport pull --from user@host --session latest --project /path/to/project\n  \
 mmr teleport send --session sess-abc --to file:///path/to/inbox"
 )]
 pub struct TeleportArgs {
@@ -639,6 +700,8 @@ pub enum TeleportCommand {
     Apply(TeleportApplyArgs),
     /// Pack and transfer a session over SSH (user@host) or file:// inbox
     Send(TeleportSendArgs),
+    /// Pull a native provider bundle from an explicit SSH target
+    Pull(TeleportPullArgs),
     /// Download or cache a bundle for read-only access (no native apply)
     Read(TeleportReadArgs),
     /// Download mmtp:// URL or apply a local bundle / ready inbox entry
@@ -753,6 +816,32 @@ pub struct TeleportSendArgs {
     /// Not valid for send; native fidelity only
     #[arg(long = "as", hide = true)]
     as_flag: Option<String>,
+}
+
+#[derive(Args, Debug)]
+#[command(after_help = "Examples:\n  \
+mmr teleport pull --from studio --session latest --project .\n  \
+mmr teleport pull --from mish@mac-studio:22 --session sess-abc --project .\n  \
+mmr teleport pull --from studio --session latest --project . --read-only")]
+pub struct TeleportPullArgs {
+    /// SSH source target (host, user@host, user@host:port, or ssh://user@host:port)
+    #[arg(long = "from")]
+    from: String,
+    /// Session ID to pull; use literal 'latest' or omit for latest session in scope
+    #[arg(long)]
+    session: Option<String>,
+    /// Select the latest session in scope
+    #[arg(long)]
+    latest: bool,
+    /// Project name or path
+    #[arg(long)]
+    project: Option<String>,
+    /// Read/cache the bundle without applying native provider files
+    #[arg(long)]
+    read_only: bool,
+    /// Replace existing native files when applying
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -972,6 +1061,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     if let Commands::Teleport(args) = &cli.command {
         return teleport_command_response(args, source_filter, cli.pretty);
     }
+    if let Commands::Peer(args) = &cli.command {
+        return peer_command_response(args, source_filter, cli.pretty);
+    }
 
     let service = QueryService::load()?;
 
@@ -980,20 +1072,31 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Recall(args) => {
             let options = MessageQueryOptions::new(
                 Some(args.limit),
-                0,
+                args.offset,
                 SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
             );
-            run_session_axis(
-                &service,
-                cli.source,
-                source_filter,
-                cli.pretty,
-                args.project,
-                args.all,
-                SessionAxis::Back(args.n),
-                args.include_newest,
-                options,
-            )?
+            if args.hosts.is_empty() {
+                run_session_axis(
+                    &service,
+                    cli.source,
+                    source_filter,
+                    cli.pretty,
+                    args.project,
+                    args.all,
+                    SessionAxis::Back(args.n),
+                    args.include_newest,
+                    options,
+                )?
+            } else {
+                recall_with_hosts_response(
+                    &service,
+                    args,
+                    cli.source,
+                    source_filter,
+                    cli.pretty,
+                    options,
+                )?
+            }
         }
         Commands::Read(args) => {
             read_command_response(&service, args, cli.source, source_filter, cli.pretty)?
@@ -1022,6 +1125,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             smoke_event,
         } => serialize(&db_info_response(project, smoke_event)?, cli.pretty)?,
         Commands::Teleport(_) => unreachable!("teleport handled before QueryService load"),
+        Commands::Peer(_) => unreachable!("peer handled before QueryService load"),
     };
 
     Ok(response)
@@ -1109,6 +1213,10 @@ fn read_project_response(
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
+    if !args.hosts.is_empty() {
+        return read_project_with_hosts_response(service, args, source_filter, pretty);
+    }
+
     if args.format == ReadFormatArg::Tree {
         let response = export_tree_project_response(args.project, args.output_dir, source_filter)?;
         return serialize(&response, pretty);
@@ -1218,7 +1326,210 @@ fn read_cwd_project_messages(
         next_offset,
         next_command: None,
         session_selection: None,
+        peer_results: None,
     })
+}
+
+fn read_project_with_hosts_response(
+    service: &QueryService,
+    args: ReadProjectArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    if args.format == ReadFormatArg::Tree {
+        return Err(anyhow::Error::new(peer_cli_failure(
+            "read/project",
+            "peer_unsupported_format",
+            None,
+            "--host is not supported with --format tree",
+            pretty,
+        )?));
+    }
+
+    let project_for_identity = project_identity_input(args.project.as_deref())?;
+    let request = PeerProjectRequest {
+        protocol_version: PEER_PROTOCOL_VERSION,
+        project: build_peer_project_identity(&project_for_identity),
+        source: source_filter,
+        all: false,
+        limits: PeerRequestLimits {
+            message_limit: None,
+            offset: 0,
+        },
+        recall: None,
+    };
+
+    let mut local =
+        local_project_messages_unpaged(service, args.project.as_deref(), source_filter)?;
+    let mut peer_results = Vec::new();
+    for host in &args.hosts {
+        let mut remote = peer_read_project(host, &request, pretty)?;
+        let remote_mmr_version = remote
+            .peer_results
+            .as_ref()
+            .and_then(|items| items.first())
+            .and_then(|item| item.remote_mmr_version.clone());
+        annotate_peer_messages(&mut remote.messages, host, remote_mmr_version.clone());
+        peer_results.push(peer_result_for_messages(
+            host,
+            "read/project",
+            remote.total_messages,
+            remote_mmr_version,
+        ));
+        local.messages.extend(remote.messages);
+    }
+
+    let mut messages = dedup_api_messages(local.messages);
+    sort_api_messages_chronological(&mut messages);
+    let total = messages.len() as i64;
+    let paged = apply_message_output_pagination(messages, args.limit, args.offset);
+    let next_offset = args.offset.saturating_add(paged.len()) as i64;
+    let next_page = args.limit.is_some() && next_offset < total;
+
+    let mut response = ApiMessagesResponse {
+        messages: paged,
+        total_messages: total,
+        next_page,
+        next_offset,
+        next_command: None,
+        session_selection: None,
+        peer_results: Some(peer_results),
+    };
+    if response.next_page {
+        response.next_command = Some(build_next_read_project_command_with_hosts(
+            source_filter,
+            args.project.as_deref(),
+            &args.hosts,
+            args.limit,
+            response.next_offset as usize,
+        ));
+    }
+    serialize(&response, pretty)
+}
+
+fn local_project_messages_unpaged(
+    service: &QueryService,
+    project: Option<&str>,
+    source_filter: Option<SourceFilter>,
+) -> Result<ApiMessagesResponse> {
+    let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
+    if let Some(project) = project {
+        service.messages(
+            &[],
+            Some(project),
+            source_filter,
+            MessageQueryOptions::new(None, 0, sort),
+        )
+    } else {
+        read_cwd_project_messages(service, source_filter, None, 0)
+    }
+}
+
+fn peer_read_project(
+    host: &str,
+    request: &PeerProjectRequest,
+    pretty: bool,
+) -> Result<ApiMessagesResponse> {
+    run_peer_json(
+        host,
+        &["mmr", "peer", "read-project", "--request-json", "-"],
+        Some(request),
+    )
+    .map_err(|error| peer_anyhow_error("read/project", error, pretty))
+}
+
+fn peer_context_project(
+    host: &str,
+    request: &PeerProjectRequest,
+    pretty: bool,
+) -> Result<ContextResponse> {
+    run_peer_json(
+        host,
+        &["mmr", "peer", "context-project", "--request-json", "-"],
+        Some(request),
+    )
+    .map_err(|error| peer_anyhow_error("context/project", error, pretty))
+}
+
+fn peer_recall(
+    host: &str,
+    request: &PeerProjectRequest,
+    pretty: bool,
+) -> Result<ApiMessagesResponse> {
+    run_peer_json(
+        host,
+        &["mmr", "peer", "recall", "--request-json", "-"],
+        Some(request),
+    )
+    .map_err(|error| peer_anyhow_error("recall", error, pretty))
+}
+
+fn annotate_peer_messages(
+    messages: &mut [ApiMessage],
+    host: &str,
+    remote_mmr_version: Option<String>,
+) {
+    for message in messages {
+        message.origin = Some(ApiMessageOrigin {
+            host: host.to_string(),
+            transport: "ssh".to_string(),
+            remote_mmr_version: remote_mmr_version.clone(),
+        });
+    }
+}
+
+fn peer_result_for_messages(
+    host: &str,
+    command: &str,
+    total_messages: i64,
+    remote_mmr_version: Option<String>,
+) -> ApiPeerResult {
+    ApiPeerResult {
+        host: host.to_string(),
+        transport: "ssh".to_string(),
+        command: command.to_string(),
+        status: "ok".to_string(),
+        remote_mmr_version,
+        total_messages: Some(total_messages),
+        total_sessions: None,
+    }
+}
+
+fn dedup_api_messages(messages: Vec<ApiMessage>) -> Vec<ApiMessage> {
+    let mut seen = BTreeSet::new();
+    let mut deduped = Vec::new();
+    for message in messages {
+        let key = (
+            message.source.clone(),
+            message.project_name.clone(),
+            message.session_id.clone(),
+            message.timestamp.clone(),
+            message.role.clone(),
+            message.content.clone(),
+        );
+        if seen.insert(key) {
+            deduped.push(message);
+        }
+    }
+    deduped
+}
+
+fn sort_api_messages_chronological(messages: &mut [ApiMessage]) {
+    messages.sort_by(|a, b| {
+        a.timestamp
+            .cmp(&b.timestamp)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+            .then_with(|| a.source.cmp(&b.source))
+            .then_with(|| a.project_name.cmp(&b.project_name))
+            .then_with(|| a.role.cmp(&b.role))
+    });
+}
+
+fn newest_window_api_messages(mut messages: Vec<ApiMessage>, limit: usize) -> Vec<ApiMessage> {
+    sort_api_messages_chronological(&mut messages);
+    let mut window = messages.into_iter().rev().take(limit).collect::<Vec<_>>();
+    window.reverse();
+    window
 }
 
 fn apply_message_output_pagination(
@@ -1254,7 +1565,32 @@ fn build_next_read_project_command(
     parts.join(" ")
 }
 
-#[derive(Debug, Serialize)]
+fn build_next_read_project_command_with_hosts(
+    source_filter: Option<SourceFilter>,
+    project: Option<&str>,
+    hosts: &[String],
+    limit: Option<usize>,
+    next_offset: usize,
+) -> String {
+    let mut parts = vec!["mmr".to_string()];
+    if let Some(source) = source_filter {
+        parts.push(format!("--source {}", source_name(source)));
+    }
+    parts.push("read project".to_string());
+    if let Some(project) = project {
+        parts.push(format!("--project {project}"));
+    }
+    for host in hosts {
+        parts.push(format!("--host {host}"));
+    }
+    if let Some(limit) = limit {
+        parts.push(format!("--limit {limit}"));
+    }
+    parts.push(format!("--offset {next_offset}"));
+    parts.join(" ")
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct ContextResponse {
     command: String,
     scope: String,
@@ -1264,6 +1600,8 @@ struct ContextResponse {
     total_messages: i64,
     sessions: Vec<crate::types::ApiSession>,
     messages: Vec<ApiMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_results: Option<Vec<ApiPeerResult>>,
 }
 
 fn context_command_response(
@@ -1275,6 +1613,9 @@ fn context_command_response(
 ) -> Result<String> {
     match args.command {
         ContextCommand::Project(args) => {
+            if !args.hosts.is_empty() {
+                return context_project_with_hosts_response(service, args, source_filter, pretty);
+            }
             let project = args
                 .project
                 .or_else(|| effective_project_scope(None, false));
@@ -1305,6 +1646,7 @@ fn context_command_response(
                     total_messages: messages.total_messages,
                     sessions: sessions.sessions,
                     messages: messages.messages,
+                    peer_results: None,
                 },
                 pretty,
             )
@@ -1338,11 +1680,107 @@ fn context_command_response(
                     total_messages: messages.total_messages,
                     sessions: sessions.sessions,
                     messages: messages.messages,
+                    peer_results: None,
                 },
                 pretty,
             )
         }
     }
+}
+
+fn context_project_with_hosts_response(
+    service: &QueryService,
+    args: ContextProjectArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    let project = args
+        .project
+        .clone()
+        .or_else(|| effective_project_scope(None, false));
+    let project_for_identity = project_identity_input(project.as_deref())?;
+    let request = PeerProjectRequest {
+        protocol_version: PEER_PROTOCOL_VERSION,
+        project: build_peer_project_identity(&project_for_identity),
+        source: source_filter,
+        all: false,
+        limits: PeerRequestLimits {
+            message_limit: None,
+            offset: 0,
+        },
+        recall: None,
+    };
+
+    let sessions = service.sessions(
+        project.as_deref(),
+        source_filter,
+        None,
+        0,
+        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+    )?;
+    let local_messages = service.messages(
+        &[],
+        project.as_deref(),
+        source_filter,
+        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
+    )?;
+    let local_total_messages = local_messages.total_messages;
+
+    let mut all_sessions = sessions.sessions;
+    let mut all_messages = local_messages.messages;
+    let mut peer_results = Vec::new();
+
+    for host in &args.hosts {
+        let mut remote = peer_context_project(host, &request, pretty)?;
+        let remote_mmr_version = remote
+            .peer_results
+            .as_ref()
+            .and_then(|items| items.first())
+            .and_then(|item| item.remote_mmr_version.clone());
+        annotate_peer_messages(&mut remote.messages, host, remote_mmr_version.clone());
+        peer_results.push(ApiPeerResult {
+            host: host.to_string(),
+            transport: "ssh".to_string(),
+            command: "context/project".to_string(),
+            status: "ok".to_string(),
+            remote_mmr_version,
+            total_messages: Some(remote.total_messages),
+            total_sessions: Some(remote.total_sessions),
+        });
+        all_sessions.extend(remote.sessions);
+        all_messages.extend(remote.messages);
+    }
+
+    all_messages = dedup_api_messages(all_messages);
+    let messages = newest_window_api_messages(all_messages, args.limit);
+    all_sessions.sort_by(|a, b| {
+        b.last_timestamp
+            .cmp(&a.last_timestamp)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+            .then_with(|| a.source.cmp(&b.source))
+    });
+    all_sessions.dedup_by(|a, b| {
+        a.source == b.source && a.project_name == b.project_name && a.session_id == b.session_id
+    });
+
+    serialize(
+        &ContextResponse {
+            command: "context/project".to_string(),
+            scope: "project".to_string(),
+            source: source_filter.map(source_name).map(str::to_string),
+            project,
+            total_sessions: all_sessions.len() as i64,
+            total_messages: local_total_messages
+                + peer_results
+                    .iter()
+                    .filter_map(|result| result.total_messages)
+                    .sum::<i64>(),
+            sessions: all_sessions,
+            messages,
+            peer_results: Some(peer_results),
+        },
+        pretty,
+    )
 }
 
 async fn summarize_command_response(
@@ -1614,6 +2052,21 @@ fn teleport_command_response(
                 Err(failure) => teleport_fail(failure, pretty),
             }
         }
+        TeleportCommand::Pull(pull) => {
+            if pull.session.is_some() && pull.latest {
+                return teleport_fail(
+                    TeleportFailure::usage(
+                        "teleport/pull",
+                        "pass either --session or --latest, not both",
+                    ),
+                    pretty,
+                );
+            }
+            match teleport_pull_response(pull, source_filter, pretty) {
+                Ok(response) => serialize(&response, pretty),
+                Err(failure) => teleport_fail(failure, pretty),
+            }
+        }
         TeleportCommand::Read(read) => {
             if read.as_flag.is_some() {
                 return teleport_fail(
@@ -1800,6 +2253,371 @@ fn response_message<T: Serialize>(response: &T) -> Option<String> {
         .get("message")?
         .as_str()
         .map(str::to_string)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PeerTeleportPackResponse {
+    command: String,
+    status: String,
+    bundle_id: String,
+    bundle: TeleportBundleFile,
+    remote_mmr_version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TeleportPullResponse {
+    command: String,
+    status: TeleportStatus,
+    transport: String,
+    from: String,
+    bundle_id: String,
+    bundle_path: String,
+    remote_mmr_version: String,
+    read_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apply: Option<serde_json::Value>,
+}
+
+fn teleport_pull_response(
+    pull: &TeleportPullArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> std::result::Result<TeleportPullResponse, TeleportFailure> {
+    let project_input = project_identity_input(pull.project.as_deref()).map_err(|error| {
+        TeleportFailure::usage(
+            "teleport/pull",
+            format!("resolve project identity: {error}"),
+        )
+    })?;
+    let request = PeerTeleportPackRequest {
+        protocol_version: PEER_PROTOCOL_VERSION,
+        project: build_peer_project_identity(&project_input),
+        source: source_filter,
+        session_id: pull.session.clone(),
+        latest: pull.latest || pull.session.as_deref() == Some("latest"),
+    };
+    let remote: PeerTeleportPackResponse = run_peer_json(
+        &pull.from,
+        &["mmr", "peer", "teleport-pack", "--request-json", "-"],
+        Some(&request),
+    )
+    .map_err(|error| peer_error_to_teleport_failure("teleport/pull", error, pretty))?;
+
+    let bundle_id = remote.bundle_id.clone();
+    let bundle_path = teleport_pull_cache_path(&bundle_id).map_err(|error| {
+        TeleportFailure::runtime("teleport/pull", format!("resolve pull cache path: {error}"))
+    })?;
+    write_bundle(&bundle_path, &remote.bundle)
+        .map_err(|error| TeleportFailure::runtime("teleport/pull", error.to_string()))?;
+
+    let (read, apply, status) = if pull.read_only {
+        let read = read_bundle(ReadOptions {
+            locator: bundle_path.display().to_string(),
+            dry_run: false,
+            output_format: TeleportOutputFormat::Json,
+        })?;
+        let status = read.status;
+        (
+            Some(serde_json::to_value(read).map_err(|error| {
+                TeleportFailure::runtime(
+                    "teleport/pull",
+                    format!("serialize read response: {error}"),
+                )
+            })?),
+            None,
+            status,
+        )
+    } else {
+        let apply = apply_bundle(ApplyOptions {
+            bundle_path: bundle_path.clone(),
+            project: pull.project.clone(),
+            dry_run: false,
+            force: pull.force,
+            skip_store_import: true,
+        })?;
+        let status = apply.status;
+        (
+            None,
+            Some(serde_json::to_value(apply).map_err(|error| {
+                TeleportFailure::runtime(
+                    "teleport/pull",
+                    format!("serialize apply response: {error}"),
+                )
+            })?),
+            status,
+        )
+    };
+
+    Ok(TeleportPullResponse {
+        command: "teleport/pull".to_string(),
+        status,
+        transport: "ssh".to_string(),
+        from: pull.from.clone(),
+        bundle_id,
+        bundle_path: bundle_path.display().to_string(),
+        remote_mmr_version: remote.remote_mmr_version,
+        read_only: pull.read_only,
+        read,
+        apply,
+    })
+}
+
+fn teleport_pull_cache_path(bundle_id: &str) -> Result<PathBuf> {
+    let home = dirs::home_dir().context("resolve HOME for teleport pull cache")?;
+    Ok(home
+        .join(".mmr")
+        .join("teleport")
+        .join("cache")
+        .join(bundle_id)
+        .join("bundle.mmr"))
+}
+
+fn peer_error_to_teleport_failure(
+    command: &'static str,
+    error: crate::peer::PeerCommandError,
+    _pretty: bool,
+) -> TeleportFailure {
+    let exit_code = if error.error_kind == "peer_target_invalid" {
+        2
+    } else {
+        3
+    };
+    let mut failure =
+        TeleportFailure::runtime(command, error.message).with_error_kind(error.error_kind);
+    failure.exit_code = exit_code;
+    failure
+}
+
+fn peer_command_response(
+    args: &PeerArgs,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    match &args.command {
+        PeerCommand::Status(args) => {
+            let _ = args.json;
+            if let Some(host) = &args.host {
+                let response: PeerStatusResponse = run_peer_json::<serde_json::Value, _>(
+                    host,
+                    &["mmr", "peer", "status", "--json"],
+                    None,
+                )
+                .map_err(|error| peer_anyhow_error("peer/status", error, pretty))?;
+                return serialize(&response, pretty);
+            }
+            serialize(&peer_status(), pretty)
+        }
+        PeerCommand::ReadProject(args) => {
+            let request: PeerProjectRequest = read_peer_request(&args.request_json)?;
+            let service = QueryService::load()?;
+            let response = peer_read_project_local_response(&service, request, source_filter)?;
+            serialize(&response, pretty)
+        }
+        PeerCommand::ContextProject(args) => {
+            let request: PeerProjectRequest = read_peer_request(&args.request_json)?;
+            let service = QueryService::load()?;
+            let response = peer_context_project_local_response(&service, request, source_filter)?;
+            serialize(&response, pretty)
+        }
+        PeerCommand::Recall(args) => {
+            let request: PeerProjectRequest = read_peer_request(&args.request_json)?;
+            let service = QueryService::load()?;
+            let response = peer_recall_local_response(&service, request, source_filter, pretty)?;
+            serialize(&response, pretty)
+        }
+        PeerCommand::TeleportPack(args) => {
+            let request: PeerTeleportPackRequest = read_peer_request(&args.request_json)?;
+            let service = QueryService::load()?;
+            let response = peer_teleport_pack_local_response(&service, request, source_filter)?;
+            serialize(&response, pretty)
+        }
+    }
+}
+
+fn read_peer_request<T: for<'de> Deserialize<'de>>(locator: &str) -> Result<T> {
+    if locator != "-" {
+        bail!("peer request JSON must be read from stdin with --request-json -");
+    }
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .context("read peer request JSON from stdin")?;
+    serde_json::from_str(&input).context("parse peer request JSON")
+}
+
+fn peer_read_project_local_response(
+    service: &QueryService,
+    request: PeerProjectRequest,
+    cli_source_filter: Option<SourceFilter>,
+) -> Result<ApiMessagesResponse> {
+    validate_peer_protocol(request.protocol_version)?;
+    let source = request.source.or(cli_source_filter);
+    let project = resolve_peer_project(service, &request.project, source)?;
+    let mut response = service.messages(
+        &[],
+        project.as_deref(),
+        source,
+        MessageQueryOptions::new(
+            request.limits.message_limit,
+            request.limits.offset,
+            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+        ),
+    )?;
+    response.peer_results = Some(vec![local_peer_result(
+        "read/project",
+        Some(response.total_messages),
+        None,
+    )]);
+    Ok(response)
+}
+
+fn peer_context_project_local_response(
+    service: &QueryService,
+    request: PeerProjectRequest,
+    cli_source_filter: Option<SourceFilter>,
+) -> Result<ContextResponse> {
+    validate_peer_protocol(request.protocol_version)?;
+    let source = request.source.or(cli_source_filter);
+    let project = resolve_peer_project(service, &request.project, source)?;
+    let sessions = service.sessions(
+        project.as_deref(),
+        source,
+        None,
+        0,
+        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+    )?;
+    let messages = service.messages(
+        &[],
+        project.as_deref(),
+        source,
+        MessageQueryOptions::new(
+            request.limits.message_limit,
+            request.limits.offset,
+            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+        ),
+    )?;
+    Ok(ContextResponse {
+        command: "context/project".to_string(),
+        scope: "project".to_string(),
+        source: source.map(source_name).map(str::to_string),
+        project,
+        total_sessions: sessions.total_sessions,
+        total_messages: messages.total_messages,
+        sessions: sessions.sessions,
+        messages: messages.messages,
+        peer_results: Some(vec![local_peer_result(
+            "context/project",
+            Some(messages.total_messages),
+            Some(sessions.total_sessions),
+        )]),
+    })
+}
+
+fn peer_recall_local_response(
+    service: &QueryService,
+    request: PeerProjectRequest,
+    cli_source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<ApiMessagesResponse> {
+    validate_peer_protocol(request.protocol_version)?;
+    let source = request.source.or(cli_source_filter);
+    let recall = request
+        .recall
+        .ok_or_else(|| anyhow::anyhow!("peer recall request missing recall selector"))?;
+    let project = if request.all {
+        None
+    } else {
+        resolve_peer_project(service, &request.project, source)?
+    };
+    let outcome = service.messages_by_session_age(
+        project.as_deref(),
+        request.all,
+        source,
+        &SessionAxis::Back(recall.n),
+        recall.include_newest,
+        MessageQueryOptions::new(
+            request.limits.message_limit,
+            request.limits.offset,
+            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+        ),
+    )?;
+    let mut response = match outcome {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(anyhow::Error::new(session_selection_cli_failure(
+                error, pretty,
+            )?));
+        }
+    };
+    response.peer_results = Some(vec![local_peer_result(
+        "recall",
+        Some(response.total_messages),
+        None,
+    )]);
+    Ok(response)
+}
+
+fn peer_teleport_pack_local_response(
+    service: &QueryService,
+    request: PeerTeleportPackRequest,
+    cli_source_filter: Option<SourceFilter>,
+) -> Result<PeerTeleportPackResponse> {
+    validate_peer_protocol(request.protocol_version)?;
+    let source = request.source.or(cli_source_filter);
+    let project = resolve_peer_project(service, &request.project, source)?;
+    let session_id = match request.session_id.as_deref() {
+        Some("latest") | None => None,
+        Some(other) => Some(other.to_string()),
+    };
+    let pack = pack_session(
+        service,
+        PackOptions {
+            session_id,
+            project,
+            source_filter: source,
+            output_path: None,
+            fidelity: TeleportFidelity::Native,
+            dry_run: false,
+        },
+    )
+    .map_err(|failure| anyhow::anyhow!(failure.message))?;
+    let bundle_path = pack
+        .bundle_path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("teleport pack did not produce a bundle path"))?;
+    let bundle = crate::teleport::load_bundle(Path::new(bundle_path))?;
+    Ok(PeerTeleportPackResponse {
+        command: "peer/teleport-pack".to_string(),
+        status: "ok".to_string(),
+        bundle_id: pack.bundle_id,
+        bundle,
+        remote_mmr_version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
+fn validate_peer_protocol(version: u32) -> Result<()> {
+    if version != PEER_PROTOCOL_VERSION {
+        bail!("unsupported peer protocol version {version}; expected {PEER_PROTOCOL_VERSION}");
+    }
+    Ok(())
+}
+
+fn local_peer_result(
+    command: &str,
+    total_messages: Option<i64>,
+    total_sessions: Option<i64>,
+) -> ApiPeerResult {
+    ApiPeerResult {
+        host: "local".to_string(),
+        transport: "local".to_string(),
+        command: command.to_string(),
+        status: "ok".to_string(),
+        remote_mmr_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        total_messages,
+        total_sessions,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -3989,6 +4807,206 @@ fn current_dir_project() -> Result<String> {
     Ok(std::env::current_dir()?.to_string_lossy().into_owned())
 }
 
+fn path_basename(value: &str) -> Option<&str> {
+    Path::new(value.trim())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+}
+
+fn project_identity_input(project: Option<&str>) -> Result<String> {
+    match project {
+        Some(project) => Ok(project.to_string()),
+        None => current_dir_project(),
+    }
+}
+
+fn build_peer_project_identity(project: &str) -> PeerProjectIdentity {
+    let path = PathBuf::from(project);
+    let canonical = if path.exists() {
+        path.canonicalize()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| project.to_string())
+    } else {
+        project.to_string()
+    };
+    let display_name = Path::new(&canonical)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(canonical.as_str())
+        .to_string();
+    let git_root = git_root_for_path(Path::new(&canonical));
+    let git_remotes = git_root
+        .as_deref()
+        .map(|root| git_remotes_for_path(Path::new(root)))
+        .unwrap_or_default();
+    let repo_fingerprint = if git_remotes.is_empty() {
+        None
+    } else {
+        let mut remotes = git_remotes.clone();
+        remotes.sort();
+        Some(content_hash(&remotes.join("\n")))
+    };
+    PeerProjectIdentity {
+        local_path: canonical,
+        display_name,
+        git_root,
+        git_remotes,
+        repo_fingerprint,
+    }
+}
+
+fn resolve_peer_project(
+    service: &QueryService,
+    identity: &PeerProjectIdentity,
+    source_filter: Option<SourceFilter>,
+) -> Result<Option<String>> {
+    let projects = service.projects(
+        source_filter,
+        None,
+        0,
+        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+    );
+
+    if !identity.git_remotes.is_empty() {
+        let wanted = normalize_git_remotes(&identity.git_remotes);
+        let mut matches = projects
+            .projects
+            .iter()
+            .filter(|project| {
+                let candidate_path = if project.original_path.is_empty() {
+                    project.name.as_str()
+                } else {
+                    project.original_path.as_str()
+                };
+                if !Path::new(candidate_path).exists() {
+                    return false;
+                }
+                let remotes = git_remotes_for_path(Path::new(candidate_path));
+                !remotes.is_empty() && normalize_git_remotes(&remotes) == wanted
+            })
+            .map(|project| project.original_path.clone())
+            .filter(|path| !path.is_empty())
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.dedup();
+        if matches.len() == 1 {
+            return Ok(matches.pop());
+        }
+        if matches.len() > 1 {
+            bail!(
+                "multiple remote projects matched git remotes for {}; pass an explicit project",
+                identity.display_name
+            );
+        }
+    }
+
+    let exact = projects
+        .projects
+        .iter()
+        .find(|project| {
+            project.name == identity.local_path || project.original_path == identity.local_path
+        })
+        .map(|project| {
+            if project.original_path.is_empty() {
+                project.name.clone()
+            } else {
+                project.original_path.clone()
+            }
+        });
+    if exact.is_some() {
+        return Ok(exact);
+    }
+
+    let mut display_matches = projects
+        .projects
+        .iter()
+        .filter(|project| {
+            project.name == identity.display_name
+                || path_basename(&project.name) == Some(identity.display_name.as_str())
+                || path_basename(&project.original_path) == Some(identity.display_name.as_str())
+                || project
+                    .aliases
+                    .iter()
+                    .any(|alias| alias == &identity.display_name)
+        })
+        .map(|project| {
+            if project.original_path.is_empty() {
+                project.name.clone()
+            } else {
+                project.original_path.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    display_matches.sort();
+    display_matches.dedup();
+    if display_matches.len() == 1 {
+        return Ok(display_matches.pop());
+    }
+    if display_matches.len() > 1 {
+        bail!(
+            "multiple remote projects matched display name {}; pass an explicit project",
+            identity.display_name
+        );
+    }
+
+    Ok(Some(identity.local_path.clone()))
+}
+
+fn git_root_for_path(path: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn git_remotes_for_path(path: &Path) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("config")
+        .arg("--get-regexp")
+        .arg("^remote\\..*\\.url$")
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let mut remotes = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    remotes.sort();
+    remotes.dedup();
+    remotes
+}
+
+fn normalize_git_remotes(remotes: &[String]) -> Vec<String> {
+    let mut normalized = remotes
+        .iter()
+        .map(|remote| remote.trim().trim_end_matches(".git").to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_next_messages_command(
     source: Option<SourceFilter>,
@@ -4053,6 +5071,44 @@ fn build_next_messages_command(
         parts.push("--order desc".to_string());
     }
 
+    parts.join(" ")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_next_recall_command_with_hosts(
+    source: Option<SourceFilter>,
+    pretty: bool,
+    project: Option<&str>,
+    all: bool,
+    hosts: &[String],
+    n: u32,
+    include_newest: bool,
+    limit: usize,
+    next_offset: usize,
+) -> String {
+    let mut parts = vec!["mmr".to_string()];
+    if pretty {
+        parts.push("--pretty".to_string());
+    }
+    if let Some(source) = source {
+        parts.push(format!("--source {}", source_name(source)));
+    }
+    parts.push("recall".to_string());
+    if let Some(project) = project {
+        parts.push(format!("--project {project}"));
+    }
+    if all {
+        parts.push("--all".to_string());
+    }
+    for host in hosts {
+        parts.push(format!("--host {host}"));
+    }
+    if include_newest {
+        parts.push("--include-newest".to_string());
+    }
+    parts.push(n.to_string());
+    parts.push(format!("--limit {limit}"));
+    parts.push(format!("--offset {next_offset}"));
     parts.join(" ")
 }
 
@@ -4129,6 +5185,109 @@ fn run_session_axis(
     serialize(&response, pretty)
 }
 
+fn recall_with_hosts_response(
+    service: &QueryService,
+    args: RecallArgs,
+    cli_source: Option<SourceFilter>,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+    options: MessageQueryOptions,
+) -> Result<String> {
+    if let Err(error) = validate_session_back(args.n, args.include_newest) {
+        return Err(anyhow::Error::new(session_selection_cli_failure(
+            error, pretty,
+        )?));
+    }
+
+    let project_scope = effective_project_scope(args.project.clone(), args.all);
+    let unpaged_options = MessageQueryOptions::new(
+        None,
+        0,
+        SortOptions::new(options.sort.by, options.sort.order),
+    );
+    let local = service.messages_by_session_age(
+        project_scope.as_deref(),
+        args.all,
+        source_filter,
+        &SessionAxis::Back(args.n),
+        args.include_newest,
+        unpaged_options,
+    )?;
+    let mut local = match local {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(anyhow::Error::new(session_selection_cli_failure(
+                error, pretty,
+            )?));
+        }
+    };
+
+    let project_for_identity = project_identity_input(project_scope.as_deref())?;
+    let request = PeerProjectRequest {
+        protocol_version: PEER_PROTOCOL_VERSION,
+        project: build_peer_project_identity(&project_for_identity),
+        source: source_filter,
+        all: args.all,
+        limits: PeerRequestLimits {
+            message_limit: None,
+            offset: 0,
+        },
+        recall: Some(PeerRecallRequest {
+            n: args.n,
+            include_newest: args.include_newest,
+        }),
+    };
+
+    let mut peer_results = Vec::new();
+    for host in &args.hosts {
+        let mut remote = peer_recall(host, &request, pretty)?;
+        let remote_mmr_version = remote
+            .peer_results
+            .as_ref()
+            .and_then(|items| items.first())
+            .and_then(|item| item.remote_mmr_version.clone());
+        annotate_peer_messages(&mut remote.messages, host, remote_mmr_version.clone());
+        peer_results.push(peer_result_for_messages(
+            host,
+            "recall",
+            remote.total_messages,
+            remote_mmr_version,
+        ));
+        local.messages.extend(remote.messages);
+    }
+
+    let session_selection = local.session_selection;
+    let mut messages = dedup_api_messages(local.messages);
+    sort_api_messages_chronological(&mut messages);
+    let total = messages.len() as i64;
+    let paged = apply_message_output_pagination(messages, options.limit, options.offset);
+    let next_offset = options.offset.saturating_add(paged.len()) as i64;
+    let next_page = options.limit.is_some() && next_offset < total;
+    let mut response = ApiMessagesResponse {
+        messages: paged,
+        total_messages: total,
+        next_page,
+        next_offset,
+        next_command: None,
+        session_selection,
+        peer_results: Some(peer_results),
+    };
+    if response.next_page {
+        response.next_command = Some(build_next_recall_command_with_hosts(
+            cli_source,
+            pretty,
+            project_scope.as_deref(),
+            args.all,
+            &args.hosts,
+            args.n,
+            args.include_newest,
+            options.limit.unwrap_or(0),
+            response.next_offset as usize,
+        ));
+    }
+    serialize(&response, pretty)
+}
+
 /// Build the structured CLI failure (machine JSON on stdout, message on stderr, exit 2) for an
 /// out-of-range / age-0 session-axis request, naming the relevant counts.
 fn session_selection_cli_failure(error: SessionSelectionError, pretty: bool) -> Result<CliFailure> {
@@ -4163,6 +5322,62 @@ fn session_selection_cli_failure(error: SessionSelectionError, pretty: bool) -> 
     }
     let stdout = serialize(&value, pretty)?;
     Ok(CliFailure::new(2, stdout, error.to_string()))
+}
+
+fn peer_error_cli_failure(
+    command: &str,
+    error: crate::peer::PeerCommandError,
+    pretty: bool,
+) -> Result<CliFailure> {
+    peer_cli_failure(
+        command,
+        error.error_kind,
+        Some(error.host.as_str()),
+        &error.message,
+        pretty,
+    )
+}
+
+fn peer_anyhow_error(
+    command: &str,
+    error: crate::peer::PeerCommandError,
+    pretty: bool,
+) -> anyhow::Error {
+    match peer_error_cli_failure(command, error, pretty) {
+        Ok(failure) => anyhow::Error::new(failure),
+        Err(error) => error,
+    }
+}
+
+fn peer_cli_failure(
+    command: &str,
+    error_kind: &str,
+    host: Option<&str>,
+    message: &str,
+    pretty: bool,
+) -> Result<CliFailure> {
+    let mut value = serde_json::json!({
+        "command": command,
+        "status": "failed",
+        "error_kind": error_kind,
+        "message": message,
+    });
+    if let Some(host) = host {
+        value["host"] = serde_json::json!(host);
+    }
+    let exit_code = if error_kind == "peer_target_invalid"
+        || error_kind == "peer_unsupported_format"
+        || error_kind == "peer_protocol_error"
+    {
+        2
+    } else {
+        3
+    };
+    Ok(CliFailure::new(
+        exit_code,
+        serialize(&value, pretty)?,
+        message,
+    ))
 }
 
 fn serialize<T: Serialize>(value: &T, pretty: bool) -> Result<String> {

@@ -20,13 +20,16 @@
   `--format line` emits tab-delimited `citation`, `line`, `source`, `snippet`.
 - `mmr recall` retrieves the previous stable session in scope. `mmr recall 2`
   reads two sessions back; age 0 remains held back unless `--include-newest` is
-  passed.
+  passed. `--host <ssh-target>` also queries explicitly named SSH peers.
 - `mmr read session <session-id>` reads one explicit session.
 - `mmr read project` reads project-scoped history across sources, defaulting to
   cwd. Use `--format tree --output-dir <dir>` for an on-disk event tree.
+  `--host <ssh-target>` also reads from explicitly named SSH peers; no mmr host
+  registry or host discovery is required.
 - `mmr read source --source <source>` reads all history for one harness across
   projects.
 - `mmr context project` returns project-specific context across sources.
+  `--host <ssh-target>` includes explicitly named SSH peers.
 - `mmr context source --source <source>` returns harness-specific context across
   projects.
 - `mmr summarize project`, `mmr summarize source --source <source>`, and
@@ -40,7 +43,9 @@
 - `mmr skill install` replaces `~/.agents/skills/mmr` with the bundled skill;
   `--local` targets `.agents/skills/mmr` under the current project.
 - `mmr redact scan` and `mmr redact explain` inspect privacy policy outcomes.
-- `mmr teleport ...` remains the native session handoff namespace.
+- `mmr teleport ...` remains the native session handoff namespace. `teleport
+  pull --from <ssh-target>` pulls one native provider bundle from an explicitly
+  named SSH peer.
 
 ## Replacement map
 

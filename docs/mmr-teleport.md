@@ -14,7 +14,8 @@ host-wide history export (`mmr read project`).
   (`.mmr` JSON artifacts with provider-qualified paths such as
   `native/codex/transcript.jsonl`, `native/grok/summary.json`, …)
 - Transports: one-shot HTTP (`serve` / `receive mmtp://...`), SSH (`send
-  `--to user@host`), and `file://` inbox (`send` / `receive`) — provider-neutral
+  `--to user@host`), explicit SSH pull (`pull --from user@host`), and `file://`
+  inbox (`send` / `receive`) — provider-neutral
 - `teleport resume --as same|<provider>` and `teleport export --as same|<provider>`
   for same-provider apply/guidance/artifact export; cross-provider transforms return
   `status: "unsupported"` (exit 3)
@@ -137,6 +138,36 @@ mmr teleport send --session sess-abc --to bob@macbook --dry-run
 
 Note: `teleport send` does **not** start HTTP servers; use `teleport serve` for
 one-shot HTTP URLs.
+
+### SSH pull from the receiving machine
+
+Use when the machine you are currently on should fetch a selected native session
+from a machine you can SSH to. The target is passed directly to OpenSSH; it may
+be a `~/.ssh/config` alias, a hostname, `user@host`, `user@host:port`, or
+`ssh://user@host:port`. `mmr` does not store host trust entries and does not
+discover hosts from `known_hosts` or Tailscale.
+
+```bash
+mmr teleport pull --from studio --session latest --project /path/to/project
+mmr teleport pull --from mish@mac-studio:22 --session sess-abc --project /path/to/project
+mmr teleport pull --from studio --session latest --project /path/to/project --read-only
+```
+
+`pull` runs a fixed remote peer command over SSH, asks the remote `mmr` to pack
+the selected native bundle, writes it to the local teleport cache, then applies
+it locally. `--read-only` caches and reads the bundle without writing native
+provider session files.
+
+For raw context without native provider writes, prefer host-aware retrieval:
+
+```bash
+mmr read project --host studio
+mmr context project --host studio
+mmr recall --host studio
+```
+
+These commands also require explicit SSH targets and fail if SSH auth, host key
+verification, the target, or remote `mmr` is unavailable.
 
 ## Workflow 3: Shared folder / Syncthing / iCloud / rclone
 

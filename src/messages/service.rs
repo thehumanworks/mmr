@@ -402,6 +402,7 @@ impl QueryService {
             next_offset,
             next_command: None,
             session_selection: None,
+            peer_results: None,
         })
     }
 
@@ -520,6 +521,7 @@ impl QueryService {
                 next_offset: 0,
                 next_command: None,
                 session_selection: None,
+                peer_results: None,
             });
         };
         let latest_key = (
@@ -553,6 +555,7 @@ impl QueryService {
             next_offset,
             next_command: None,
             session_selection: None,
+            peer_results: None,
         })
     }
 
@@ -609,6 +612,7 @@ impl QueryService {
                     selected: Vec::new(),
                     skipped_newest: None,
                 }),
+                peer_results: None,
             }));
         }
 
@@ -709,6 +713,7 @@ impl QueryService {
                 selected,
                 skipped_newest,
             }),
+            peer_results: None,
         }))
     }
 }
@@ -1113,6 +1118,7 @@ fn api_message_from_record(message: MessageRecord) -> ApiMessage {
         msg_type: message.msg_type,
         input_tokens: message.input_tokens,
         output_tokens: message.output_tokens,
+        origin: None,
     }
 }
 

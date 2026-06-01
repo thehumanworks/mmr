@@ -2629,6 +2629,310 @@ fn session_axis_pagination_pins_to_concrete_session_not_recency_age() {
 }
 
 #[test]
+fn peer_status_host_uses_explicit_ssh_target() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-status");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    let ssh_log = fixture.home.join("peer-status-ssh.log");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+printf '%s\n' "$*" > "$MMR_FAKE_SSH_LOG"
+cat <<'JSON'
+{"command":"peer/status","status":"ok","protocol_version":1,"mmr_version":"9.9.9","capabilities":["read-project"],"sources":["codex"]}
+JSON
+"#,
+    );
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &["peer", "status", "--host", "mish@studio:2222"],
+        &[
+            ("PATH", path.as_str()),
+            ("MMR_FAKE_SSH_LOG", ssh_log.to_str().unwrap()),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "peer/status");
+    assert_eq!(json["mmr_version"], "9.9.9");
+    let log = fs::read_to_string(&ssh_log).expect("ssh log");
+    assert!(log.contains("-p 2222"));
+    assert!(log.contains("mish@studio"));
+    assert!(log.contains("mmr peer status --json"));
+}
+
+#[test]
+fn read_project_host_merges_remote_messages_with_origin() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-read");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    let ssh_log = fixture.home.join("peer-read-ssh.log");
+    let request_log = fixture.home.join("peer-read-request.json");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+printf '%s\n' "$*" > "$MMR_FAKE_SSH_LOG"
+cat > "$MMR_FAKE_REQUEST_LOG"
+cat <<'JSON'
+{"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote studio context","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
+JSON
+"#,
+    );
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &[
+            "--source",
+            "codex",
+            "read",
+            "project",
+            "--project",
+            "/Users/test/codex-proj",
+            "--host",
+            "studio",
+        ],
+        &[
+            ("PATH", path.as_str()),
+            ("MMR_FAKE_SSH_LOG", ssh_log.to_str().unwrap()),
+            ("MMR_FAKE_REQUEST_LOG", request_log.to_str().unwrap()),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    let messages = json["messages"].as_array().expect("messages");
+    let remote = messages
+        .iter()
+        .find(|message| message["content"] == "remote studio context")
+        .expect("remote message");
+    assert_eq!(remote["origin"]["host"], "studio");
+    assert_eq!(remote["origin"]["transport"], "ssh");
+    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
+    assert_eq!(json["peer_results"][0]["host"], "studio");
+    assert_eq!(json["peer_results"][0]["remote_mmr_version"], "9.9.9");
+    let request = fs::read_to_string(&request_log).expect("request log");
+    assert!(request.contains("\"protocol_version\":1"));
+    assert!(request.contains("\"source\":\"codex\""));
+    assert!(
+        fs::read_to_string(&ssh_log)
+            .expect("ssh log")
+            .contains("mmr peer read-project --request-json -")
+    );
+}
+
+#[test]
+fn read_project_host_ssh_failure_is_structured() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-fail");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+echo "Permission denied (publickey)." >&2
+exit 255
+"#,
+    );
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &["read", "project", "--host", "studio"],
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["error_kind"], "peer_ssh_failed");
+    assert_eq!(json["host"], "studio");
+}
+
+#[test]
+fn read_project_host_rejects_option_like_target() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["read", "project", "--host=-oProxyCommand=sh"]);
+    assert_eq!(output.status.code(), Some(2));
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["error_kind"], "peer_target_invalid");
+    assert_eq!(json["host"], "-oProxyCommand=sh");
+}
+
+#[test]
+fn read_project_host_remote_mmr_missing_is_structured() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-missing");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+echo "mmr: command not found" >&2
+exit 127
+"#,
+    );
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &["read", "project", "--host", "studio"],
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["error_kind"], "peer_mmr_unavailable");
+    assert_eq!(json["host"], "studio");
+}
+
+#[test]
+fn read_project_host_remote_incompatible_is_structured() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-incompatible");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+echo "unsupported peer protocol version 0; expected 1" >&2
+exit 1
+"#,
+    );
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &["read", "project", "--host", "studio"],
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["error_kind"], "peer_mmr_unavailable");
+    assert_eq!(json["host"], "studio");
+}
+
+#[test]
+fn read_project_without_host_omits_peer_results() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "read",
+        "project",
+        "--project",
+        "/Users/test/codex-proj",
+    ]);
+    assert!(output.status.success());
+    let json = parse_stdout_json(&output);
+    assert!(json.get("peer_results").is_none());
+    assert!(
+        json["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .all(|message| message.get("origin").is_none())
+    );
+}
+
+#[test]
+fn context_project_host_merges_remote_context() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-context");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+cat > /dev/null
+cat <<'JSON'
+{"command":"context/project","scope":"project","source":"codex","project":"/Users/test/codex-proj","total_sessions":1,"total_messages":1,"sessions":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","project_path":"/Users/test/codex-proj","first_timestamp":"2025-01-08T00:00:00","last_timestamp":"2025-01-08T00:00:00","message_count":1,"user_messages":1,"assistant_messages":0,"preview":"remote"}],"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote context message","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"peer_results":[{"host":"local","transport":"local","command":"context/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1,"total_sessions":1}]}
+JSON
+"#,
+    );
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &[
+            "--source",
+            "codex",
+            "context",
+            "project",
+            "--project",
+            "/Users/test/codex-proj",
+            "--host",
+            "studio",
+        ],
+        &[("PATH", path.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "context/project");
+    assert_eq!(json["peer_results"][0]["host"], "studio");
+    let remote = json["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["content"] == "remote context message")
+        .expect("remote context message");
+    assert_eq!(remote["origin"]["host"], "studio");
+    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
+}
+
+#[test]
+fn recall_host_merges_remote_recall_messages() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-recall");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+cat > /dev/null
+cat <<'JSON'
+{"messages":[{"session_id":"remote-previous","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote previous session","model":"model","timestamp":"2025-01-02T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"session_selection":{"scope":{"project":"/Users/test/codex-proj","all":false,"source":"codex"},"axis":"session-back","total_sessions_in_scope":2,"selected":[{"age":1,"session_id":"remote-previous","source":"codex","project_name":"/Users/test/codex-proj","first_timestamp":"2025-01-02T00:00:00","last_timestamp":"2025-01-02T00:00:00","message_count":1,"equivalent_command":"mmr read session remote-previous"}],"skipped_newest":{"age":0,"session_id":"remote-current","last_timestamp":"2025-01-03T00:00:00","assumed_live":true}},"peer_results":[{"host":"local","transport":"local","command":"recall","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
+JSON
+"#,
+    );
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &[
+            "--source",
+            "codex",
+            "recall",
+            "--project",
+            "/Users/test/codex-proj",
+            "--host",
+            "studio",
+            "1",
+        ],
+        &[("PATH", path.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["peer_results"][0]["host"], "studio");
+    let remote = json["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["content"] == "remote previous session")
+        .expect("remote recall message");
+    assert_eq!(remote["origin"]["host"], "studio");
+    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
+}
+
+#[test]
 fn teleport_bundle_pack_inspect_apply_round_trip() {
     let fixture = TestFixture::seeded();
     let bundle_path = fixture.home.join("teleport-session.mmr");
@@ -3525,6 +3829,168 @@ exit 0
         fs::read_to_string(&scp_log)
             .expect("scp log")
             .contains("bob@macbook:~/.mmr/teleport/inbox/")
+    );
+}
+
+#[test]
+fn teleport_pull_from_host_streams_bundle_and_applies() {
+    let fixture = TestFixture::seeded();
+    let bundle_path = fixture.home.join("peer-pull-source.mmr");
+    pack_codex_teleport_bundle(&fixture, &bundle_path);
+    let bundle_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&bundle_path).expect("bundle JSON"))
+            .expect("parse bundle");
+    let response_path = fixture.home.join("peer-pull-response.json");
+    write_file(
+        &response_path,
+        &serde_json::json!({
+            "command": "peer/teleport-pack",
+            "status": "ok",
+            "bundle_id": bundle_json["manifest"]["bundle_id"],
+            "bundle": bundle_json,
+            "remote_mmr_version": "9.9.9"
+        })
+        .to_string(),
+    );
+
+    let native_path = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-1.jsonl");
+    fs::remove_file(&native_path).expect("remove native before pull");
+
+    let fake_bin = fixture.home.join("fake-bin-peer-pull");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    let ssh_log = fixture.home.join("peer-pull-ssh.log");
+    let request_log = fixture.home.join("peer-pull-request.json");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+printf '%s\n' "$*" > "$MMR_FAKE_SSH_LOG"
+cat > "$MMR_FAKE_REQUEST_LOG"
+cat "$MMR_FAKE_PEER_RESPONSE"
+"#,
+    );
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &[
+            "--source",
+            "codex",
+            "teleport",
+            "pull",
+            "--from",
+            "studio",
+            "--session",
+            "sess-codex-1",
+            "--project",
+            "/Users/test/codex-proj",
+        ],
+        &[
+            ("PATH", path.as_str()),
+            ("MMR_FAKE_SSH_LOG", ssh_log.to_str().unwrap()),
+            ("MMR_FAKE_REQUEST_LOG", request_log.to_str().unwrap()),
+            ("MMR_FAKE_PEER_RESPONSE", response_path.to_str().unwrap()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "pull stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "teleport/pull");
+    assert_eq!(json["transport"], "ssh");
+    assert_eq!(json["from"], "studio");
+    assert_eq!(json["remote_mmr_version"], "9.9.9");
+    assert_eq!(json["apply"]["status"], "ok");
+    assert!(native_path.is_file(), "pull should apply native transcript");
+    assert!(
+        fs::read_to_string(&ssh_log)
+            .expect("ssh log")
+            .contains("mmr peer teleport-pack --request-json -")
+    );
+    let request = fs::read_to_string(&request_log).expect("request");
+    assert!(request.contains("\"session_id\":\"sess-codex-1\""));
+    assert!(request.contains("\"source\":\"codex\""));
+}
+
+#[test]
+fn teleport_pull_from_host_read_only_reads_without_applying() {
+    let fixture = TestFixture::seeded();
+    let bundle_path = fixture.home.join("peer-pull-read-only-source.mmr");
+    pack_codex_teleport_bundle(&fixture, &bundle_path);
+    let bundle_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&bundle_path).expect("bundle JSON"))
+            .expect("parse bundle");
+    let response_path = fixture.home.join("peer-pull-read-only-response.json");
+    write_file(
+        &response_path,
+        &serde_json::json!({
+            "command": "peer/teleport-pack",
+            "status": "ok",
+            "bundle_id": bundle_json["manifest"]["bundle_id"],
+            "bundle": bundle_json,
+            "remote_mmr_version": "9.9.9"
+        })
+        .to_string(),
+    );
+
+    let native_path = fixture
+        .home
+        .join(".codex")
+        .join("sessions")
+        .join("sess-codex-1.jsonl");
+    fs::remove_file(&native_path).expect("remove native before pull");
+
+    let fake_bin = fixture.home.join("fake-bin-peer-pull-read-only");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+cat > /dev/null
+cat "$MMR_FAKE_PEER_RESPONSE"
+"#,
+    );
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &[
+            "--source",
+            "codex",
+            "teleport",
+            "pull",
+            "--from",
+            "studio",
+            "--session",
+            "sess-codex-1",
+            "--project",
+            "/Users/test/codex-proj",
+            "--read-only",
+        ],
+        &[
+            ("PATH", path.as_str()),
+            ("MMR_FAKE_PEER_RESPONSE", response_path.to_str().unwrap()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "pull stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "teleport/pull");
+    assert_eq!(json["read_only"], true);
+    assert_eq!(json["read"]["message_count"], 2);
+    assert!(json.get("apply").is_none());
+    assert!(
+        !native_path.exists(),
+        "read-only pull must not apply native transcript"
     );
 }
 
