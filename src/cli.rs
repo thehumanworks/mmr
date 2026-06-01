@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::agent::ai;
+use crate::agent::{ai, compact};
 use crate::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot,
 };
@@ -41,8 +41,8 @@ use crate::teleport::{
 };
 use crate::types::{
     ApiMessage, ApiMessageOrigin, ApiMessagesResponse, ApiPeerResult, ApiProject,
-    ApiProjectsResponse, ApiSession, ApiSessionsResponse, RememberRequest, RememberResponse,
-    RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter,
+    ApiProjectsResponse, ApiSession, ApiSessionsResponse, CompactResponse, RememberRequest,
+    RememberResponse, RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter,
 };
 
 #[derive(Debug, Clone)]
@@ -82,6 +82,7 @@ const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
 const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
 const ENV_SUMMARISER_MODEL: &str = "MMR_SUMMARISER_MODEL";
 const DEFAULT_SUMMARISER_MODEL: &str = "gpt-4o-mini";
+const ENV_COMPACT_MODEL: &str = "MMR_COMPACT_MODEL";
 
 #[derive(Debug, Clone, Copy)]
 struct BundledSkillFile {
@@ -117,7 +118,7 @@ const BUNDLED_MMR_SKILL_FILES: &[BundledSkillFile] = &[
     name = "mmr",
     version = env!("CARGO_PKG_VERSION"),
     about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
-    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --remote mini --project /path/to/project\n  mmr recall --remote mini --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --remote mini\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr --source codex ingest events --project /path/to/project\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr assimilate project --pretty\n  mmr skill load\n  mmr skill install --local\n  mmr mcp --transport stdio\n  mmr mcp --transport http\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
+    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --remote mini --project /path/to/project\n  mmr recall --remote mini --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --remote mini\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr --source codex ingest events --project /path/to/project\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr compact project --project /path/to/project --query \"current task\"\n  mmr assimilate project --pretty\n  mmr skill load\n  mmr skill install --local\n  mmr mcp --transport stdio\n  mmr mcp --transport http\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -149,6 +150,8 @@ pub enum Commands {
     Context(ContextArgs),
     /// Run a stateless summary over scoped history
     Summarize(SummarizeArgs),
+    /// Compact scoped history with Morph Compact without rewriting surviving lines
+    Compact(CompactArgs),
     /// Return prompt/runbook/evidence for memory assimilation
     Assimilate(AssimilateArgs),
     /// Load or install the bundled mmr agent skill
@@ -447,6 +450,87 @@ pub struct SummarizeSessionArgs {
     runner: SummaryRunnerArgs,
 }
 
+#[derive(Args, Debug)]
+pub struct CompactArgs {
+    #[command(subcommand)]
+    command: CompactCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CompactCommand {
+    /// Compact project-scoped history with Morph Compact
+    Project(CompactProjectArgs),
+    /// Compact all history from one harness/source with Morph Compact
+    Source(CompactSourceArgs),
+    /// Compact one explicit session with Morph Compact
+    Session(CompactSessionArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct CompactProjectArgs {
+    /// Project name or path (omit to use current directory)
+    #[arg(long, short = 'p')]
+    project: Option<String>,
+    /// Query this explicit SSH target in addition to local history before compacting
+    #[arg(long = "remote")]
+    remotes: Vec<String>,
+    #[command(flatten)]
+    runner: CompactRunnerArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct CompactSourceArgs {
+    /// Query this explicit SSH target in addition to local history before compacting
+    #[arg(long = "remote")]
+    remotes: Vec<String>,
+    #[command(flatten)]
+    runner: CompactRunnerArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct CompactSessionArgs {
+    /// Session ID to compact
+    session_id: String,
+    /// Project name or path (optional; without it the session is searched globally)
+    #[arg(long, short = 'p')]
+    project: Option<String>,
+    /// Query this explicit SSH target in addition to local history before compacting
+    #[arg(long = "remote")]
+    remotes: Vec<String>,
+    #[command(flatten)]
+    runner: CompactRunnerArgs,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CompactRunnerArgs {
+    /// Focus query for relevance-based pruning
+    #[arg(long)]
+    query: Option<String>,
+    /// Fraction of input to keep, e.g. 0.3 aggressive or 0.7 light
+    #[arg(long = "compression-ratio")]
+    compression_ratio: Option<f32>,
+    /// Keep the last N messages uncompressed
+    #[arg(long = "preserve-recent")]
+    preserve_recent: Option<u32>,
+    /// Omit compacted_line_ranges from Morph's response
+    #[arg(long = "no-line-ranges")]
+    no_line_ranges: bool,
+    /// Omit '(filtered N lines)' markers from compacted output
+    #[arg(long = "no-markers")]
+    no_markers: bool,
+    /// Output format for compact results
+    #[arg(
+        short = 'O',
+        long = "output-format",
+        value_enum,
+        default_value = "json"
+    )]
+    output_format: CompactOutputFormatArg,
+    /// Morph compact model to use (overrides MMR_COMPACT_MODEL)
+    #[arg(long)]
+    model: Option<String>,
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct SummaryRunnerArgs {
     /// Override the output format and rules portion of the system instructions
@@ -626,6 +710,14 @@ pub struct PeerRequestArgs {
 pub enum RememberOutputFormatArg {
     Json,
     #[default]
+    Md,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[clap(rename_all = "kebab-case")]
+pub enum CompactOutputFormatArg {
+    #[default]
+    Json,
     Md,
 }
 
@@ -983,6 +1075,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Summarize(args) => {
             summarize_command_response(&service, args, cli.source, source_filter, cli.pretty)
                 .await?
+        }
+        Commands::Compact(args) => {
+            compact_command_response(&service, args, cli.source, source_filter, cli.pretty).await?
         }
         Commands::Import(_) => unreachable!("import handled before QueryService load"),
         Commands::Ingest(_) => unreachable!("ingest handled before QueryService load"),
@@ -2283,7 +2378,7 @@ async fn summarize_command_response(
                     &args.remotes,
                     pretty,
                 )?;
-                let formatted = format_messages_as_summary_input(&messages.messages);
+                let formatted = format_messages_as_transcript_input(&messages.messages);
                 let response = ai::summarize_formatted_messages(
                     args.runner.instructions.as_deref(),
                     &model,
@@ -2327,7 +2422,7 @@ async fn summarize_command_response(
                     pretty,
                 )?
             };
-            let formatted = format_messages_as_summary_input(&messages.messages);
+            let formatted = format_messages_as_transcript_input(&messages.messages);
             let model = effective_summariser_model(args.runner.model.as_deref());
             let response = ai::summarize_formatted_messages(
                 args.runner.instructions.as_deref(),
@@ -2353,7 +2448,7 @@ async fn summarize_command_response(
             } else {
                 source_messages_with_remotes_for_summary(service, source, &args.remotes, pretty)?
             };
-            let formatted = format_messages_as_summary_input(&messages.messages);
+            let formatted = format_messages_as_transcript_input(&messages.messages);
             let model = effective_summariser_model(args.runner.model.as_deref());
             let response = ai::summarize_formatted_messages(
                 args.runner.instructions.as_deref(),
@@ -2366,7 +2461,125 @@ async fn summarize_command_response(
     }
 }
 
-fn format_messages_as_summary_input(messages: &[ApiMessage]) -> String {
+async fn compact_command_response(
+    service: &QueryService,
+    args: CompactArgs,
+    cli_source: Option<SourceFilter>,
+    source_filter: Option<SourceFilter>,
+    pretty: bool,
+) -> Result<String> {
+    match args.command {
+        CompactCommand::Project(args) => {
+            let project = args
+                .project
+                .unwrap_or(current_dir_project().context("could not resolve current directory")?);
+            let messages = if args.remotes.is_empty() {
+                service.messages(
+                    &[],
+                    Some(project.as_str()),
+                    source_filter,
+                    MessageQueryOptions::new(
+                        None,
+                        0,
+                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                    ),
+                )?
+            } else {
+                project_messages_with_remotes_for_summary(
+                    service,
+                    Some(project.as_str()),
+                    source_filter,
+                    &args.remotes,
+                    pretty,
+                )?
+            };
+            let formatted = format_messages_as_transcript_input(&messages.messages);
+            let response = compact_formatted_messages(&args.runner, &formatted).await?;
+            format_compact_response(&response, args.runner.output_format, pretty)
+        }
+        CompactCommand::Session(args) => {
+            let messages = if args.remotes.is_empty() {
+                service.messages(
+                    std::slice::from_ref(&args.session_id),
+                    args.project.as_deref(),
+                    source_filter,
+                    MessageQueryOptions::new(
+                        None,
+                        0,
+                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                    ),
+                )?
+            } else {
+                session_messages_with_remotes_for_summary(
+                    service,
+                    &args.session_id,
+                    args.project.as_deref(),
+                    source_filter,
+                    &args.remotes,
+                    pretty,
+                )?
+            };
+            let formatted = format_messages_as_transcript_input(&messages.messages);
+            let response = compact_formatted_messages(&args.runner, &formatted).await?;
+            format_compact_response(&response, args.runner.output_format, pretty)
+        }
+        CompactCommand::Source(args) => {
+            let source = require_explicit_source(cli_source, "compact source")?;
+            let messages = if args.remotes.is_empty() {
+                service.messages(
+                    &[],
+                    None,
+                    Some(source),
+                    MessageQueryOptions::new(
+                        None,
+                        0,
+                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
+                    ),
+                )?
+            } else {
+                source_messages_with_remotes_for_summary(service, source, &args.remotes, pretty)?
+            };
+            let formatted = format_messages_as_transcript_input(&messages.messages);
+            let response = compact_formatted_messages(&args.runner, &formatted).await?;
+            format_compact_response(&response, args.runner.output_format, pretty)
+        }
+    }
+}
+
+async fn compact_formatted_messages(
+    args: &CompactRunnerArgs,
+    formatted_messages: &str,
+) -> Result<CompactResponse> {
+    validate_compression_ratio(args.compression_ratio)?;
+    let model = effective_compact_model(args.model.as_deref());
+    let client = compact::MorphCompactClient::from_env()?;
+    let mut request = compact::CompactRequest::new(formatted_messages, &model);
+    request.query = args.query.as_deref();
+    request.compression_ratio = args.compression_ratio;
+    request.preserve_recent = args.preserve_recent;
+    request.include_line_ranges = args.no_line_ranges.then_some(false);
+    request.include_markers = args.no_markers.then_some(false);
+
+    let result = client.compact(request).await?;
+    Ok(CompactResponse::new(
+        result.model,
+        result.id,
+        result.output,
+        result.messages,
+        result.usage,
+    ))
+}
+
+fn validate_compression_ratio(ratio: Option<f32>) -> Result<()> {
+    if let Some(ratio) = ratio
+        && !(0.05..=1.0).contains(&ratio)
+    {
+        bail!("--compression-ratio must be between 0.05 and 1.0");
+    }
+    Ok(())
+}
+
+fn format_messages_as_transcript_input(messages: &[ApiMessage]) -> String {
     let mut output = String::new();
     let mut current_session = String::new();
     for message in messages {
@@ -5316,6 +5529,15 @@ fn effective_summariser_model(cli_model: Option<&str>) -> String {
         .unwrap_or_else(|| DEFAULT_SUMMARISER_MODEL.to_string())
 }
 
+fn effective_compact_model(cli_model: Option<&str>) -> String {
+    cli_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(default_compact_model_from_env)
+        .unwrap_or_else(|| compact::default_compact_model().to_string())
+}
+
 #[cfg(test)]
 fn validate_message_index_range(
     from: Option<usize>,
@@ -5372,6 +5594,13 @@ fn validate_session_back(age: u32, include_newest: bool) -> Result<u32, SessionS
 
 fn default_summariser_model_from_env() -> Option<String> {
     std::env::var(ENV_SUMMARISER_MODEL)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn default_compact_model_from_env() -> Option<String> {
+    std::env::var(ENV_COMPACT_MODEL)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -6042,11 +6271,31 @@ fn format_remember_response(
     }
 }
 
+fn format_compact_response(
+    response: &CompactResponse,
+    output_format: CompactOutputFormatArg,
+    pretty: bool,
+) -> Result<String> {
+    match output_format {
+        CompactOutputFormatArg::Json => serialize(response, pretty),
+        CompactOutputFormatArg::Md => Ok(compact_response_to_markdown(response)),
+    }
+}
+
 fn remember_response_to_markdown(response: &RememberResponse) -> String {
     if response.text.trim().is_empty() {
         "(No continuity brief returned.)"
     } else {
         response.text.trim()
+    }
+    .to_string()
+}
+
+fn compact_response_to_markdown(response: &CompactResponse) -> String {
+    if response.output.trim().is_empty() {
+        "(No compacted transcript returned.)"
+    } else {
+        response.output.trim()
     }
     .to_string()
 }
@@ -6096,6 +6345,65 @@ mod tests {
         };
         let SummarizeCommand::Session(session) = args.command else {
             panic!("expected summarize session command");
+        };
+        assert_eq!(session.session_id, "sess-123");
+        assert_eq!(session.project.as_deref(), Some("/Users/test/proj"));
+    }
+
+    #[test]
+    fn compact_project_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "compact",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "--query",
+            "active task",
+            "--compression-ratio",
+            "0.4",
+            "--preserve-recent",
+            "3",
+            "--no-line-ranges",
+            "--no-markers",
+            "--model",
+            "morph-compactor",
+            "-O",
+            "md",
+        ])
+        .expect("compact project should parse");
+        let Commands::Compact(args) = parsed.command else {
+            panic!("expected compact command");
+        };
+        let CompactCommand::Project(project) = args.command else {
+            panic!("expected compact project command");
+        };
+        assert_eq!(project.project.as_deref(), Some("/Users/test/proj"));
+        assert_eq!(project.runner.query.as_deref(), Some("active task"));
+        assert_eq!(project.runner.compression_ratio, Some(0.4));
+        assert_eq!(project.runner.preserve_recent, Some(3));
+        assert!(project.runner.no_line_ranges);
+        assert!(project.runner.no_markers);
+        assert_eq!(project.runner.model.as_deref(), Some("morph-compactor"));
+        assert_eq!(project.runner.output_format, CompactOutputFormatArg::Md);
+    }
+
+    #[test]
+    fn compact_session_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "compact",
+            "session",
+            "sess-123",
+            "--project",
+            "/Users/test/proj",
+        ])
+        .expect("compact session should parse");
+        let Commands::Compact(args) = parsed.command else {
+            panic!("expected compact command");
+        };
+        let CompactCommand::Session(session) = args.command else {
+            panic!("expected compact session command");
         };
         assert_eq!(session.session_id, "sess-123");
         assert_eq!(session.project.as_deref(), Some("/Users/test/proj"));

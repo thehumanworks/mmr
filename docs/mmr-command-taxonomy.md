@@ -43,6 +43,11 @@
   `mmr summarize session <session-id>` run stateless summaries. With
   `--remote <ssh-target>`, `mmr` fetches the remote transcript material first and
   runs summarization locally.
+- `mmr compact project`, `mmr compact source --source <source>`, and
+  `mmr compact session <session-id>` send selected transcript history to Morph
+  Compact. This removes low-relevance lines without paraphrasing surviving
+  content. Set `MORPHLLM_API_KEY`; optionally set `MORPHLLM_BASE_URL` and
+  `MMR_COMPACT_MODEL`, or pass `--model`.
 - `mmr assimilate project` returns a prompt, runbook, output contract, and
   evidence bundle for project memory deduplication and generalisation.
 - `mmr assimilate source --source <source>` returns the source-wide equivalent,

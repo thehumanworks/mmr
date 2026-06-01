@@ -131,6 +131,48 @@ fn start_mock_chat_completions_server(
     (format!("http://{addr}"), captured, handle)
 }
 
+fn start_mock_compact_server(
+    response_body: &str,
+) -> (
+    String,
+    Arc<Mutex<Option<serde_json::Value>>>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock compact server");
+    let addr = listener.local_addr().expect("local addr");
+    let captured = Arc::new(Mutex::new(None));
+    let captured_for_thread = Arc::clone(&captured);
+    let response = response_body.to_string();
+
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept compact request");
+        let request_bytes = read_http_request(&mut stream);
+        let request = String::from_utf8(request_bytes).expect("request UTF-8");
+        let first_line = request.lines().next().unwrap_or_default();
+        assert!(
+            first_line.starts_with("POST /compact HTTP/1.1"),
+            "compact client should call /compact, got {first_line}"
+        );
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+        let body_json: serde_json::Value = serde_json::from_str(body).expect("request JSON body");
+        *captured_for_thread.lock().expect("lock captured body") = Some(body_json);
+
+        let http_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        stream
+            .write_all(http_response.as_bytes())
+            .expect("write response");
+    });
+
+    (format!("http://{addr}"), captured, handle)
+}
+
 fn read_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut header_end = None;
@@ -2205,6 +2247,130 @@ fn summarize_session_requires_session_id() {
         stderr.contains("required arguments were not provided")
             || stderr.contains("a value is required"),
         "stderr should explain that the session command requires an ID: {stderr}"
+    );
+}
+
+#[test]
+fn compact_project_calls_morph_native_endpoint_with_history() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, captured, handle) = start_mock_compact_server(
+        r#"{"id":"cmpr-project","object":"compact","model":"morph-compactor","output":"compacted project transcript","messages":[{"role":"user","content":"compacted project transcript","compacted_line_ranges":[{"start":2,"end":4}],"kept_line_ranges":[]}],"usage":{"input_tokens":100,"output_tokens":40,"compression_ratio":0.4,"processing_time_ms":12}}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "compact",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "--query",
+            "active task",
+            "--compression-ratio",
+            "0.4",
+            "--preserve-recent",
+            "3",
+            "--no-markers",
+        ],
+        &[
+            ("MORPHLLM_API_KEY", "test-key"),
+            ("MORPHLLM_BASE_URL", base_url.as_str()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock compact server thread");
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(stdout_json["backend"].as_str().unwrap(), "morph-compact");
+    assert_eq!(stdout_json["model"].as_str().unwrap(), "morph-compactor");
+    assert_eq!(stdout_json["id"].as_str().unwrap(), "cmpr-project");
+    assert_eq!(
+        stdout_json["output"].as_str().unwrap(),
+        "compacted project transcript"
+    );
+    assert_eq!(stdout_json["usage"]["input_tokens"].as_u64().unwrap(), 100);
+    assert_eq!(
+        stdout_json["messages"][0]["compacted_line_ranges"][0]["start"]
+            .as_u64()
+            .unwrap(),
+        2
+    );
+
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    assert_eq!(body["query"].as_str().unwrap(), "active task");
+    assert_eq!(body["compression_ratio"].as_f64().unwrap(), 0.4);
+    assert_eq!(body["preserve_recent"].as_u64().unwrap(), 3);
+    assert!(!body["include_markers"].as_bool().unwrap());
+    assert_eq!(body["model"].as_str().unwrap(), "morph-compactor");
+    let input = body["input"].as_str().expect("compact input text");
+    assert!(input.contains("hello from claude"));
+    assert!(input.contains("## Session"));
+}
+
+#[test]
+fn compact_session_markdown_outputs_compacted_text_only() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, captured, handle) = start_mock_compact_server(
+        r#"{"id":"cmpr-session","object":"compact","model":"morph-compactor","output":"  compacted session transcript\nnext line  ","messages":[{"role":"user","content":"compacted session transcript\nnext line","compacted_line_ranges":[],"kept_line_ranges":[]}],"usage":{"input_tokens":50,"output_tokens":25,"compression_ratio":0.5,"processing_time_ms":8}}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "compact",
+            "session",
+            "sess-claude-1",
+            "--project",
+            "/Users/test/proj",
+            "-O",
+            "md",
+        ],
+        &[
+            ("MORPHLLM_API_KEY", "test-key"),
+            ("MORPHLLM_BASE_URL", base_url.as_str()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock compact server thread");
+
+    let stdout = stdout_text(&output);
+    assert_eq!(stdout.trim_end(), "compacted session transcript\nnext line");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
+        "markdown compact output should not be JSON"
+    );
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = body["input"].as_str().expect("compact input text");
+    assert!(input.contains("hello from claude"));
+}
+
+#[test]
+fn compact_source_requires_explicit_source() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli_raw(&["compact", "source"]);
+
+    assert!(
+        !output.status.success(),
+        "compact source without --source should be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`mmr compact source` requires --source"),
+        "stderr should explain missing source: {stderr}"
     );
 }
 

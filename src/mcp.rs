@@ -239,6 +239,33 @@ impl MmrMcpServer {
         run_summary_tool(args.output_format.clone(), args.into_cli_args()).await
     }
 
+    /// Compact project history with Morph Compact.
+    #[tool(name = "mmr_compact_project")]
+    async fn compact_project(
+        &self,
+        Parameters(args): Parameters<CompactProjectToolArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
+    }
+
+    /// Compact one explicit session with Morph Compact.
+    #[tool(name = "mmr_compact_session")]
+    async fn compact_session(
+        &self,
+        Parameters(args): Parameters<CompactSessionToolArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
+    }
+
+    /// Compact one explicit source with Morph Compact.
+    #[tool(name = "mmr_compact_source")]
+    async fn compact_source(
+        &self,
+        Parameters(args): Parameters<CompactSourceToolArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
+    }
+
     /// Inspect local project, redaction, source, and sync state.
     #[tool(name = "mmr_status")]
     async fn status(
@@ -682,6 +709,130 @@ impl SummarizeSourceToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct CompactProjectToolArgs {
+    source: Option<String>,
+    project: Option<String>,
+    remote: Option<String>,
+    query: Option<String>,
+    compression_ratio: Option<f32>,
+    preserve_recent: Option<u32>,
+    no_line_ranges: Option<bool>,
+    no_markers: Option<bool>,
+    model: Option<String>,
+    output_format: Option<String>,
+}
+
+impl CompactProjectToolArgs {
+    fn into_cli_args(self) -> Vec<String> {
+        let mut args = Vec::new();
+        push_source(&mut args, self.source);
+        args.extend(["compact".to_string(), "project".to_string()]);
+        push_opt(&mut args, "--project", self.project);
+        push_opt(&mut args, "--remote", self.remote);
+        push_compact_runner(
+            &mut args,
+            CompactRunnerToolArgs {
+                query: self.query,
+                compression_ratio: self.compression_ratio,
+                preserve_recent: self.preserve_recent,
+                no_line_ranges: self.no_line_ranges,
+                no_markers: self.no_markers,
+                model: self.model,
+                output_format: self.output_format,
+            },
+        );
+        args
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CompactSessionToolArgs {
+    session_id: String,
+    source: Option<String>,
+    project: Option<String>,
+    remote: Option<String>,
+    query: Option<String>,
+    compression_ratio: Option<f32>,
+    preserve_recent: Option<u32>,
+    no_line_ranges: Option<bool>,
+    no_markers: Option<bool>,
+    model: Option<String>,
+    output_format: Option<String>,
+}
+
+impl CompactSessionToolArgs {
+    fn into_cli_args(self) -> Vec<String> {
+        let mut args = Vec::new();
+        push_source(&mut args, self.source);
+        args.extend([
+            "compact".to_string(),
+            "session".to_string(),
+            self.session_id,
+        ]);
+        push_opt(&mut args, "--project", self.project);
+        push_opt(&mut args, "--remote", self.remote);
+        push_compact_runner(
+            &mut args,
+            CompactRunnerToolArgs {
+                query: self.query,
+                compression_ratio: self.compression_ratio,
+                preserve_recent: self.preserve_recent,
+                no_line_ranges: self.no_line_ranges,
+                no_markers: self.no_markers,
+                model: self.model,
+                output_format: self.output_format,
+            },
+        );
+        args
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CompactSourceToolArgs {
+    source: String,
+    remote: Option<String>,
+    query: Option<String>,
+    compression_ratio: Option<f32>,
+    preserve_recent: Option<u32>,
+    no_line_ranges: Option<bool>,
+    no_markers: Option<bool>,
+    model: Option<String>,
+    output_format: Option<String>,
+}
+
+impl CompactSourceToolArgs {
+    fn into_cli_args(self) -> Vec<String> {
+        let mut args = Vec::new();
+        push_source(&mut args, Some(self.source));
+        args.extend(["compact".to_string(), "source".to_string()]);
+        push_opt(&mut args, "--remote", self.remote);
+        push_compact_runner(
+            &mut args,
+            CompactRunnerToolArgs {
+                query: self.query,
+                compression_ratio: self.compression_ratio,
+                preserve_recent: self.preserve_recent,
+                no_line_ranges: self.no_line_ranges,
+                no_markers: self.no_markers,
+                model: self.model,
+                output_format: self.output_format,
+            },
+        );
+        args
+    }
+}
+
+struct CompactRunnerToolArgs {
+    query: Option<String>,
+    compression_ratio: Option<f32>,
+    preserve_recent: Option<u32>,
+    no_line_ranges: Option<bool>,
+    no_markers: Option<bool>,
+    model: Option<String>,
+    output_format: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct StatusToolArgs {
     source: Option<String>,
     project: Option<PathBuf>,
@@ -755,6 +906,21 @@ async fn run_summary_tool(
     Ok(text_tool_result(output))
 }
 
+async fn run_compact_tool(
+    output_format: Option<String>,
+    args: Vec<String>,
+) -> Result<CallToolResult, ErrorData> {
+    let output = run_cli_string(args).await?;
+    if matches!(output_format.as_deref(), Some("md")) {
+        return Ok(json_tool_result(serde_json::json!({
+            "command": "compact",
+            "format": "md",
+            "text": output,
+        })));
+    }
+    Ok(text_tool_result(output))
+}
+
 async fn run_cli_string(args: Vec<String>) -> Result<String, ErrorData> {
     let mut argv = Vec::with_capacity(args.len() + 1);
     argv.push("mmr".to_string());
@@ -816,6 +982,24 @@ fn push_summary_runner(
         args,
         "--output-format",
         Some(output_format.unwrap_or_else(|| "json".to_string())),
+    );
+}
+
+fn push_compact_runner(args: &mut Vec<String>, runner: CompactRunnerToolArgs) {
+    push_opt(args, "--query", runner.query);
+    push_opt(args, "--compression-ratio", runner.compression_ratio);
+    push_opt(args, "--preserve-recent", runner.preserve_recent);
+    push_flag(
+        args,
+        "--no-line-ranges",
+        runner.no_line_ranges.unwrap_or(false),
+    );
+    push_flag(args, "--no-markers", runner.no_markers.unwrap_or(false));
+    push_opt(args, "--model", runner.model);
+    push_opt(
+        args,
+        "--output-format",
+        Some(runner.output_format.unwrap_or_else(|| "json".to_string())),
     );
 }
 

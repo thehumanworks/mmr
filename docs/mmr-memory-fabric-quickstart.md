@@ -124,6 +124,27 @@ configuration is visible before you run a summary.
 memory. Use `mmr assimilate` to generate a prompt, runbook, output contract, and
 cited evidence bundle for the calling AI agent.
 
+## Compact
+
+`compact` is the stateless transcript-noise reduction command. It uses Morph
+Compact to delete low-relevance lines while preserving surviving lines verbatim.
+
+```bash
+mmr compact project --project "$(pwd)" --query "current task"
+mmr --source codex compact source --query "what matters next" -O md
+mmr compact session <session-id> --project "$(pwd)" --compression-ratio 0.4
+```
+
+Set `MORPHLLM_API_KEY`. By default, `mmr` calls
+`https://api.morphllm.com/v1/compact` with model `morph-compactor`. Optional
+configuration:
+
+- `MORPHLLM_BASE_URL` points at another Morph-compatible base URL.
+- `MMR_COMPACT_MODEL` changes the default model; `--model` overrides it.
+- `--compression-ratio` controls the fraction to keep.
+- `--preserve-recent` keeps the last N messages intact.
+- `--no-markers` and `--no-line-ranges` disable Morph's marker/range outputs.
+
 ## Assimilate
 
 Generate the memory assimilation prompt and runbook:

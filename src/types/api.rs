@@ -162,3 +162,36 @@ impl RememberResponse {
         }
     }
 }
+
+#[derive(Debug, Serialize)]
+pub struct CompactResponse {
+    pub backend: String,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub output: String,
+    pub messages: Vec<CompactResponseMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<CompactUsage>,
+}
+
+impl CompactResponse {
+    pub fn new(
+        model: impl Into<String>,
+        id: Option<String>,
+        output: impl Into<String>,
+        messages: Vec<CompactResponseMessage>,
+        usage: Option<CompactUsage>,
+    ) -> Self {
+        Self {
+            backend: "morph-compact".to_string(),
+            model: model.into(),
+            id,
+            output: output.into(),
+            messages,
+            usage,
+        }
+    }
+}
+
+pub use crate::agent::compact::{CompactResponseMessage, CompactUsage};

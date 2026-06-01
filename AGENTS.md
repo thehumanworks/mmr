@@ -73,6 +73,9 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- summarize project --project /path/to/proj` — generate a stateless summary over project history.
 - `cargo run -- summarize session <session-id>` — generate a stateless summary over one session.
 - `cargo run -- --source codex summarize source` — generate a stateless summary over one source across projects.
+- `cargo run -- compact project --project /path/to/proj --query "current task"` — compact project history through Morph Compact without paraphrasing surviving lines.
+- `cargo run -- compact session <session-id> -O md` — compact one session and print the compacted transcript text.
+- `cargo run -- --source codex compact source --query "what matters next"` — compact one source across projects.
 - `cargo run -- assimilate project` — return the project memory deduplication/generalization prompt, runbook, output contract, and evidence bundle.
 - `cargo run -- --source codex assimilate source` — return the harness-wide assimilation prompt, runbook, output contract, and evidence bundle.
 - `cargo run -- skill load` — print the bundled mmr agent skill to stdout for immediate agent context.
@@ -96,6 +99,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for project-scoped list/read/recall commands; unset or `1` keeps the default auto-discovery behavior.
 - `MMR_DEFAULT_SOURCE=codex|claude|cursor|grok|pi` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
 - `MMR_SUMMARISER_MODEL=<model>` sets the default OpenAI-compatible model for `summarize`; `--model` overrides it for one command. `OPENAI_API_KEY` is required, and `OPENAI_BASE_URL` can point at OpenAI, OpenRouter, or a compatible proxy.
+- `MORPHLLM_API_KEY=<key>` is required for `compact`; `MORPHLLM_BASE_URL` defaults to `https://api.morphllm.com/v1`, and `MMR_COMPACT_MODEL` defaults the Morph compact model (`--model` overrides it).
 
 ## Summarize command and `--instructions` system prompt architecture
 
