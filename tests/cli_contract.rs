@@ -2817,6 +2817,33 @@ exit 1
 }
 
 #[test]
+fn read_project_host_remote_peer_subcommand_missing_is_structured() {
+    let fixture = TestFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-peer-subcommand-missing");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+echo "error: unrecognized subcommand 'peer'" >&2
+echo "" >&2
+echo "Usage: mmr [OPTIONS] <COMMAND>" >&2
+exit 2
+"#,
+    );
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let output = fixture.run_cli_with_env(
+        &["read", "project", "--host", "studio"],
+        &[("PATH", path.as_str())],
+    );
+    assert_eq!(output.status.code(), Some(3));
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["status"], "failed");
+    assert_eq!(json["error_kind"], "peer_mmr_unavailable");
+    assert_eq!(json["host"], "studio");
+}
+
+#[test]
 fn read_project_without_host_omits_peer_results() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&[

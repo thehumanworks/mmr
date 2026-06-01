@@ -295,6 +295,7 @@ fn classify_peer_failure(stderr: &str) -> &'static str {
         || lower.contains("mmr: not found")
         || lower.contains("command not found")
         || lower.contains("no such file or directory")
+        || lower.contains("unrecognized subcommand")
         || lower.contains("unknown command")
         || lower.contains("unsupported peer protocol")
     {
