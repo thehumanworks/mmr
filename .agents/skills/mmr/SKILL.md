@@ -49,6 +49,6 @@ For most continuity and previous-session work, load the `session-mining` subskil
 ## Related Local Skills
 
 - `mmr-clap-colored-cli` — Developing the mmr CLI surface, contracts, and output behavior
-- `mmr-teleport-providers` — Packing and applying native session bundles across providers
+- `mmr-native-bundle-providers` — Maintaining native session bundle profiles across providers
 
 Prefer the most specific skill for the task at hand.

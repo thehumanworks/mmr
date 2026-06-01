@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::types::SourceFilter;
+use crate::types::{SortBy, SortOrder, SourceFilter};
 
 pub const PEER_PROTOCOL_VERSION: u32 = 1;
 const SSH_CONNECT_TIMEOUT_SECS: u64 = 5;
@@ -31,7 +31,7 @@ pub struct PeerProjectIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerRequestLimits {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_limit: Option<usize>,
+    pub limit: Option<usize>,
     #[serde(default)]
     pub offset: usize,
 }
@@ -53,6 +53,46 @@ pub struct PeerProjectRequest {
     pub limits: PeerRequestLimits,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recall: Option<PeerRecallRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerListProjectsRequest {
+    pub protocol_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceFilter>,
+    pub limits: PeerRequestLimits,
+    pub sort_by: SortBy,
+    pub order: SortOrder,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerListSessionsRequest {
+    pub protocol_version: u32,
+    pub project: PeerProjectIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceFilter>,
+    #[serde(default)]
+    pub all: bool,
+    pub limits: PeerRequestLimits,
+    pub sort_by: SortBy,
+    pub order: SortOrder,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerReadSessionRequest {
+    pub protocol_version: u32,
+    pub session_id: String,
+    pub project: PeerProjectIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<SourceFilter>,
+    pub limits: PeerRequestLimits,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerReadSourceRequest {
+    pub protocol_version: u32,
+    pub source: SourceFilter,
+    pub limits: PeerRequestLimits,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,8 +180,13 @@ pub fn peer_status() -> PeerStatusResponse {
         protocol_version: PEER_PROTOCOL_VERSION,
         mmr_version: env!("CARGO_PKG_VERSION").to_string(),
         capabilities: vec![
+            "list-projects".to_string(),
+            "list-sessions".to_string(),
+            "read-session".to_string(),
             "read-project".to_string(),
+            "read-source".to_string(),
             "context-project".to_string(),
+            "context-source".to_string(),
             "recall".to_string(),
             "teleport-pack".to_string(),
         ],

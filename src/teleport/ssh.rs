@@ -61,7 +61,7 @@ pub fn remote_inbox_bundle_path(bundle_id: &str) -> String {
 
 pub fn remote_apply_command(bundle_id: &str) -> String {
     format!(
-        "mmr teleport apply --to {}",
+        "mmr import bundle --to {} --apply",
         remote_inbox_bundle_path(bundle_id)
     )
 }
@@ -100,7 +100,7 @@ pub fn ssh_probe_mmr_argv(host: &str) -> Vec<String> {
 
 pub fn ssh_stream_apply_argv(host: &str) -> Vec<String> {
     let mut argv = ssh_base_args(host);
-    argv.push("mmr teleport apply --to -".to_string());
+    argv.push("mmr import bundle --to - --apply".to_string());
     argv
 }
 
@@ -183,7 +183,7 @@ mod tests {
         let argv = ssh_stream_apply_argv("alice@laptop");
         assert_eq!(
             argv.last().map(String::as_str),
-            Some("mmr teleport apply --to -")
+            Some("mmr import bundle --to - --apply")
         );
         assert_eq!(argv.first().map(String::as_str), Some("ssh"));
     }
@@ -247,7 +247,7 @@ mod tests {
         assert!(plan.probe_remote_mmr.iter().any(|arg| arg.contains("mmr")));
         assert_eq!(
             plan.stream_apply.last().map(String::as_str),
-            Some("mmr teleport apply --to -")
+            Some("mmr import bundle --to - --apply")
         );
         assert!(plan.mkdir_inbox.last().unwrap().contains("tp:v1:deadbeef"));
         assert!(plan.scp_bundle.last().unwrap().contains("bundle.mmr"));
@@ -257,7 +257,7 @@ mod tests {
     fn remote_apply_command_reports_exact_inbox_locator() {
         assert_eq!(
             remote_apply_command("tp:v1:abc"),
-            "mmr teleport apply --to ~/.mmr/teleport/inbox/tp:v1:abc/bundle.mmr"
+            "mmr import bundle --to ~/.mmr/teleport/inbox/tp:v1:abc/bundle.mmr --apply"
         );
     }
 }

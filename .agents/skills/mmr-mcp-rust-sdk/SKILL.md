@@ -34,7 +34,7 @@ Expose mmr data with the same semantics as the CLI:
 - Project scoping should match current CLI project detection and alias resolution.
 - Tool responses should preserve existing JSON response structs where practical.
 - Read/query tools should include source and project metadata on returned items.
-- Side-effecting commands need explicit design before exposure; do not quietly turn `sync`, `import`, `redact`, or `teleport receive/apply` into MCP tools.
+- Side-effecting commands need explicit design before exposure; do not quietly turn `sync`, `import bundle`, `share session`, `redact`, or native bundle apply flows into MCP tools.
 
 ## Verification
 

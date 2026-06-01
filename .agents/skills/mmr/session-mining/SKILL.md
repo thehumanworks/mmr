@@ -99,7 +99,7 @@ After using the skill on a real trace, you should be able to answer:
 - Parent: `.agents/skills/mmr/SKILL.md`
 - `mmr summarize` — built-in continuity brief generator (this skill can feed richer input into it)
 - `mmr note` + `mmr assimilate project` — for turning analysis into durable memory
-- Other mmr siblings: `mmr-clap-colored-cli`, `mmr-teleport-providers`
+- Other mmr siblings: `mmr-clap-colored-cli`, `mmr-native-bundle-providers`
 
 ## References
 

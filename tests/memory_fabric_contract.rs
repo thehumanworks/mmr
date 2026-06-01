@@ -1218,8 +1218,8 @@ fn status_diagnostics_contract_is_implemented() {
         claude["action"]
             .as_str()
             .unwrap_or_default()
-            .contains("mmr --source claude import --project"),
-        "source diagnostics should include copy/paste import recovery"
+            .contains("mmr --source claude ingest events --project"),
+        "source diagnostics should include copy/paste ingest recovery"
     );
 }
 
@@ -1532,7 +1532,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         sensitive_codex,
     )
     .expect("write sensitive codex fixture");
-    let sensitive_import = command("import", &data_home, &project)
+    let sensitive_import = command("ingest events", &data_home, &project)
         .args([
             "--source",
             "codex",
@@ -2910,9 +2910,10 @@ fn codex_import_cli_contract_is_implemented() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "import",
             "--source",
             "codex",
+            "ingest",
+            "events",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--source-root",
@@ -2935,9 +2936,10 @@ fn codex_import_cli_contract_is_implemented() {
 
     let replay = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "import",
             "--source",
             "codex",
+            "ingest",
+            "events",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--source-root",
@@ -3095,9 +3097,10 @@ fn claude_import_cli_contract_is_implemented() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "import",
             "--source",
             "claude",
+            "ingest",
+            "events",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--source-root",
@@ -3120,9 +3123,10 @@ fn claude_import_cli_contract_is_implemented() {
 
     let replay = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "import",
             "--source",
             "claude",
+            "ingest",
+            "events",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--source-root",
@@ -3301,9 +3305,10 @@ fn cursor_import_cli_contract_is_implemented() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "import",
             "--source",
             "cursor",
+            "ingest",
+            "events",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--source-root",
@@ -3326,9 +3331,10 @@ fn cursor_import_cli_contract_is_implemented() {
 
     let replay = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "import",
             "--source",
             "cursor",
+            "ingest",
+            "events",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--source-root",
@@ -3465,9 +3471,10 @@ fn cursor_import_cli_contract_is_implemented() {
     .expect("write direct flat cursor rollout");
     let flat_import = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args([
-            "import",
             "--source",
             "cursor",
+            "ingest",
+            "events",
             "--project",
             project.to_str().expect("project path UTF-8"),
             "--source-root",

@@ -32,6 +32,19 @@ mmr --help
 mmr skill load
 ```
 
+Common workflows:
+
+```bash
+mmr list sessions --remote mini --project /path/to/project
+mmr share session latest --project /path/to/project --to user@host
+mmr import session --from mini --session latest --project /path/to/project --read-only
+mmr --source codex ingest events --project /path/to/project
+```
+
+See [docs/mmr-command-taxonomy.md](docs/mmr-command-taxonomy.md) and
+[docs/mmr-session-sharing.md](docs/mmr-session-sharing.md) for the current CLI
+shape.
+
 ## Development
 
 ```bash

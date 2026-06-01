@@ -9,16 +9,16 @@ store.
 
 ## Usage
 
-Import Claude history into a project:
+Ingest Claude history into a project:
 
 ```bash
-mmr import --source claude --project /path/to/project
+mmr --source claude ingest events --project /path/to/project
 ```
 
 Use a fixture or custom source root:
 
 ```bash
-mmr import --source claude --project /path/to/project --source-root /tmp/.claude
+mmr --source claude ingest events --project /path/to/project --source-root /tmp/.claude
 ```
 
 Without `--source-root`, the importer reads `$HOME/.claude`. Discovery scans

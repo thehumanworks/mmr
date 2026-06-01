@@ -123,19 +123,20 @@ fn run_mmr(home: &Path, args: &[&str]) -> std::process::Output {
         .expect("run mmr")
 }
 
-fn spawn_teleport_serve(
+fn spawn_share_session_http(
     source_home: &Path,
     extra_args: &[&str],
 ) -> (std::process::Child, serde_json::Value) {
     let mut args = vec![
-        "teleport",
-        "serve",
         "--source",
         "codex",
-        "--session",
+        "share",
+        "session",
         "sess-codex-1",
         "--project",
         "/Users/test/codex-proj",
+        "--via",
+        "http",
         "--bind",
         "127.0.0.1:0",
         "--timeout",
@@ -149,15 +150,15 @@ fn spawn_teleport_serve(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn teleport serve");
+        .expect("spawn share session http");
 
-    let stdout = child.stdout.take().expect("serve stdout");
+    let stdout = child.stdout.take().expect("share stdout");
     let mut reader = std::io::BufReader::new(stdout);
     let mut line = String::new();
     reader
         .read_line(&mut line)
-        .expect("read teleport serve startup JSON");
-    let startup = serde_json::from_str(&line).expect("parse serve startup JSON");
+        .expect("read share startup JSON");
+    let startup = serde_json::from_str(&line).expect("parse share startup JSON");
     (child, startup)
 }
 
@@ -169,62 +170,65 @@ fn empty_target_home(base: &Path) -> PathBuf {
 
 #[test]
 #[ignore = "benchmark test: run explicitly"]
-fn benchmark_teleport_pack_inspect_apply_readability() {
+fn benchmark_share_import_bundle_readability() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let source_home = create_source_home(tmp.path());
     let target_home = empty_target_home(tmp.path());
-    let bundle_path = tmp.path().join("teleport-handoff.mmr");
+    let bundle_path = tmp.path().join("session-handoff.mmr");
+    let to = format!("file://{}", tmp.path().join("bundle-out").display());
     let target_project = "/Users/test/bench-target-proj";
     let session_id = "sess-codex-1";
 
     let started = Instant::now();
 
-    let pack_output = run_mmr(
+    let share_output = run_mmr(
         &source_home,
         &[
-            "teleport",
-            "pack",
             "--source",
             "codex",
-            "--session",
+            "share",
+            "session",
             session_id,
             "--project",
             "/Users/test/codex-proj",
             "--to",
-            bundle_path.to_str().expect("bundle path"),
+            &to,
         ],
     );
     assert!(
-        pack_output.status.success(),
-        "pack stderr={}",
-        String::from_utf8_lossy(&pack_output.stderr)
+        share_output.status.success(),
+        "share stderr={}",
+        String::from_utf8_lossy(&share_output.stderr)
     );
-    let pack_json = parse_stdout_json(&pack_output);
-    assert_eq!(pack_json["status"], "ok");
+    let share_json = parse_stdout_json(&share_output);
+    assert_eq!(share_json["status"], "ok");
+    let inbox_path = PathBuf::from(share_json["inbox_path"].as_str().expect("inbox_path"));
+    fs::copy(inbox_path.join("bundle.mmr"), &bundle_path).expect("copy benchmark bundle");
 
-    let inspect_output = run_mmr(
+    let read_output = run_mmr(
         &source_home,
         &[
-            "teleport",
-            "inspect",
+            "import",
+            "bundle",
             bundle_path.to_str().expect("bundle path"),
+            "--read-only",
         ],
     );
     assert!(
-        inspect_output.status.success(),
-        "inspect stderr={}",
-        String::from_utf8_lossy(&inspect_output.stderr)
+        read_output.status.success(),
+        "read stderr={}",
+        String::from_utf8_lossy(&read_output.stderr)
     );
-    let inspect_json = parse_stdout_json(&inspect_output);
-    assert_eq!(inspect_json["apply_ready"], true);
+    let read_json = parse_stdout_json(&read_output);
+    assert_eq!(read_json["status"], "ok");
 
     let apply_output = run_mmr(
         &target_home,
         &[
-            "teleport",
-            "apply",
-            "--to",
+            "import",
+            "bundle",
             bundle_path.to_str().expect("bundle path"),
+            "--apply",
             "--project",
             target_project,
         ],
@@ -262,7 +266,7 @@ fn benchmark_teleport_pack_inspect_apply_readability() {
 
     let elapsed = started.elapsed();
     eprintln!(
-        "BENCH teleport.pack_inspect_apply_readability session={} message_count={} elapsed_ms={}",
+        "BENCH share_import.bundle_readability session={} message_count={} elapsed_ms={}",
         session_id,
         messages.len(),
         elapsed.as_millis()
@@ -271,7 +275,7 @@ fn benchmark_teleport_pack_inspect_apply_readability() {
 
 #[test]
 #[ignore = "benchmark test: run explicitly"]
-fn benchmark_teleport_file_send_receive_two_machine() {
+fn benchmark_share_file_import_bundle_two_machine() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let source_home = create_source_home(tmp.path());
     let target_home = empty_target_home(tmp.path());
@@ -281,14 +285,13 @@ fn benchmark_teleport_file_send_receive_two_machine() {
 
     let started = Instant::now();
 
-    let send_output = run_mmr(
+    let share_output = run_mmr(
         &source_home,
         &[
-            "teleport",
-            "send",
             "--source",
             "codex",
-            "--session",
+            "share",
+            "session",
             "sess-codex-1",
             "--project",
             "/Users/test/codex-proj",
@@ -297,37 +300,37 @@ fn benchmark_teleport_file_send_receive_two_machine() {
         ],
     );
     assert!(
-        send_output.status.success(),
-        "send stderr={}",
-        String::from_utf8_lossy(&send_output.stderr)
+        share_output.status.success(),
+        "share stderr={}",
+        String::from_utf8_lossy(&share_output.stderr)
     );
-    let send_json = parse_stdout_json(&send_output);
-    assert_eq!(send_json["transport"], "file");
-    let bundle_id = send_json["bundle_id"].as_str().expect("bundle_id");
+    let share_json = parse_stdout_json(&share_output);
+    assert_eq!(share_json["transport"], "file");
+    let bundle_id = share_json["bundle_id"].as_str().expect("bundle_id");
     let entry = inbox.join(bundle_id);
 
-    let receive_output = run_mmr(
+    let import_output = run_mmr(
         &target_home,
         &[
-            "teleport",
-            "receive",
-            "--to",
+            "import",
+            "bundle",
             entry.to_str().expect("inbox entry"),
+            "--apply",
             "--project",
             target_project,
         ],
     );
     assert!(
-        receive_output.status.success(),
-        "receive stderr={}",
-        String::from_utf8_lossy(&receive_output.stderr)
+        import_output.status.success(),
+        "import stderr={}",
+        String::from_utf8_lossy(&import_output.stderr)
     );
-    let receive_json = parse_stdout_json(&receive_output);
-    assert_eq!(receive_json["apply"]["status"], "ok");
+    let import_json = parse_stdout_json(&import_output);
+    assert_eq!(import_json["apply"]["status"], "ok");
 
     let elapsed = started.elapsed();
     eprintln!(
-        "BENCH teleport.file_send_receive bundle_id={} elapsed_ms={}",
+        "BENCH share_import.file_bundle bundle_id={} elapsed_ms={}",
         bundle_id,
         elapsed.as_millis()
     );
@@ -335,9 +338,9 @@ fn benchmark_teleport_file_send_receive_two_machine() {
 
 #[test]
 #[ignore = "benchmark test: run explicitly"]
-fn benchmark_teleport_http_loopback_receive() {
+fn benchmark_share_http_import_bundle_loopback() {
     if !loopback_bind_available() {
-        eprintln!("BENCH teleport.http_loopback_receive skipped: loopback bind unavailable");
+        eprintln!("BENCH share_import.http_bundle skipped: loopback bind unavailable");
         return;
     }
 
@@ -347,37 +350,38 @@ fn benchmark_teleport_http_loopback_receive() {
     let target_project = "/Users/test/bench-http-target";
 
     let started = Instant::now();
-    let (mut serve_child, startup) = spawn_teleport_serve(&source_home, &[]);
+    let (mut share_child, startup) = spawn_share_session_http(&source_home, &[]);
     assert_eq!(startup["transport"], "http");
     let listen_url = startup["listen_url"].as_str().expect("listen_url");
 
-    let receive_output = run_mmr(
+    let import_output = run_mmr(
         &target_home,
         &[
-            "teleport",
-            "receive",
+            "import",
+            "bundle",
             listen_url,
+            "--apply",
             "--project",
             target_project,
         ],
     );
     assert!(
-        receive_output.status.success(),
-        "receive stderr={}",
-        String::from_utf8_lossy(&receive_output.stderr)
+        import_output.status.success(),
+        "import stderr={}",
+        String::from_utf8_lossy(&import_output.stderr)
     );
-    let receive_json = parse_stdout_json(&receive_output);
-    assert_eq!(receive_json["apply"]["status"], "ok");
+    let import_json = parse_stdout_json(&import_output);
+    assert_eq!(import_json["apply"]["status"], "ok");
 
-    let serve_status = serve_child.wait().expect("wait for serve");
+    let serve_status = share_child.wait().expect("wait for share");
     assert!(
         serve_status.success(),
-        "serve should exit after one download"
+        "share should exit after one download"
     );
 
     let elapsed = started.elapsed();
     eprintln!(
-        "BENCH teleport.http_loopback_receive listen_url={} elapsed_ms={}",
+        "BENCH share_import.http_bundle listen_url={} elapsed_ms={}",
         listen_url,
         elapsed.as_millis()
     );

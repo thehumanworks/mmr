@@ -9,16 +9,16 @@ Fabric store.
 
 ## Usage
 
-Import Codex history into a project:
+Ingest Codex history into a project:
 
 ```bash
-mmr import --source codex --project /path/to/project
+mmr --source codex ingest events --project /path/to/project
 ```
 
 Use a fixture or custom source root:
 
 ```bash
-mmr import --source codex --project /path/to/project --source-root /tmp/.codex
+mmr --source codex ingest events --project /path/to/project --source-root /tmp/.codex
 ```
 
 Without `--source-root`, the importer reads `$HOME/.codex`, including

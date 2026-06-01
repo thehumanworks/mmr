@@ -1,22 +1,26 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ApiProject {
     pub name: String,
     pub source: String,
     pub original_path: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     pub session_count: i32,
     pub message_count: i32,
     pub last_activity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ApiMessageOrigin>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ApiProjectsResponse {
     pub projects: Vec<ApiProject>,
     pub total_messages: i64,
     pub total_sessions: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_results: Option<Vec<ApiPeerResult>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,12 +35,16 @@ pub struct ApiSession {
     pub user_messages: i32,
     pub assistant_messages: i32,
     pub preview: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ApiMessageOrigin>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ApiSessionsResponse {
     pub sessions: Vec<ApiSession>,
     pub total_sessions: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_results: Option<Vec<ApiPeerResult>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

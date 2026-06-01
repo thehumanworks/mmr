@@ -214,7 +214,7 @@ Missing provider root:
 
 ```bash
 mmr status --pretty
-mmr --source codex import --project "$(pwd)" --source-root "$HOME/.codex"
+mmr --source codex ingest events --project "$(pwd)" --source-root "$HOME/.codex"
 ```
 
 Replace `codex` and the path with `claude`/`$HOME/.claude` or

@@ -41,15 +41,6 @@ impl SendTransport {
             )),
         }
     }
-
-    pub fn from_env_or_default() -> Self {
-        match std::env::var("MMR_TELEPORT_TRANSPORT") {
-            Ok(value) if value.eq_ignore_ascii_case("ssh") => Self::Ssh,
-            Ok(value) if value.eq_ignore_ascii_case("file") => Self::File,
-            Ok(value) if value.eq_ignore_ascii_case("auto") || value.is_empty() => Self::Auto,
-            _ => Self::Auto,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,7 +301,7 @@ fn execute_ssh_send(
 
     copy_bundle_to_remote_inbox(host, bundle_path, &bundle_id, plan)?;
     eprintln!(
-        "teleport: remote mmr not found; staged bundle in {}",
+        "share: remote mmr not found; staged bundle in {}",
         remote_inbox_bundle_path(&bundle_id)
     );
     Ok(build_ssh_send_response(
@@ -444,7 +435,7 @@ fn stream_apply(host: &str, bundle_path: &Path) -> Result<String, TeleportFailur
             "teleport/send",
             kind,
             format!(
-                "remote mmr teleport apply failed for {host}: {}",
+                "remote mmr import bundle failed for {host}: {}",
                 stderr.trim()
             ),
         ));
@@ -463,7 +454,7 @@ fn stream_apply(host: &str, bundle_path: &Path) -> Result<String, TeleportFailur
             "teleport/send",
             SshErrorKind::RemoteApply,
             format!(
-                "remote mmr teleport apply returned failed status: {}",
+                "remote mmr import bundle returned failed status: {}",
                 apply_json
                     .get("message")
                     .and_then(|value| value.as_str())

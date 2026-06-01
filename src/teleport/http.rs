@@ -137,25 +137,25 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
 
     let bundle_path = Path::new(pack.bundle_path.as_ref().ok_or_else(|| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             "pack did not produce a bundle path",
         ))
     })?);
     let sha256 = pack.sha256.clone().ok_or_else(|| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             "pack did not produce bundle sha256",
         ))
     })?;
     let bytes = pack.bytes.ok_or_else(|| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             "pack did not produce bundle bytes",
         ))
     })?;
     let bundle_body = fs::read(bundle_path).map_err(|error| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             format!("read packed bundle {}: {error}", bundle_path.display()),
         ))
     })?;
@@ -166,7 +166,7 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
     let listener = bind_listener(&bind_spec).map_err(ServeError::BeforeStartup)?;
     let bound_addr = listener.local_addr().map_err(|error| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             format!("read bound address: {error}"),
         ))
     })?;
@@ -177,13 +177,13 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
     .format(&Rfc3339)
     .map_err(|error| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             format!("format expires_at: {error}"),
         ))
     })?;
 
     let startup = ServeStartupResponse {
-        command: "teleport/serve",
+        command: "share/session",
         status: TeleportStatus::Ok,
         transport: "http",
         listen_url,
@@ -198,7 +198,7 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
     };
     let startup_json = serde_json::to_string(&startup).map_err(|error| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             format!("serialize startup JSON: {error}"),
         ))
     })?;
@@ -209,16 +209,16 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
         .and_then(|_| stdout.flush())
         .map_err(|error| {
             ServeError::BeforeStartup(TeleportFailure::runtime(
-                "teleport/serve",
+                "share/session",
                 format!("write startup JSON: {error}"),
             ))
         })?;
 
-    eprintln!("teleport: native transfer may contain secrets/private paths");
+    eprintln!("share: native transfer may contain secrets/private paths");
 
     listener.set_nonblocking(true).map_err(|error| {
         ServeError::BeforeStartup(TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             format!("set listener nonblocking: {error}"),
         ))
     })?;
@@ -232,7 +232,7 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
                 // Large bundle bodies need blocking writes or write_all fails with EAGAIN.
                 stream.set_nonblocking(false).map_err(|error| {
                     ServeError::BeforeStartup(TeleportFailure::runtime(
-                        "teleport/serve",
+                        "share/session",
                         format!("set accepted stream blocking: {error}"),
                     ))
                 })?;
@@ -253,7 +253,7 @@ pub fn serve_session(service: &QueryService, options: ServeOptions) -> Result<()
             }
             Err(error) => {
                 return Err(ServeError::BeforeStartup(TeleportFailure::runtime(
-                    "teleport/serve",
+                    "share/session",
                     format!("accept connection: {error}"),
                 )));
             }
@@ -489,18 +489,18 @@ fn handle_serve_connection(
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|error| {
-            TeleportFailure::runtime("teleport/serve", format!("set read timeout: {error}"))
+            TeleportFailure::runtime("share/session", format!("set read timeout: {error}"))
         })?;
     let mut buffer = [0u8; 4096];
     let read = stream.read(&mut buffer).map_err(|error| {
-        TeleportFailure::runtime("teleport/serve", format!("read HTTP request: {error}"))
+        TeleportFailure::runtime("share/session", format!("read HTTP request: {error}"))
     })?;
     if read == 0 {
         return Ok(false);
     }
     let request = std::str::from_utf8(&buffer[..read]).map_err(|error| {
         TeleportFailure::runtime(
-            "teleport/serve",
+            "share/session",
             format!("HTTP request is not valid UTF-8: {error}"),
         )
     })?;
@@ -568,7 +568,7 @@ fn write_http_response_with_headers(
         .and_then(|_| stream.write_all(body))
         .and_then(|_| stream.flush())
         .map_err(|error| {
-            TeleportFailure::runtime("teleport/serve", format!("write HTTP response: {error}"))
+            TeleportFailure::runtime("share/session", format!("write HTTP response: {error}"))
         })
 }
 
@@ -616,12 +616,12 @@ fn tailscale_ipv4() -> Option<String> {
 fn bind_listener(bind_spec: &str) -> Result<TcpListener, TeleportFailure> {
     let addr: SocketAddr = bind_spec.parse().map_err(|_| {
         TeleportFailure::usage(
-            "teleport/serve",
+            "share/session",
             format!("invalid bind address {bind_spec:?}; expected host:port"),
         )
     })?;
     TcpListener::bind(addr).map_err(|error| {
-        TeleportFailure::runtime("teleport/serve", format!("bind {bind_spec}: {error}"))
+        TeleportFailure::runtime("share/session", format!("bind {bind_spec}: {error}"))
     })
 }
 
@@ -639,10 +639,10 @@ fn advertised_host(bind_spec: &str, bound_addr: SocketAddr) -> String {
 
 fn read_urandom(out: &mut [u8]) -> Result<(), TeleportFailure> {
     let mut file = fs::File::open("/dev/urandom").map_err(|error| {
-        TeleportFailure::runtime("teleport/serve", format!("open /dev/urandom: {error}"))
+        TeleportFailure::runtime("share/session", format!("open /dev/urandom: {error}"))
     })?;
     file.read_exact(out).map_err(|error| {
-        TeleportFailure::runtime("teleport/serve", format!("read /dev/urandom: {error}"))
+        TeleportFailure::runtime("share/session", format!("read /dev/urandom: {error}"))
     })
 }
 
@@ -658,7 +658,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 fn map_pack_failure_for_serve(failure: TeleportFailure) -> TeleportFailure {
-    let mut mapped = TeleportFailure::runtime("teleport/serve", failure.message);
+    let mut mapped = TeleportFailure::runtime("share/session", failure.message);
     mapped.exit_code = failure.exit_code;
     mapped.error_kind = failure.error_kind;
     mapped

@@ -13,9 +13,9 @@ When implementing or reviewing behavior:
 
 - [Command taxonomy](../docs/mmr-command-taxonomy.md)
 - [Recall and read session behavior](messages.md)
-- [Teleport command](teleport.md)
-- [Teleport user guide](../docs/mmr-teleport.md)
-- [Teleport E2E validation](../docs/mmr-teleport-validation.md)
+- [Session sharing and remote reads](session-sharing.md)
+- [Session sharing user guide](../docs/mmr-session-sharing.md)
+- [Session sharing validation](../docs/mmr-session-sharing-validation.md)
 - [Memory Fabric MVP contract](../docs/mmr-memory-fabric-mvp.md)
 - [Memory Fabric quickstart and recovery](../docs/mmr-memory-fabric-quickstart.md)
 - [Memory Fabric release gate](../docs/mmr-memory-fabric-release-gate.md)

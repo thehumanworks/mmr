@@ -301,6 +301,7 @@ impl QueryService {
                 session_count: project.session_count,
                 message_count: project.message_count,
                 last_activity: project.last_activity,
+                origin: None,
             })
             .collect::<Vec<_>>();
 
@@ -319,6 +320,7 @@ impl QueryService {
             projects,
             total_messages,
             total_sessions,
+            peer_results: None,
         }
     }
 
@@ -361,12 +363,14 @@ impl QueryService {
                 user_messages: session.user_messages,
                 assistant_messages: session.assistant_messages,
                 preview: session.preview,
+                origin: None,
             })
             .collect::<Vec<_>>();
 
         Ok(ApiSessionsResponse {
             sessions,
             total_sessions,
+            peer_results: None,
         })
     }
 
@@ -441,6 +445,7 @@ impl QueryService {
                 user_messages: session.user_messages,
                 assistant_messages: session.assistant_messages,
                 preview: session.preview,
+                origin: None,
             })
             .collect::<Vec<_>>();
         if let Some(session_id) = session_id {

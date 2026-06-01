@@ -9,16 +9,16 @@ Memory Fabric store.
 
 ## Usage
 
-Import Cursor history into a project:
+Ingest Cursor history into a project:
 
 ```bash
-mmr import --source cursor --project /path/to/project
+mmr --source cursor ingest events --project /path/to/project
 ```
 
 Use a fixture or custom source root:
 
 ```bash
-mmr import --source cursor --project /path/to/project --source-root /tmp/.cursor
+mmr --source cursor ingest events --project /path/to/project --source-root /tmp/.cursor
 ```
 
 Without `--source-root`, the importer reads `$HOME/.cursor`. Discovery scans

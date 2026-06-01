@@ -36,7 +36,6 @@ pub use resume::{
 pub use send::{SendOptions, SendTransport, send_session};
 
 use serde::Serialize;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -72,6 +71,7 @@ pub struct TeleportScanSummary {
     pub pii_coverage: Option<String>,
 }
 
+#[cfg(any())]
 pub(crate) fn resolve_bundle_locator(
     positional: Option<PathBuf>,
     to: Option<PathBuf>,

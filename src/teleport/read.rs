@@ -373,7 +373,7 @@ fn empty_read_response(
         dry_run,
         text: match output_format {
             TeleportOutputFormat::Md => {
-                Some("# Teleport read\n\n(no session content)\n".to_string())
+                Some("# Import bundle\n\n(no session content)\n".to_string())
             }
             TeleportOutputFormat::Json => None,
         },
@@ -382,7 +382,7 @@ fn empty_read_response(
 
 fn read_markdown(bundle: &TeleportBundleFile, messages: &[ApiMessage]) -> String {
     let mut parts = vec![format!(
-        "# Teleport read\n\n- source: {}\n- session_id: {}\n- project: {}\n- messages: {}\n",
+        "# Import bundle\n\n- source: {}\n- session_id: {}\n- project: {}\n- messages: {}\n",
         bundle.manifest.source,
         bundle.manifest.session.source_session_id,
         bundle.metadata.project_name,
