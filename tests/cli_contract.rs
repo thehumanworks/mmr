@@ -87,7 +87,11 @@ fn run_cli_with_home_in_dir(home: &Path, cwd: &Path, args: &[&str]) -> Output {
 
 fn run_cli_with_home_and_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
-    command.args(args).env("HOME", home);
+    command
+        .args(args)
+        .env("HOME", home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("MMR_CONFIG_FILE");
     for (key, value) in env {
         command.env(key, value);
     }
@@ -1868,6 +1872,231 @@ JSON
 }
 
 #[test]
+fn summarize_fails_without_api_key_configuration() {
+    let fixture = TestFixture::seeded();
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &["summarize", "project", "--project", "/Users/test/proj"],
+        &[],
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("summarize.apiKey"));
+    assert!(stderr.contains("summarize.apiKeyEnv"));
+    assert!(stderr.contains("OPENAI_API_KEY"));
+}
+
+#[test]
+fn summarize_defaults_model_gpt_55_with_openai_api_key_only() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-default-model","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"default model summary"}}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "summarize",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "-O",
+            "json",
+        ],
+        &[
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(stdout_json["model"].as_str().unwrap(), "gpt-5.5");
+    assert_eq!(
+        stdout_json["text"].as_str().unwrap(),
+        "default model summary"
+    );
+}
+
+#[test]
+fn summarize_api_key_env_takes_precedence_over_openai_api_key() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-env-precedence","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"env precedence summary"}}]}"#,
+    );
+    mmr::config::write_summarize_config_for_tests_with_api(
+        &fixture.home,
+        base_url.as_str(),
+        "gpt-5.5",
+        None,
+        Some("MMR_TEST_API_KEY"),
+    )
+    .expect("write summarize config");
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "summarize",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "-O",
+            "json",
+        ],
+        &[
+            ("MMR_TEST_API_KEY", "preferred-key"),
+            ("OPENAI_API_KEY", "ignored-key"),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["text"].as_str().unwrap(),
+        "env precedence summary"
+    );
+}
+
+#[test]
+fn status_summary_runner_configured_with_api_key_env() {
+    let fixture = TestFixture::seeded();
+    mmr::config::write_summarize_config_for_tests_with_api(
+        &fixture.home,
+        "https://api.openai.com/v1",
+        "gpt-5.5",
+        None,
+        Some("MMR_TEST_API_KEY"),
+    )
+    .expect("write summarize config");
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &["status", "--pretty"],
+        &[("MMR_TEST_API_KEY", "test-key")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status_json = parse_stdout_json(&output);
+    assert_eq!(
+        status_json["diagnostics"]["summary_runner"]["status"],
+        "configured"
+    );
+    assert_eq!(
+        status_json["diagnostics"]["summary_runner"]["model"]
+            .as_str()
+            .unwrap(),
+        "gpt-5.5"
+    );
+    assert!(
+        status_json["diagnostics"]["summary_runner"]["config_file"]
+            .as_str()
+            .is_some_and(|path| path.contains("config.json"))
+    );
+}
+
+#[test]
+fn summarize_reads_api_key_env_from_config_file() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-config-env","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"api key env summary"}}]}"#,
+    );
+    mmr::config::write_summarize_config_for_tests_with_api(
+        &fixture.home,
+        base_url.as_str(),
+        "gpt-5.5",
+        None,
+        Some("MMR_TEST_API_KEY"),
+    )
+    .expect("write summarize config");
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "summarize",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "-O",
+            "json",
+        ],
+        &[("MMR_TEST_API_KEY", "test-key")],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(stdout_json["text"].as_str().unwrap(), "api key env summary");
+}
+
+#[test]
+fn summarize_reads_api_credentials_from_config_file() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-config","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"config summary"}}]}"#,
+    );
+    mmr::config::write_summarize_config_for_tests_with_api(
+        &fixture.home,
+        base_url.as_str(),
+        "gpt-5.5",
+        Some("test-key"),
+        None,
+    )
+    .expect("write summarize config");
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "summarize",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "-O",
+            "json",
+        ],
+        &[],
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(stdout_json["model"].as_str().unwrap(), "gpt-5.5");
+    assert_eq!(stdout_json["text"].as_str().unwrap(), "config summary");
+}
+
+#[test]
 fn summarize_uses_model_from_env() {
     if !loopback_bind_available() {
         return;
@@ -2230,6 +2459,80 @@ fn remember_without_instructions_includes_default_purpose_and_output_sections() 
         system.contains("Resume Instructions"),
         "default output sections must be present"
     );
+}
+
+#[test]
+fn summarize_session_limit_pages_newest_first() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-page","model":"test-model","choices":[{"message":{"role":"assistant","content":"paged session summary"}}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "summarize",
+            "session",
+            "sess-codex-2",
+            "--project",
+            "/Users/test/codex-proj",
+            "--limit",
+            "1",
+        ],
+        &[
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = first_input_text(&body);
+    assert!(input.contains("second long codex answer"));
+    assert!(!input.contains("start longer codex thread"));
+    assert!(!input.contains("follow-up question"));
+}
+
+#[test]
+fn summarize_project_limit_excludes_older_messages() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let (base_url, captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"interaction-proj-page","model":"test-model","choices":[{"message":{"role":"assistant","content":"paged project summary"}}]}"#,
+    );
+    let output = run_cli_with_home_and_env(
+        &fixture.home,
+        &[
+            "summarize",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "--limit",
+            "1",
+        ],
+        &[
+            ("OPENAI_API_KEY", "test-key"),
+            ("OPENAI_BASE_URL", base_url.as_str()),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    handle.join().expect("mock server thread");
+    let body = captured.lock().expect("captured body").clone().unwrap();
+    let input = first_input_text(&body);
+    assert!(input.contains("hi from assistant"));
+    assert!(!input.contains("hello from claude"));
 }
 
 #[test]

@@ -649,6 +649,8 @@ impl AssimilateSourceToolArgs {
 struct SummarizeProjectToolArgs {
     source: Option<String>,
     project: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
     instructions: Option<String>,
     model: Option<String>,
     output_format: Option<String>,
@@ -660,6 +662,8 @@ impl SummarizeProjectToolArgs {
         push_source(&mut args, self.source);
         args.extend(["summarize".to_string(), "project".to_string()]);
         push_opt(&mut args, "--project", self.project);
+        push_opt(&mut args, "--limit", self.limit);
+        push_opt(&mut args, "--offset", self.offset);
         push_summary_runner(&mut args, self.instructions, self.model, self.output_format);
         args
     }
@@ -670,6 +674,8 @@ struct SummarizeSessionToolArgs {
     session_id: String,
     source: Option<String>,
     project: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
     instructions: Option<String>,
     model: Option<String>,
     output_format: Option<String>,
@@ -685,6 +691,8 @@ impl SummarizeSessionToolArgs {
             self.session_id,
         ]);
         push_opt(&mut args, "--project", self.project);
+        push_opt(&mut args, "--limit", self.limit);
+        push_opt(&mut args, "--offset", self.offset);
         push_summary_runner(&mut args, self.instructions, self.model, self.output_format);
         args
     }

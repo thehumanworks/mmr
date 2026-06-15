@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::agent::chat_completions::{ChatCompletionRequest, ChatCompletionsClient};
+use crate::config::resolve_summarize_settings;
 use crate::messages::service::QueryService;
 use crate::messages::utils::{format_messages_for_input, load_session_transcripts};
 use crate::types::{RememberRequest, RememberResponse};
@@ -74,7 +75,8 @@ pub async fn remember(
     service: &QueryService,
     request: RememberRequest<'_>,
 ) -> Result<RememberResponse> {
-    let client = ChatCompletionsClient::from_env()?;
+    let settings = resolve_summarize_settings(Some(request.model))?;
+    let client = ChatCompletionsClient::new(settings.api_key, settings.base_url);
     let system_instruction = build_system_instruction(request.instructions);
 
     let sessions =
@@ -102,7 +104,8 @@ pub async fn summarize_formatted_messages(
     model: &str,
     formatted_messages: &str,
 ) -> Result<RememberResponse> {
-    let client = ChatCompletionsClient::from_env()?;
+    let settings = resolve_summarize_settings(Some(model))?;
+    let client = ChatCompletionsClient::new(settings.api_key, settings.base_url);
     let system_instruction = build_system_instruction(instructions);
     let input =
         format!("Analyze the following AI coding session transcript(s).\n\n{formatted_messages}");

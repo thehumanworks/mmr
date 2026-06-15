@@ -10,6 +10,9 @@ use crate::agent::{ai, compact};
 use crate::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot,
 };
+use crate::config::{
+    self, DEFAULT_SUMMARISER_MODEL, summarize_api_key_configured, summarize_endpoint_for_status,
+};
 use crate::dream::{
     DreamEvidence, DreamEvidenceMode, OmittedDreamEvidence, build_evidence_bundle,
     build_source_evidence_bundle,
@@ -80,8 +83,6 @@ impl std::error::Error for CliFailure {}
 
 const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
 const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
-const ENV_SUMMARISER_MODEL: &str = "MMR_SUMMARISER_MODEL";
-const DEFAULT_SUMMARISER_MODEL: &str = "gpt-4o-mini";
 const ENV_COMPACT_MODEL: &str = "MMR_COMPACT_MODEL";
 
 #[derive(Debug, Clone, Copy)]
@@ -420,6 +421,12 @@ pub struct SummarizeProjectArgs {
     /// Project name or path (omit to use current directory)
     #[arg(long, short = 'p')]
     project: Option<String>,
+    /// Maximum number of messages to include (newest-first window; same as `read project`)
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Number of newest-ranked messages to skip before applying `--limit`
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
     /// Query this explicit SSH target in addition to local history before summarizing
     #[arg(long = "remote")]
     remotes: Vec<String>,
@@ -443,6 +450,12 @@ pub struct SummarizeSessionArgs {
     /// Project name or path (optional; without it the session is searched globally)
     #[arg(long, short = 'p')]
     project: Option<String>,
+    /// Maximum number of messages to include (newest-first window; same as `read session`)
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Number of newest-ranked messages to skip before applying `--limit`
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
     /// Query this explicit SSH target in addition to local history before summarizing
     #[arg(long = "remote")]
     remotes: Vec<String>,
@@ -539,7 +552,7 @@ pub struct SummaryRunnerArgs {
     /// Output format for summary results
     #[arg(short = 'O', long = "output-format", value_enum, default_value = "md")]
     output_format: RememberOutputFormatArg,
-    /// Model to use (overrides MMR_SUMMARISER_MODEL)
+    /// Model to use (overrides config and MMR_SUMMARISER_MODEL)
     #[arg(long)]
     model: Option<String>,
 }
@@ -1923,6 +1936,25 @@ fn apply_message_output_pagination(
     }
 }
 
+fn apply_message_page_to_response(
+    mut response: ApiMessagesResponse,
+    limit: Option<usize>,
+    offset: usize,
+) -> ApiMessagesResponse {
+    let total = response.messages.len() as i64;
+    if limit.is_none() && offset == 0 {
+        response.total_messages = total;
+        return response;
+    }
+    sort_api_messages_chronological(&mut response.messages);
+    let descending = response.messages.into_iter().rev().collect::<Vec<_>>();
+    let mut paged = apply_message_output_pagination(descending, limit, offset);
+    paged.reverse();
+    response.messages = paged;
+    response.total_messages = total;
+    response
+}
+
 fn build_next_read_project_command(
     source_filter: Option<SourceFilter>,
     project: Option<&str>,
@@ -2370,14 +2402,20 @@ async fn summarize_command_response(
                 .project
                 .unwrap_or(current_dir_project().context("could not resolve current directory")?);
             let model = effective_summariser_model(args.runner.model.as_deref());
-            if !args.remotes.is_empty() {
-                let messages = project_messages_with_remotes_for_summary(
-                    service,
-                    Some(project.as_str()),
-                    source_filter,
-                    &args.remotes,
-                    pretty,
-                )?;
+            let page = args.limit.is_some() || args.offset > 0;
+            if !args.remotes.is_empty() || page {
+                let messages = if !args.remotes.is_empty() {
+                    project_messages_with_remotes_for_summary(
+                        service,
+                        Some(project.as_str()),
+                        source_filter,
+                        &args.remotes,
+                        pretty,
+                    )?
+                } else {
+                    local_project_messages_unpaged(service, Some(project.as_str()), source_filter)?
+                };
+                let messages = apply_message_page_to_response(messages, args.limit, args.offset);
                 let formatted = format_messages_as_transcript_input(&messages.messages);
                 let response = ai::summarize_formatted_messages(
                     args.runner.instructions.as_deref(),
@@ -2422,6 +2460,7 @@ async fn summarize_command_response(
                     pretty,
                 )?
             };
+            let messages = apply_message_page_to_response(messages, args.limit, args.offset);
             let formatted = format_messages_as_transcript_input(&messages.messages);
             let model = effective_summariser_model(args.runner.model.as_deref());
             let response = ai::summarize_formatted_messages(
@@ -3769,6 +3808,7 @@ struct StatusSummaryRunnerDiagnostic {
     status: String,
     endpoint: String,
     model: String,
+    config_file: String,
     api_key_env: Vec<String>,
     action: Option<String>,
 }
@@ -4173,7 +4213,10 @@ fn status_privacy_diagnostic() -> StatusPrivacyDiagnostic {
 }
 
 fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
-    let configured = env_has_non_empty("OPENAI_API_KEY");
+    let configured = summarize_api_key_configured();
+    let config_path = config::mmr_config_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "~/.config/mmr/config.json".to_string());
     StatusSummaryRunnerDiagnostic {
         backend: "openai-compatible".to_string(),
         status: if configured {
@@ -4182,22 +4225,16 @@ fn status_summary_runner_diagnostic() -> StatusSummaryRunnerDiagnostic {
             "missing_api_key"
         }
         .to_string(),
-        endpoint: openai_base_url_for_status(),
+        endpoint: summarize_endpoint_for_status(),
         model: effective_summariser_model(None),
+        config_file: config_path.clone(),
         api_key_env: vec!["OPENAI_API_KEY".to_string()],
         action: (!configured).then(|| {
-            "Set OPENAI_API_KEY; optionally set OPENAI_BASE_URL for a compatible proxy and MMR_SUMMARISER_MODEL for the target model."
-                .to_string()
+            format!(
+                "Set summarize.apiKey or summarize.apiKeyEnv in {config_path}, or set OPENAI_API_KEY; optionally set summarize.baseUrl and summarize.model."
+            )
         }),
     }
-}
-
-fn openai_base_url_for_status() -> String {
-    std::env::var("OPENAI_BASE_URL")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
 }
 
 fn status_dream_runner_diagnostic() -> StatusDreamRunnerDiagnostic {
@@ -4208,12 +4245,6 @@ fn status_dream_runner_diagnostic() -> StatusDreamRunnerDiagnostic {
         command_env: String::new(),
         action: None,
     }
-}
-
-fn env_has_non_empty(name: &str) -> bool {
-    std::env::var(name)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
 }
 
 fn reconcile_default_sources(
@@ -5521,12 +5552,9 @@ fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
 }
 
 fn effective_summariser_model(cli_model: Option<&str>) -> String {
-    cli_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(default_summariser_model_from_env)
-        .unwrap_or_else(|| DEFAULT_SUMMARISER_MODEL.to_string())
+    config::resolve_summarize_settings(cli_model)
+        .map(|settings| settings.model)
+        .unwrap_or_else(|_| DEFAULT_SUMMARISER_MODEL.to_string())
 }
 
 fn effective_compact_model(cli_model: Option<&str>) -> String {
@@ -5590,13 +5618,6 @@ fn validate_session_back(age: u32, include_newest: bool) -> Result<u32, SessionS
         return Err(SessionSelectionError::AgeZeroNotSelectable);
     }
     Ok(age)
-}
-
-fn default_summariser_model_from_env() -> Option<String> {
-    std::env::var(ENV_SUMMARISER_MODEL)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn default_compact_model_from_env() -> Option<String> {
@@ -6348,6 +6369,28 @@ mod tests {
         };
         assert_eq!(session.session_id, "sess-123");
         assert_eq!(session.project.as_deref(), Some("/Users/test/proj"));
+    }
+
+    #[test]
+    fn summarize_project_limit_offset_parses() {
+        let parsed = Cli::try_parse_from([
+            "mmr",
+            "summarize",
+            "project",
+            "--limit",
+            "10",
+            "--offset",
+            "5",
+        ])
+        .expect("summarize project limit/offset should parse");
+        let Commands::Summarize(args) = parsed.command else {
+            panic!("expected summarize command");
+        };
+        let SummarizeCommand::Project(project) = args.command else {
+            panic!("expected summarize project command");
+        };
+        assert_eq!(project.limit, Some(10));
+        assert_eq!(project.offset, 5);
     }
 
     #[test]

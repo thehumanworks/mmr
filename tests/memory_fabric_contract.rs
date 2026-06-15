@@ -7,7 +7,7 @@ use mmr::dream::{
     MockDreamRunner, build_evidence_bundle, build_evidence_request,
 };
 use mmr::store::{LATEST_SCHEMA_VERSION, NewDreamCandidate, NewLearnedMemory, Store};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -1111,6 +1111,8 @@ fn status_diagnostics_contract_is_implemented() {
         .args(["--pretty", "status"])
         .env("HOME", &home)
         .env("XDG_DATA_HOME", &data_home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("MMR_CONFIG_FILE")
         .env("MMR_FAKE_REMOTE_DIR", &remote)
         .env("MMR_FAKE_REMOTE_AUTH", "fail")
         .env("MMR_DEFAULT_DREAM_RUNNER", "command")
@@ -1163,6 +1165,11 @@ fn status_diagnostics_contract_is_implemented() {
     assert_eq!(
         status_json["diagnostics"]["summary_runner"]["backend"],
         "openai-compatible"
+    );
+    assert!(
+        status_json["diagnostics"]["summary_runner"]["config_file"]
+            .as_str()
+            .is_some_and(|path| path.contains("config.json"))
     );
     assert_eq!(
         status_json["diagnostics"]["dream_runner"]["command_env"],
@@ -2242,6 +2249,18 @@ fn summary_cli_contract_is_implemented() {
     assert!(!project_help_text.contains("--agent"));
     assert!(project_help_text.contains("--model"));
     assert!(project_help_text.contains("--output-format"));
+    assert!(project_help_text.contains("--limit"));
+    assert!(project_help_text.contains("--offset"));
+
+    let session_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args(["summarize", "session", "--help"])
+        .output()
+        .expect("summarize session help");
+    assert_success_ref(&session_help);
+    let session_help_text =
+        String::from_utf8(session_help.stdout).expect("summarize session help UTF-8");
+    assert!(session_help_text.contains("--limit"));
+    assert!(session_help_text.contains("--offset"));
 }
 
 #[test]
@@ -3616,6 +3635,8 @@ fn summary_generation_contract_is_implemented() {
             "json",
         ])
         .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("MMR_CONFIG_FILE")
         .env("OPENAI_API_KEY", "test-key")
         .env("OPENAI_BASE_URL", base_url.as_str())
         .output()
@@ -3635,6 +3656,79 @@ fn summary_generation_contract_is_implemented() {
     assert!(input.contains("hello from claude summary"));
     assert!(input.contains("hello from codex summary"));
     assert!(system_message_text(&body).contains("Memory Agent"));
+}
+
+#[test]
+fn summarize_config_api_key_contract_is_implemented() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(
+        home.join(".claude")
+            .join("projects")
+            .join("-Users-test-proj"),
+    )
+    .expect("create claude fixture dir");
+    std::fs::write(
+        home.join(".claude")
+            .join("projects")
+            .join("-Users-test-proj")
+            .join("sess-claude-summary-config.jsonl"),
+        r#"{"type":"user","sessionId":"sess-claude-summary-config","message":{"role":"user","content":"config contract question"},"timestamp":"2025-01-01T00:00:00","uuid":"u1","cwd":"/Users/test/proj"}
+{"type":"assistant","sessionId":"sess-claude-summary-config","message":{"role":"assistant","content":"config contract answer"},"timestamp":"2025-01-01T00:01:00","uuid":"a1","parentUuid":"u1","cwd":"/Users/test/proj"}"#,
+    )
+    .expect("write claude fixture");
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+    let addr = listener.local_addr().expect("local addr");
+    let base_url = format!("http://{addr}");
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept request");
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).expect("read request");
+        let response = r#"{"id":"config-contract","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"apiKeyEnv contract summary"}}]}"#;
+        let http_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
+        std::io::Write::write_all(&mut stream, http_response.as_bytes()).expect("write response");
+    });
+
+    mmr::config::write_summarize_config_for_tests_with_api(
+        &home,
+        base_url.as_str(),
+        "gpt-5.5",
+        None,
+        Some("MMR_SUMMARY_API_KEY"),
+    )
+    .expect("write summarize config");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "summarize",
+            "project",
+            "--project",
+            "/Users/test/proj",
+            "-O",
+            "json",
+        ])
+        .env("HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("MMR_CONFIG_FILE")
+        .env_remove("OPENAI_API_KEY")
+        .env("MMR_SUMMARY_API_KEY", "contract-key")
+        .output()
+        .expect("summarize with apiKeyEnv config");
+
+    assert_success_ref(&output);
+    handle.join().expect("mock server thread");
+    let stdout_json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("summary stdout JSON");
+    assert_eq!(stdout_json["model"], "gpt-5.5");
+    assert_eq!(stdout_json["text"], "apiKeyEnv contract summary");
 }
 
 #[test]

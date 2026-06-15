@@ -24,37 +24,19 @@ impl TestFixture {
     }
 
     pub fn run_cli(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .args(args)
-            .env("HOME", &self.home)
-            .output()
-            .expect("run mmr")
+        self.run_cli_command(args, &[])
     }
 
     pub fn run_cli_raw(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .args(args)
-            .env("HOME", &self.home)
-            .output()
-            .expect("run mmr")
+        self.run_cli_command(args, &[])
     }
 
     pub fn run_cli_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
-        command.args(args).env("HOME", &self.home);
-        for (key, value) in env {
-            command.env(key, value);
-        }
-        command.output().expect("run mmr")
+        self.run_cli_command(args, env)
     }
 
     pub fn run_cli_in_dir(&self, args: &[&str], cwd: &Path) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .args(args)
-            .env("HOME", &self.home)
-            .current_dir(cwd)
-            .output()
-            .expect("run mmr")
+        self.run_cli_command_in_dir(args, cwd, &[])
     }
 
     pub fn run_cli_in_dir_with_env(
@@ -63,8 +45,23 @@ impl TestFixture {
         cwd: &Path,
         env: &[(&str, &str)],
     ) -> Output {
+        self.run_cli_command_in_dir(args, cwd, env)
+    }
+
+    fn run_cli_command(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let cwd = self.home.join("cwd");
+        fs::create_dir_all(&cwd).expect("cwd");
+        self.run_cli_command_in_dir(args, &cwd, env)
+    }
+
+    fn run_cli_command_in_dir(&self, args: &[&str], cwd: &Path, env: &[(&str, &str)]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
-        command.args(args).env("HOME", &self.home).current_dir(cwd);
+        command
+            .args(args)
+            .env("HOME", &self.home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("MMR_CONFIG_FILE")
+            .current_dir(cwd);
         for (key, value) in env {
             command.env(key, value);
         }

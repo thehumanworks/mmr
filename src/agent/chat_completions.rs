@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_CHAT_COMPLETIONS_BASE_URL: &str = "https://api.openai.com/v1";
 
 #[derive(Debug, Clone)]
 pub struct ChatCompletionsClient {
@@ -17,7 +17,7 @@ impl ChatCompletionsClient {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+            .unwrap_or_else(|| DEFAULT_CHAT_COMPLETIONS_BASE_URL.to_string());
 
         Ok(Self::new(api_key, base_url))
     }

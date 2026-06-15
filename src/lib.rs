@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod capture;
 pub mod cli;
+pub mod config;
 pub mod dream;
 pub mod mcp;
 pub mod messages;
