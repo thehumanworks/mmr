@@ -2273,6 +2273,7 @@ fn retrieve_store_to_provider_mapping_uses_public_source_session_id() {
     let output = fixture.run_cli(&[
         "retrieve",
         "public mapping marker",
+        "--full-message-history",
         "--max-sessions",
         "1",
         "--before-messages",
@@ -2355,6 +2356,7 @@ fn retrieve_bounded_windows_merge_truncate_and_preserve_citations() {
     let output = fixture.run_cli(&[
         "retrieve",
         "window marker",
+        "--full-message-history",
         "--before-messages",
         "2",
         "--after-messages",
@@ -2454,8 +2456,8 @@ fn retrieve_empty_match_returns_success_json_with_next_action() {
     assert_eq!(json["total_selected_sessions"].as_u64().unwrap(), 0);
     assert!(json["selected_sessions"].as_array().unwrap().is_empty());
     assert!(json["unreadable_matches"].as_array().unwrap().is_empty());
-    assert_eq!(json["next_page"], false);
-    assert!(json["next_command"].is_null());
+    assert!(json.get("next_page").is_none());
+    assert!(json.get("next_command").is_none());
     assert!(
         json["suggested_next_action"]
             .as_str()

@@ -30,11 +30,17 @@ Implementation notes:
 - Use public `source_session_id`, never Store-internal `session_id`, for selected
   sessions and pinned continuation.
 - Report learned-memory-only and DB-only matches in `unreadable_matches[]`.
-- Keep default output bounded: 3 sessions, 3 before, 12 after, 24 messages per
-  session, derived limit 72.
+- Keep default output concise: ranked sessions, identity metadata, rank/match
+  metadata, and short `matches[]` snippets only. Do not include searched-project
+  scope metadata or provider `messages[]` by default.
+- `--debug` adds top-level `debug.scope`, `debug.limits`, and
+  `debug.total_ranked_sessions`; it does not include provider messages by itself.
+- `--full-message-history` adds `selected_sessions[].message_window`,
+  `selected_sessions[].messages`, and message-window pagination fields.
 - Make `next_command` executable as printed by zsh/bash and pin session identities
-  with JSON `--pinned-session` values. Preserve `--all-projects` and
-  `--all-sources` in continuation commands when they were used.
+  with JSON `--pinned-session` values. Preserve `--all-projects`,
+  `--all-sources`, `--debug`, and `--full-message-history` in continuation
+  commands when they were used.
 - Treat docs as source of truth; patch docs before code when ambiguity appears.
 
 Required target checks are listed in `specs/retrieval.md`.

@@ -26,12 +26,15 @@ whole local history system or across every supported harness.
 mmr retrieve "panic at src/main.rs:42" --pretty
 mmr --source codex retrieve "migration decision" --project /path/to/project
 mmr retrieve "Modal sandbox fix" --all-projects --all-sources --pretty
+mmr retrieve "Modal sandbox fix" --all-projects --all-sources --debug --pretty
+mmr retrieve "panic at src/main.rs:42" --full-message-history
 mmr retrieve "ERROR[abc]*" --ignore-case -C 2
 ```
 
 The output is JSON on stdout. The default response is capped at three sessions
-and at most 24 messages per selected session. Empty matches are successful JSON
-responses with a suggested next action.
+and returns ranked sessions plus short `matches[]` snippets. Full provider
+message windows are opt-in with `--full-message-history`. Empty matches are
+successful JSON responses with a suggested next action.
 
 ### Discarded alternatives
 
@@ -87,6 +90,8 @@ Supported flags:
 | `--all-projects` | Search every local project discovered from loaded provider transcripts instead of the cwd-linked or explicit project. Mutually exclusive with `--project`. | false |
 | global `--source <source>` | Source filter for matching and reads. | `MMR_DEFAULT_SOURCE` or all sources |
 | `--all-sources` | Search every source/harness and ignore `MMR_DEFAULT_SOURCE`. Mutually exclusive with global `--source`. | false |
+| `--debug` | Include retrieve execution metadata under top-level `debug`, including searched projects, project counts, source scope, limits, and ranked-session count. | false |
+| `--full-message-history` | Include bounded provider message windows in `selected_sessions[].messages` plus `message_window` and message pagination fields. | false |
 | `--session <id>` | Restrict matching to one public provider source session id. | none |
 | `--role <role>` | Event role filter, same as `find`. | none |
 | `--event-type <type>` | Event type filter, same as `find`. | none |
@@ -96,8 +101,8 @@ Supported flags:
 | `--before-messages <n>` | Messages before each matched anchor. | 3 |
 | `--after-messages <n>` | Messages after each matched anchor. | 12 |
 | `--max-messages-per-session <n>` | Hard cap after per-session window merge. | 24 |
-| `--limit <n>` | Flattened message-page limit. | `max_sessions * max_messages_per_session`, 72 by default |
-| `--offset <n>` | Flattened message-page offset. | 0 |
+| `--limit <n>` | Flattened provider-message page limit when `--full-message-history` is set. | `max_sessions * max_messages_per_session`, 72 by default |
+| `--offset <n>` | Flattened provider-message page offset when `--full-message-history` is set. | 0 |
 | `--pinned-session <json>` | Concrete continuation identity with `source`, `project_name`, `source_session_id`. Repeatable. | none |
 
 Out of scope: ambiguous `--all`, `--remote`, semantic/vector search, automatic
@@ -138,6 +143,11 @@ matching and ranking. They must not restrict which projects, sources, sessions,
 or messages are searched. The local source loaders already parallelize harness
 discovery; retrieve also parallelizes the literal scan over provider messages
 when using `--all-projects`.
+
+Successful default stdout intentionally omits execution metadata such as searched
+project lists, project counts, and scope diagnostics. `--debug` adds those under
+top-level `debug.scope`; it does not include provider `messages[]` unless
+`--full-message-history` is also set.
 
 ### Matching and identity
 
@@ -225,21 +235,6 @@ Minimum JSON fields:
 ```json
 {
   "query": "panic at src/main.rs:42",
-  "limits": {
-    "max_sessions": 3,
-    "before_messages": 3,
-    "after_messages": 12,
-    "max_messages_per_session": 24,
-    "limit": 72,
-    "offset": 0
-  },
-  "scope": {
-    "all_projects": false,
-    "all_sources": true,
-    "source_filter": null,
-    "total_projects_searched": 1,
-    "projects": ["/tmp/project"]
-  },
   "total_matches": 2,
   "total_selected_sessions": 2,
   "selected_sessions": [
@@ -255,30 +250,71 @@ Minimum JSON fields:
       },
       "match_count": 2,
       "first_match_citation": "mmr://event/event-id",
-      "matches": [],
-      "message_window": {
-        "before_messages": 3,
-        "after_messages": 12,
-        "max_messages_per_session": 24,
-        "truncated": false
-      },
-      "messages": []
+      "matches": [
+        {
+          "source": "codex",
+          "project_name": "/tmp/project",
+          "source_session_id": "sess-codex-1",
+          "event_id": "event:v1:abc123",
+          "event_type": "message",
+          "role": "assistant",
+          "timestamp": "2026-06-28T08:00:00Z",
+          "citation": "mmr://event/event-id",
+          "line_number": 1,
+          "snippet": "panic at src/main.rs:42",
+          "before": [],
+          "after": []
+        }
+      ]
     }
   ],
   "unreadable_matches": [],
-  "next_page": false,
-  "next_offset": 0,
-  "next_command": null,
   "suggested_next_action": null
 }
 ```
 
-`messages[]` uses the existing `ApiMessage` shape.
+Default selected sessions do not include full provider `messages[]`, provider
+message internals, `message_window`, top-level `limits`, top-level `scope`,
+top-level `total_ranked_sessions`, or message-pagination fields.
+
+With `--debug`, the response adds:
+
+```json
+{
+  "debug": {
+    "limits": {
+      "max_sessions": 3,
+      "before_messages": 3,
+      "after_messages": 12,
+      "max_messages_per_session": 24,
+      "limit": 72,
+      "offset": 0
+    },
+    "scope": {
+      "all_projects": false,
+      "all_sources": true,
+      "source_filter": null,
+      "total_projects_searched": 1,
+      "projects": ["/tmp/project"]
+    },
+    "total_ranked_sessions": 2
+  }
+}
+```
+
+With `--full-message-history`, each selected session adds `message_window` and
+`messages[]`. `messages[]` uses the existing `ApiMessage` shape and is the only
+retrieve surface that exposes provider message internals such as model or token
+fields.
 
 ### Pagination and continuation
 
-Flatten page order is selected session rank ascending, then each selected
-session's messages chronological.
+Message-window pagination is only active when `--full-message-history` is set.
+Default snippet-only output does not paginate hidden provider messages and omits
+`next_page`, `next_offset`, and `next_command`.
+
+When `--full-message-history` is set, flatten page order is selected session
+rank ascending, then each selected session's messages chronological.
 
 `selected_sessions[]` remains present for every pinned selected session on every
 page. `matches[]` remains complete. `messages[]` is page-specific.
@@ -287,6 +323,7 @@ When `next_page` is true, `next_command` pins selected session identities:
 
 ```bash
 mmr --source codex retrieve 'panic at src/main.rs:42' \
+  --full-message-history \
   --project '/tmp/project with spaces' \
   --pinned-session '{"source":"codex","project_name":"/tmp/project with spaces","source_session_id":"sess-codex-1"}' \
   --limit 10 --offset 10
@@ -300,6 +337,9 @@ Continuation commands preserve explicit broad-scope flags. A first page that
 uses `--all-projects --all-sources` must emit a `next_command` that includes
 both flags rather than narrowing to the first selected project or inheriting a
 future `MMR_DEFAULT_SOURCE` value.
+
+Continuation commands also preserve `--debug` and `--full-message-history` when
+those flags were present.
 
 Pinned sessions freeze selected session identities when newer sessions land
 later. They do not guarantee a snapshot if provider files mutate inside an
@@ -320,9 +360,6 @@ No matches is a success:
   "total_selected_sessions": 0,
   "selected_sessions": [],
   "unreadable_matches": [],
-  "next_page": false,
-  "next_offset": 0,
-  "next_command": null,
   "suggested_next_action": "Try --ignore-case, a shorter literal query, or mmr find for raw match inspection."
 }
 ```
@@ -363,5 +400,11 @@ cargo build --release
 - malformed/stale `--pinned-session` errors are structured;
 - project, source, `MMR_DEFAULT_SOURCE`, session, role, event type,
   `--ignore-case`, `-C`, and `--context` filters match the docs;
+- default output omits `debug`, `scope`, `limits`, `messages[]`,
+  `message_window`, and provider-message internals;
+- `--debug` includes `debug.scope`/limits without `messages[]`;
+- `--full-message-history` includes `messages[]`/`message_window` and activates
+  message-window pagination;
+- `next_command` preserves `--debug` and `--full-message-history`;
 - `raw_local_ref` does not leak;
 - existing `find` JSON and line output remain unchanged.

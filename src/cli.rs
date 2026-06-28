@@ -793,6 +793,12 @@ pub struct RetrieveArgs {
     /// Search every source and ignore MMR_DEFAULT_SOURCE
     #[arg(long = "all-sources")]
     all_sources: bool,
+    /// Include retrieve execution metadata such as searched projects
+    #[arg(long)]
+    debug: bool,
+    /// Include bounded provider message windows in selected sessions
+    #[arg(long = "full-message-history")]
+    full_message_history: bool,
     /// Source session id to search
     #[arg(long)]
     session: Option<String>,
@@ -5055,20 +5061,29 @@ fn search_project(
 #[derive(Debug, Serialize)]
 struct RetrieveResponse {
     query: String,
-    limits: RetrieveLimits,
-    scope: RetrieveScopeOutput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    debug: Option<RetrieveDebugOutput>,
     total_matches: usize,
-    total_ranked_sessions: usize,
     total_selected_sessions: usize,
     selected_sessions: Vec<RetrieveSelectedSession>,
     unreadable_matches: Vec<RetrieveUnreadableMatch>,
-    next_page: bool,
-    next_offset: usize,
-    next_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_page: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_offset: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_command: Option<Option<String>>,
     suggested_next_action: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
+struct RetrieveDebugOutput {
+    limits: RetrieveLimits,
+    scope: RetrieveScopeOutput,
+    total_ranked_sessions: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct RetrieveLimits {
     max_sessions: usize,
     before_messages: usize,
@@ -5122,8 +5137,10 @@ struct RetrieveSelectedSession {
     match_count: usize,
     first_match_citation: String,
     matches: Vec<RetrieveMatchOutput>,
-    message_window: RetrieveMessageWindow,
-    messages: Vec<ApiMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_window: Option<RetrieveMessageWindow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    messages: Option<Vec<ApiMessage>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -5241,6 +5258,8 @@ struct RetrieveWindow {
 struct RetrieveSessionCandidate {
     identity: RetrieveSessionIdentity,
     selected: RetrieveSelectedSession,
+    message_window: RetrieveMessageWindow,
+    message_history: Vec<ApiMessage>,
     match_count: usize,
     latest_match_timestamp: String,
 }
@@ -5265,15 +5284,6 @@ fn retrieve_output(
     let mut store = Store::open_default()?;
     let source_filter = retrieve_effective_source_filter(args, cli_source, source_filter, pretty)?;
     let store_projects = retrieve_scope_projects(&store, args, pretty)?;
-    let scope_projects =
-        retrieve_scope_project_names(service, &store_projects, source_filter, args);
-    let scope = RetrieveScopeOutput {
-        all_projects: args.all_projects,
-        all_sources: source_filter.is_none(),
-        source_filter: source_filter.map(source_name).map(str::to_string),
-        total_projects_searched: scope_projects.len(),
-        projects: scope_projects,
-    };
     let matches = if args.all_projects {
         retrieve_all_projects_matches(service, &mut store, &store_projects, source_filter, args)?
     } else {
@@ -5353,12 +5363,16 @@ fn retrieve_output(
     let total_ranked_sessions = candidates.len();
     candidates.truncate(limits.max_sessions);
     assign_retrieve_ranks(&mut candidates);
-    let (next_page, next_offset) = apply_retrieve_flattened_pagination(&mut candidates, &limits);
+    let (next_page, next_offset) = if args.full_message_history {
+        apply_retrieve_flattened_pagination(&mut candidates, &limits)
+    } else {
+        (false, limits.offset)
+    };
     let selected_identities = candidates
         .iter()
         .map(|candidate| candidate.identity.clone())
         .collect::<Vec<_>>();
-    let next_command = if next_page {
+    let next_command = if args.full_message_history && next_page {
         Some(build_retrieve_next_command(
             args,
             &limits,
@@ -5369,23 +5383,44 @@ fn retrieve_output(
     } else {
         None
     };
+    let debug = if args.debug {
+        let scope_projects =
+            retrieve_scope_project_names(service, &store_projects, source_filter, args);
+        Some(RetrieveDebugOutput {
+            limits: limits.clone(),
+            scope: RetrieveScopeOutput {
+                all_projects: args.all_projects,
+                all_sources: source_filter.is_none(),
+                source_filter: source_filter.map(source_name).map(str::to_string),
+                total_projects_searched: scope_projects.len(),
+                projects: scope_projects,
+            },
+            total_ranked_sessions,
+        })
+    } else {
+        None
+    };
     let selected_sessions = candidates
         .into_iter()
-        .map(|candidate| candidate.selected)
+        .map(|mut candidate| {
+            if args.full_message_history {
+                candidate.selected.message_window = Some(candidate.message_window);
+                candidate.selected.messages = Some(candidate.message_history);
+            }
+            candidate.selected
+        })
         .collect::<Vec<_>>();
 
     let response = RetrieveResponse {
         query: args.query.clone(),
-        limits,
-        scope,
+        debug,
         total_matches,
-        total_ranked_sessions,
         total_selected_sessions: selected_sessions.len(),
         selected_sessions,
         unreadable_matches,
-        next_page,
-        next_offset,
-        next_command,
+        next_page: args.full_message_history.then_some(next_page),
+        next_offset: args.full_message_history.then_some(next_offset),
+        next_command: args.full_message_history.then_some(next_command),
         suggested_next_action: suggested_retrieve_next_action(total_matches),
     };
     serialize(&response, pretty)
@@ -5820,18 +5855,21 @@ fn build_retrieve_session_candidate(
         match_count: matches.len(),
         first_match_citation,
         matches: matches.iter().map(RetrieveMatchRecord::output).collect(),
-        message_window: RetrieveMessageWindow {
-            before_messages: limits.before_messages,
-            after_messages: limits.after_messages,
-            max_messages_per_session: limits.max_messages_per_session,
-            truncated,
-        },
-        messages,
+        message_window: None,
+        messages: None,
+    };
+    let message_window = RetrieveMessageWindow {
+        before_messages: limits.before_messages,
+        after_messages: limits.after_messages,
+        max_messages_per_session: limits.max_messages_per_session,
+        truncated,
     };
 
     RetrieveSessionCandidate {
         identity,
         selected,
+        message_window,
+        message_history: messages,
         match_count: matches.len(),
         latest_match_timestamp,
     }
@@ -5850,7 +5888,7 @@ fn apply_retrieve_flattened_pagination(
 ) -> (bool, usize) {
     let full_messages = candidates
         .iter()
-        .map(|candidate| candidate.selected.messages.clone())
+        .map(|candidate| candidate.message_history.clone())
         .collect::<Vec<_>>();
     let flattened = full_messages
         .iter()
@@ -5867,7 +5905,7 @@ fn apply_retrieve_flattened_pagination(
     let page_end = page_start.saturating_add(limits.limit).min(total);
 
     for candidate in candidates.iter_mut() {
-        candidate.selected.messages.clear();
+        candidate.message_history.clear();
     }
     for (session_idx, message_idx) in &flattened[page_start..page_end] {
         if let Some(message) = full_messages
@@ -5875,8 +5913,7 @@ fn apply_retrieve_flattened_pagination(
             .and_then(|messages| messages.get(*message_idx))
         {
             candidates[*session_idx]
-                .selected
-                .messages
+                .message_history
                 .push(message.clone());
         }
     }
@@ -6008,6 +6045,12 @@ fn build_retrieve_next_command(
     }
     parts.push("retrieve".to_string());
     parts.push(shell_quote(&args.query));
+    if args.debug {
+        parts.push("--debug".to_string());
+    }
+    if args.full_message_history {
+        parts.push("--full-message-history".to_string());
+    }
     if args.all_sources {
         parts.push("--all-sources".to_string());
     }

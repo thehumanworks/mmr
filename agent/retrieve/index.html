@@ -28,7 +28,10 @@
       <li>Add <code>--all-projects</code> to search every provider-discovered local project.</li>
       <li>Add <code>--all-sources</code> to ignore <code>MMR_DEFAULT_SOURCE</code> and search all harnesses.</li>
       <li>Reject <code>--project</code> with <code>--all-projects</code>; reject global <code>--source</code> with <code>--all-sources</code>.</li>
-      <li>Preserve public <code>source_session_id</code>, pinned JSON continuations, and flattened pagination.</li>
+      <li>Keep default output concise: ranked sessions, identity metadata, rank/match metadata, and <code>matches[]</code> snippets only.</li>
+      <li>Add <code>--debug</code> for top-level <code>debug.scope</code>, limits, and ranked-session counts.</li>
+      <li>Add <code>--full-message-history</code> for <code>message_window</code>, provider <code>messages[]</code>, and flattened message pagination.</li>
+      <li>Preserve public <code>source_session_id</code>, pinned JSON continuations, and continuation flags.</li>
     </ul>
     <pre><code>cargo test --test cli_contract retrieve_ -- --nocapture
 cargo test --test memory_fabric_contract retrieve_ -- --nocapture

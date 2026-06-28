@@ -23,10 +23,11 @@
       <a class="tab" aria-selected="false" href="/agent/retrieve/">Agent</a>
     </nav>
     <h1>mmr retrieve Search-to-Read Pipeline</h1>
-    <p><code>mmr retrieve &lt;query&gt;</code> turns a remembered clue into ranked prior-session context with citations and bounded message windows.</p>
+    <p><code>mmr retrieve &lt;query&gt;</code> turns a remembered clue into ranked prior-session context with citations and short match snippets.</p>
     <p>The default stays local to the linked current project. When the clue may be in another repository or harness, opt in explicitly:</p>
     <pre><code>mmr retrieve "sandbox image regression" --all-projects --all-sources --pretty</code></pre>
     <p><code>--all-projects</code> searches every project discovered from local provider transcripts, not just linked Store projects. Output caps are applied after the search and ranking. <code>--all-sources</code> searches all supported harnesses even when <code>MMR_DEFAULT_SOURCE</code> is set.</p>
+    <p>Default output is snippet-only and does not include searched-project diagnostics or provider message history. Use <code>--debug</code> for scope metadata and <code>--full-message-history</code> for bounded provider message windows.</p>
     <p>Full contract: <a href="/specs/retrieval.md">specs/retrieval.md</a>.</p>
   </main>
 </body>
