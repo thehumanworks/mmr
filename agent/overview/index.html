@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mmr Retrieval Docs - Agent</title>
+  <style>
+    :root { color-scheme: light dark; --accent: #0f766e; --line: #94a3b8; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; line-height: 1.55; }
+    main { max-width: 920px; margin: 0 auto; padding: 40px 20px 64px; }
+    .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+    .tab { padding: 10px 14px; text-decoration: none; color: inherit; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; }
+    .tab[aria-selected="true"] { border-color: var(--line); color: var(--accent); font-weight: 700; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { overflow-x: auto; padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="tabs" aria-label="Overview view tabs">
+      <a class="tab" aria-selected="false" href="/human/overview/">Human</a>
+      <a class="tab" aria-selected="true" href="/agent/overview/">Agent</a>
+    </nav>
+    <h1>mmr Retrieval Docs</h1>
+    <p>Read <a href="/.well-known/agents.json"><code>/.well-known/agents.json</code></a>, then <a href="/agent/retrieve/"><code>/agent/retrieve/</code></a>, then <a href="/specs/retrieval.md"><code>/specs/retrieval.md</code></a>.</p>
+    <p>Implementation rule: when docs and code disagree, update docs first and then code.</p>
+    <pre><code>python3 -m json.tool .well-known/agents.json
+curl -fsS http://127.0.0.1:8000/agent/retrieve.md
+cargo test --test cli_contract retrieve_ -- --nocapture</code></pre>
+  </main>
+</body>
+</html>

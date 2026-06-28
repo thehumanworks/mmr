@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod common;
 
 use std::fs;
@@ -9,7 +10,7 @@ use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use common::{TestFixture, parse_stdout_json};
+use common::{RetrieveContractFixture, TestFixture, parse_stdout_json};
 
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -1499,6 +1500,510 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
             .iter()
             .all(|message| message["source"].as_str().unwrap() == "claude")
     );
+}
+
+// --- retrieve ---
+
+#[test]
+fn retrieve_parser_accepts_documented_flags() {
+    let fixture = RetrieveContractFixture::seeded();
+    let pinned = format!(
+        r#"{{"source":"codex","project_name":"{}","source_session_id":"retrieve-codex-alpha"}}"#,
+        fixture.project_arg()
+    );
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "retrieve",
+        "public mapping marker",
+        "--project",
+        fixture.project_arg(),
+        "--session",
+        "retrieve-codex-alpha",
+        "--role",
+        "assistant",
+        "--event-type",
+        "message",
+        "--ignore-case",
+        "-C",
+        "1",
+        "--max-sessions",
+        "1",
+        "--before-messages",
+        "1",
+        "--after-messages",
+        "2",
+        "--max-messages-per-session",
+        "3",
+        "--limit",
+        "2",
+        "--offset",
+        "0",
+        "--pinned-session",
+        pinned.as_str(),
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["limits"]["max_sessions"].as_u64().unwrap(), 1);
+    assert_eq!(json["limits"]["before_messages"].as_u64().unwrap(), 1);
+    assert_eq!(json["limits"]["after_messages"].as_u64().unwrap(), 2);
+    assert_eq!(
+        json["limits"]["max_messages_per_session"].as_u64().unwrap(),
+        3
+    );
+    assert_eq!(json["limits"]["limit"].as_u64().unwrap(), 2);
+    assert_eq!(json["limits"]["offset"].as_u64().unwrap(), 0);
+    assert!(json["suggested_next_action"].is_null());
+    let selected = &json["selected_sessions"][0];
+    assert_eq!(selected["rank"].as_u64().unwrap(), 1);
+    assert_eq!(selected["match_count"].as_u64().unwrap(), 1);
+    assert_eq!(
+        selected["rank_reason"]["tie_break"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn retrieve_parser_rejects_out_of_scope_all_and_remote_flags() {
+    let fixture = RetrieveContractFixture::seeded();
+
+    let all = fixture.run_cli(&["retrieve", "public mapping marker", "--all"]);
+    assert!(!all.status.success(), "--all is outside retrieve v1");
+    assert!(
+        String::from_utf8_lossy(&all.stderr).contains("--all"),
+        "stderr={}",
+        String::from_utf8_lossy(&all.stderr)
+    );
+
+    let remote = fixture.run_cli(&["retrieve", "public mapping marker", "--remote", "mini"]);
+    assert!(!remote.status.success(), "--remote is outside retrieve v1");
+    assert!(
+        String::from_utf8_lossy(&remote.stderr).contains("--remote"),
+        "stderr={}",
+        String::from_utf8_lossy(&remote.stderr)
+    );
+}
+
+#[test]
+fn retrieve_scope_flags_reject_ambiguous_combinations() {
+    let fixture = RetrieveContractFixture::seeded();
+
+    let project_and_all = fixture.run_cli(&[
+        "retrieve",
+        "system wide marker",
+        "--project",
+        fixture.project_arg(),
+        "--all-projects",
+    ]);
+    assert!(!project_and_all.status.success());
+    let project_json = parse_stdout_json(&project_and_all);
+    assert_eq!(project_json["error_kind"], "invalid_scope_flags");
+
+    let source_and_all = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "retrieve",
+        "system wide marker",
+        "--all-sources",
+    ]);
+    assert!(!source_and_all.status.success());
+    let source_json = parse_stdout_json(&source_and_all);
+    assert_eq!(source_json["error_kind"], "invalid_scope_flags");
+}
+
+#[test]
+fn retrieve_stdout_pretty_is_json_and_stderr_is_diagnostic_only() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&["retrieve", "public mapping marker", "--pretty"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        output.stderr.is_empty(),
+        "successful JSON retrieve should not print stderr diagnostics"
+    );
+    let stdout = stdout_text(&output);
+    assert!(stdout.starts_with("{\n  \"query\":"));
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["query"], "public mapping marker");
+    assert!(json["selected_sessions"].is_array());
+    assert!(json["unreadable_matches"].is_array());
+}
+
+#[test]
+fn retrieve_all_projects_searches_provider_discovered_projects() {
+    let fixture = RetrieveContractFixture::seeded();
+
+    let scoped = fixture.run_cli(&["retrieve", "provider only marker"]);
+    assert!(
+        scoped.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&scoped.stderr)
+    );
+    let scoped_json = parse_stdout_json(&scoped);
+    assert_eq!(scoped_json["total_matches"].as_u64().unwrap(), 0);
+    assert_eq!(scoped_json["scope"]["all_projects"], false);
+    assert_eq!(
+        scoped_json["scope"]["projects"].as_array().unwrap().len(),
+        1
+    );
+
+    let all_projects = fixture.run_cli(&[
+        "retrieve",
+        "provider only marker",
+        "--all-projects",
+        "--max-sessions",
+        "5",
+    ]);
+    assert!(
+        all_projects.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&all_projects.stderr)
+    );
+    let all_json = parse_stdout_json(&all_projects);
+    assert_eq!(all_json["scope"]["all_projects"], true);
+    assert!(
+        all_json["scope"]["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|project| project.as_str().unwrap() == fixture.provider_only_project_arg())
+    );
+    let selected = all_json["selected_sessions"].as_array().unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(
+        selected[0]["project_name"],
+        fixture.provider_only_project_arg()
+    );
+    assert_eq!(
+        selected[0]["source_session_id"],
+        "retrieve-codex-provider-only"
+    );
+    assert!(
+        selected[0]["first_match_citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://message/message:v1:")
+    );
+}
+
+#[test]
+fn retrieve_filters_apply_source_env_session_role_event_and_context() {
+    let fixture = RetrieveContractFixture::seeded();
+
+    let default_source = fixture.run_cli_with_env(
+        &[
+            "retrieve",
+            "ranking tie marker",
+            "--max-sessions",
+            "3",
+            "--event-type",
+            "message",
+            "--role",
+            "assistant",
+            "-C",
+            "1",
+        ],
+        &[("MMR_DEFAULT_SOURCE", "claude")],
+    );
+    assert!(
+        default_source.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&default_source.stderr)
+    );
+    let default_json = parse_stdout_json(&default_source);
+    assert!(
+        default_json["selected_sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|session| session["source"] == "claude")
+    );
+    assert!(
+        default_json["selected_sessions"][0]["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["before"].is_array() && item["after"].is_array())
+    );
+
+    let explicit_source = fixture.run_cli_with_env(
+        &[
+            "--source",
+            "codex",
+            "retrieve",
+            "ranking tie marker",
+            "--session",
+            "retrieve-codex-beta",
+            "--max-sessions",
+            "3",
+        ],
+        &[("MMR_DEFAULT_SOURCE", "claude")],
+    );
+    assert!(
+        explicit_source.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&explicit_source.stderr)
+    );
+    let explicit_json = parse_stdout_json(&explicit_source);
+    let sessions = explicit_json["selected_sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["source"], "codex");
+    assert_eq!(sessions[0]["source_session_id"], "retrieve-codex-beta");
+
+    let all_sources = fixture.run_cli_with_env(
+        &[
+            "retrieve",
+            "ranking tie marker",
+            "--all-sources",
+            "--max-sessions",
+            "3",
+        ],
+        &[("MMR_DEFAULT_SOURCE", "claude")],
+    );
+    assert!(
+        all_sources.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&all_sources.stderr)
+    );
+    let all_sources_json = parse_stdout_json(&all_sources);
+    let sources = all_sources_json["selected_sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["source"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(sources.contains(&"claude"));
+    assert!(sources.contains(&"codex"));
+    assert_eq!(all_sources_json["scope"]["all_sources"], true);
+    assert!(all_sources_json["scope"]["source_filter"].is_null());
+}
+
+#[test]
+fn retrieve_limit_default_derives_from_session_caps() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&[
+        "retrieve",
+        "ranking tie marker",
+        "--max-sessions",
+        "2",
+        "--max-messages-per-session",
+        "5",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["limits"]["limit"].as_u64().unwrap(), 10);
+}
+
+#[test]
+fn retrieve_flattened_pagination_across_selected_sessions() {
+    let fixture = RetrieveContractFixture::seeded();
+    let page1 = fixture.run_cli(&[
+        "retrieve",
+        "ranking tie marker",
+        "--max-sessions",
+        "2",
+        "--max-messages-per-session",
+        "4",
+        "--limit",
+        "2",
+    ]);
+    assert!(
+        page1.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
+    let page1_json = parse_stdout_json(&page1);
+    let selected = page1_json["selected_sessions"].as_array().unwrap();
+    assert_eq!(selected.len(), 2);
+    assert_eq!(selected[0]["rank"].as_u64().unwrap(), 1);
+    assert_eq!(selected[1]["rank"].as_u64().unwrap(), 2);
+    let total_page1_messages = selected
+        .iter()
+        .map(|session| session["messages"].as_array().unwrap().len())
+        .sum::<usize>();
+    assert_eq!(total_page1_messages, 2);
+    assert_eq!(selected[0]["messages"].as_array().unwrap().len(), 2);
+    assert!(selected[1]["messages"].as_array().unwrap().is_empty());
+    assert_eq!(page1_json["next_page"], true);
+
+    let next_command = page1_json["next_command"].as_str().unwrap();
+    let page2 = fixture.run_shell_command(next_command);
+    assert!(
+        page2.status.success(),
+        "next_command={next_command}\nstderr={}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
+    let page2_json = parse_stdout_json(&page2);
+    let page2_selected = page2_json["selected_sessions"].as_array().unwrap();
+    assert_eq!(page2_selected.len(), 2);
+    let total_page2_messages = page2_selected
+        .iter()
+        .map(|session| session["messages"].as_array().unwrap().len())
+        .sum::<usize>();
+    assert_eq!(total_page2_messages, 2);
+    assert!(page2_selected[0]["messages"].as_array().unwrap().is_empty());
+    assert_eq!(page2_selected[1]["messages"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn retrieve_broad_scope_next_command_preserves_scope_flags() {
+    let fixture = RetrieveContractFixture::seeded();
+    let page1 = fixture.run_cli(&[
+        "retrieve",
+        "ranking tie marker",
+        "--all-projects",
+        "--all-sources",
+        "--max-sessions",
+        "2",
+        "--max-messages-per-session",
+        "4",
+        "--limit",
+        "2",
+    ]);
+    assert!(
+        page1.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
+    let page1_json = parse_stdout_json(&page1);
+    assert_eq!(page1_json["next_page"], true);
+    let next_command = page1_json["next_command"].as_str().unwrap();
+    assert!(
+        next_command.contains("--all-projects"),
+        "next_command={next_command}"
+    );
+    assert!(
+        next_command.contains("--all-sources"),
+        "next_command={next_command}"
+    );
+    assert!(
+        !next_command.contains("--project"),
+        "next_command={next_command}"
+    );
+
+    let page2 = fixture.run_shell_command(next_command);
+    assert!(
+        page2.status.success(),
+        "next_command={next_command}\nstderr={}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
+    let page2_json = parse_stdout_json(&page2);
+    assert_eq!(page2_json["scope"]["all_projects"], true);
+    assert_eq!(page2_json["scope"]["all_sources"], true);
+}
+
+#[test]
+fn retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions() {
+    let fixture = RetrieveContractFixture::seeded();
+    let page1 = fixture.run_cli(&[
+        "retrieve",
+        "next command marker",
+        "--project",
+        fixture.project_arg(),
+        "--max-sessions",
+        "1",
+        "--max-messages-per-session",
+        "6",
+        "--limit",
+        "2",
+    ]);
+    assert!(
+        page1.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
+    let page1_json = parse_stdout_json(&page1);
+    assert_eq!(page1_json["next_page"], true);
+    let next_command = page1_json["next_command"].as_str().expect("next_command");
+    assert!(next_command.contains("--pinned-session"));
+    assert!(next_command.contains(fixture.project_arg()));
+
+    fixture.add_newer_matching_session("next command marker");
+    let page2 = fixture.run_shell_command(next_command);
+    assert!(
+        page2.status.success(),
+        "next_command={next_command}\nstderr={}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
+    let page2_json = parse_stdout_json(&page2);
+    assert_eq!(page2_json["selected_sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        page2_json["selected_sessions"][0]["source_session_id"],
+        "retrieve-codex-alpha"
+    );
+    assert!(
+        !serde_json::to_string(&page2_json)
+            .unwrap()
+            .contains("retrieve-codex-newer"),
+        "pinned continuation must not drift to newer matching sessions"
+    );
+}
+
+#[test]
+fn retrieve_pinned_session_validation_returns_structured_errors() {
+    let fixture = RetrieveContractFixture::seeded();
+
+    let malformed = fixture.run_cli(&[
+        "retrieve",
+        "public mapping marker",
+        "--pinned-session",
+        "{\"source\":\"codex\"}",
+    ]);
+    assert!(!malformed.status.success());
+    assert!(
+        !malformed.stdout.is_empty(),
+        "retrieve errors should be structured JSON on stdout; stderr={}",
+        String::from_utf8_lossy(&malformed.stderr)
+    );
+    let malformed_json = parse_stdout_json(&malformed);
+    assert_eq!(malformed_json["error_kind"], "invalid_pinned_session");
+
+    let extra_field = fixture.run_cli(&[
+        "retrieve",
+        "public mapping marker",
+        "--pinned-session",
+        r#"{"source":"codex","project_name":"/tmp/project","source_session_id":"retrieve-codex-alpha","session_id":"internal"}"#,
+    ]);
+    assert!(!extra_field.status.success());
+    assert!(
+        !extra_field.stdout.is_empty(),
+        "retrieve errors should be structured JSON on stdout; stderr={}",
+        String::from_utf8_lossy(&extra_field.stderr)
+    );
+    let extra_field_json = parse_stdout_json(&extra_field);
+    assert_eq!(extra_field_json["error_kind"], "invalid_pinned_session");
+
+    let stale = fixture.run_cli(&[
+        "retrieve",
+        "public mapping marker",
+        "--pinned-session",
+        r#"{"source":"codex","project_name":"/missing/project","source_session_id":"missing-session"}"#,
+    ]);
+    assert!(!stale.status.success());
+    assert!(
+        !stale.stdout.is_empty(),
+        "retrieve errors should be structured JSON on stdout; stderr={}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    let stale_json = parse_stdout_json(&stale);
+    assert_eq!(stale_json["error_kind"], "pinned_session_not_found");
 }
 
 // --- export ---

@@ -7,6 +7,9 @@ use mmr::dream::{
     MockDreamRunner, build_evidence_bundle, build_evidence_request,
 };
 use mmr::store::{LATEST_SCHEMA_VERSION, NewDreamCandidate, NewLearnedMemory, Store};
+#[allow(dead_code)]
+mod common;
+use common::RetrieveContractFixture;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -2225,6 +2228,253 @@ fn search_cli_contract_is_implemented() {
     let project_json: serde_json::Value =
         serde_json::from_slice(&project_scoped.stdout).expect("project search JSON");
     assert_eq!(project_json["total_results"].as_u64().unwrap(), 1);
+}
+
+#[test]
+fn retrieve_fixture_smoke_find_and_read_are_isolated() {
+    let fixture = RetrieveContractFixture::seeded();
+
+    let find = fixture.run_cli(&[
+        "find",
+        "retrieve fixture smoke",
+        "--project",
+        fixture.project_arg(),
+    ]);
+    assert_success_ref(&find);
+    let find_json: serde_json::Value =
+        serde_json::from_slice(&find.stdout).expect("fixture smoke find JSON");
+    assert_eq!(find_json["total_results"].as_u64().unwrap(), 1);
+
+    let read = fixture.run_cli(&[
+        "read",
+        "session",
+        "retrieve-codex-alpha",
+        "--project",
+        fixture.project_arg(),
+    ]);
+    assert_success_ref(&read);
+    let read_json: serde_json::Value =
+        serde_json::from_slice(&read.stdout).expect("fixture smoke read JSON");
+    assert_eq!(read_json["total_messages"].as_u64().unwrap(), 6);
+    assert!(
+        read_json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| {
+                message["session_id"] == "retrieve-codex-alpha" && message["source"] == "codex"
+            })
+    );
+}
+
+#[test]
+fn retrieve_store_to_provider_mapping_uses_public_source_session_id() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&[
+        "retrieve",
+        "public mapping marker",
+        "--max-sessions",
+        "1",
+        "--before-messages",
+        "1",
+        "--after-messages",
+        "1",
+    ]);
+    assert_success_ref(&output);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("retrieve JSON");
+
+    assert_eq!(json["query"], "public mapping marker");
+    assert_eq!(json["total_selected_sessions"].as_u64().unwrap(), 1);
+    let selected = &json["selected_sessions"][0];
+    assert_eq!(selected["source"], "codex");
+    assert_eq!(selected["source_session_id"], "retrieve-codex-alpha");
+    assert!(
+        !selected
+            .as_object()
+            .expect("selected session object")
+            .contains_key("session_id"),
+        "retrieve selected sessions must not expose Store-internal session_id"
+    );
+    let messages = selected["messages"].as_array().expect("messages");
+    assert!(
+        !messages.is_empty(),
+        "retrieve should read provider messages"
+    );
+    assert!(messages.iter().all(|message| {
+        message["session_id"] == "retrieve-codex-alpha" && message["source"] == "codex"
+    }));
+}
+
+#[test]
+fn retrieve_ranking_ties_use_documented_order() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&["retrieve", "ranking tie marker", "--max-sessions", "3"]);
+    assert_success_ref(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ranking retrieve JSON");
+    let sessions = json["selected_sessions"].as_array().expect("sessions");
+
+    let ranked = sessions
+        .iter()
+        .map(|session| {
+            (
+                session["source"].as_str().unwrap(),
+                session["source_session_id"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ranked,
+        vec![
+            ("claude", "retrieve-claude-alpha"),
+            ("codex", "retrieve-codex-alpha"),
+            ("codex", "retrieve-codex-beta"),
+        ]
+    );
+    assert!(sessions.iter().enumerate().all(|(idx, session)| {
+        session["rank"].as_u64().unwrap() == (idx + 1) as u64
+            && session["match_count"].as_u64().unwrap() == 2
+            && session["rank_reason"]["tie_break"]
+                .as_array()
+                .unwrap()
+                .len()
+                == 3
+            && session["rank_reason"]["match_count"].as_u64().unwrap() == 2
+            && session["rank_reason"]["latest_match_timestamp"] == "2026-06-28T08:00:00Z"
+    }));
+    assert!(json["suggested_next_action"].is_null());
+    assert!(sessions.iter().all(|session| {
+        session["rank_reason"]["match_count"].as_u64().unwrap() == 2
+            && session["rank_reason"]["latest_match_timestamp"] == "2026-06-28T08:00:00Z"
+    }));
+}
+
+#[test]
+fn retrieve_bounded_windows_merge_truncate_and_preserve_citations() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&[
+        "retrieve",
+        "window marker",
+        "--before-messages",
+        "2",
+        "--after-messages",
+        "2",
+        "--max-messages-per-session",
+        "3",
+        "--limit",
+        "3",
+        "-C",
+        "1",
+    ]);
+    assert_success_ref(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("window retrieve JSON");
+    let selected = &json["selected_sessions"][0];
+
+    assert!(
+        selected["first_match_citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://event/")
+    );
+    assert!(selected["matches"].as_array().unwrap().iter().all(|item| {
+        item["citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://event/")
+    }));
+    assert_eq!(selected["message_window"]["before_messages"], 2);
+    assert_eq!(selected["message_window"]["after_messages"], 2);
+    assert_eq!(selected["message_window"]["max_messages_per_session"], 3);
+    assert_eq!(selected["message_window"]["truncated"], true);
+    assert!(selected["messages"].as_array().unwrap().len() <= 3);
+    assert!(
+        selected["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| {
+                message["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("window marker anchor")
+            })
+    );
+}
+
+#[test]
+fn retrieve_unreadable_matches_include_learned_memory_and_db_only_events() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&["retrieve", "unreadable marker", "--max-sessions", "5"]);
+    assert_success_ref(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("unreadable retrieve JSON");
+    let unreadable = json["unreadable_matches"]
+        .as_array()
+        .expect("unreadable matches");
+
+    assert_eq!(unreadable.len(), 2);
+    assert!(unreadable.iter().any(|item| {
+        item["citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://learned-memory/")
+            && item["source"] == "learned_memory"
+            && item["snippet"]
+                .as_str()
+                .unwrap()
+                .contains("unreadable marker")
+    }));
+    assert!(unreadable.iter().any(|item| {
+        item["citation"]
+            .as_str()
+            .unwrap()
+            .starts_with("mmr://event/")
+            && item["source"] == "codex"
+            && item["event_id"].as_str().unwrap().starts_with("event:v1:")
+    }));
+    assert!(unreadable.iter().all(|item| {
+        item.get("reason").is_some()
+            && item["before"].is_array()
+            && item["after"].is_array()
+            && item.get("raw_local_ref").is_none()
+    }));
+}
+
+#[test]
+fn retrieve_empty_match_returns_success_json_with_next_action() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&["retrieve", "no such retrieve fixture phrase"]);
+    assert_success_ref(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("empty retrieve JSON");
+
+    assert_eq!(json["query"], "no such retrieve fixture phrase");
+    assert_eq!(json["total_matches"].as_u64().unwrap(), 0);
+    assert_eq!(json["total_selected_sessions"].as_u64().unwrap(), 0);
+    assert!(json["selected_sessions"].as_array().unwrap().is_empty());
+    assert!(json["unreadable_matches"].as_array().unwrap().is_empty());
+    assert_eq!(json["next_page"], false);
+    assert!(json["next_command"].is_null());
+    assert!(
+        json["suggested_next_action"]
+            .as_str()
+            .unwrap()
+            .contains("--ignore-case")
+    );
+}
+
+#[test]
+fn retrieve_output_does_not_leak_raw_local_ref() {
+    let fixture = RetrieveContractFixture::seeded();
+    let output = fixture.run_cli(&["retrieve", "citation marker", "-C", "1"]);
+    assert_success_ref(&output);
+    let stdout = String::from_utf8(output.stdout).expect("retrieve stdout UTF-8");
+
+    assert!(stdout.contains("mmr://event/"));
+    assert!(!stdout.contains("raw_local_ref"));
+    assert!(!stdout.contains("tests/fixtures/retrieve"));
+    assert!(!stdout.contains("retrieve-codex-alpha.jsonl:1"));
 }
 
 #[test]

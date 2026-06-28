@@ -94,6 +94,14 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr list sessions` and `mmr read project` use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set where supported, or `MMR_AUTO_DISCOVER_PROJECT=0`.
 - Scripts that need only the message array can pipe through `jq '.messages'`; event-oriented commands may expose `events` instead.
 
+## Sync and hydration prerequisites
+
+- `mmr link` must run from the project directory first; it creates the local store/link and performs hydration, import, search rebuild, and sync. `mmr sync` expects that link to exist.
+- Remote sync/hydration needs a GitHub identity from `MMR_GITHUB_USER`, `GITHUB_USER`, or the OS user fallback, plus remote auth that is not explicitly disabled by `MMR_FAKE_REMOTE_AUTH=0|false|fail|failed`.
+- The current fake GitHub remote is file-backed. Use `MMR_FAKE_REMOTE_DIR` when tests or cross-machine workflows need a shared remote root; otherwise the default remote root is under the mmr data directory.
+- Sync uploads only redacted projections. Unsafe event types, deterministic secret findings, or degraded PII coverage should block upload rather than silently strip data.
+- Use `mmr status --pretty`, `mmr link --pretty`, `mmr sync --dry-run --pretty`, `mmr redact scan`, and `mmr redact explain <event-id>` to verify hydration/sync state and diagnose blockers before changing behavior.
+
 ## CLI default env vars
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for project-scoped list/read/recall commands; unset or `1` keeps the default auto-discovery behavior.

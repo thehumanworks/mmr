@@ -722,6 +722,23 @@ impl Store {
             .context("lookup project by path")
     }
 
+    pub fn projects(&self) -> Result<Vec<ProjectRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, canonical_path, display_name
+             FROM projects
+             ORDER BY canonical_path ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ProjectRecord {
+                id: row.get(0)?,
+                canonical_path: row.get(1)?,
+                display_name: row.get(2)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("list projects")
+    }
+
     pub fn upsert_source(&self, name: &str, adapter_version: &str) -> Result<String> {
         let id = format!("source:v1:{}", hash_hex(name.as_bytes()));
         let now = now_rfc3339()?;

@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "docs_version": "0.2.0",
+  "generated_at": "2026-06-28T10:45:00Z",
+  "base_url_assumption": "http://127.0.0.1:8000/",
+  "project": {
+    "name": "mmr",
+    "description": "Local AI coding session history retrieval and continuity CLI"
+  },
+  "pages": [
+    {
+      "id": "overview",
+      "title": "mmr Retrieval Docs Overview",
+      "html_url": "/human/overview/",
+      "human_url": "/human/overview/",
+      "agent_url": "/agent/overview/",
+      "markdown_url": "/agent/overview.md",
+      "agent_markdown_url": "/agent/overview.md",
+      "source_material": [
+        "/AGENTS.md",
+        "/goals/2026-06-18-search-to-read-retrieval-pipeline.md",
+        "/goals/2026-06-28-retrieve-all-scope-flags.md"
+      ],
+      "verification_probes": [
+        "test -f human/overview/index.html && test -f agent/overview/index.html",
+        "rg -n \"view: Agent\" agent/overview.md"
+      ]
+    },
+    {
+      "id": "retrieve",
+      "title": "mmr retrieve Search-to-Read Pipeline",
+      "html_url": "/human/retrieve/",
+      "human_url": "/human/retrieve/",
+      "agent_url": "/agent/retrieve/",
+      "markdown_url": "/agent/retrieve.md",
+      "agent_markdown_url": "/agent/retrieve.md",
+      "source_material": [
+        "/specs/retrieval.md",
+        "/goals/2026-06-28-retrieve-all-scope-flags.md",
+        "/docs/mmr-search.md",
+        "/specs/messages.md",
+        "/src/cli.rs",
+        "/src/store.rs",
+        "/src/messages/service.rs",
+        "/src/types/api.rs",
+        "/tests/memory_fabric_contract.rs",
+        "/tests/cli_contract.rs"
+      ],
+      "verification_probes": [
+        "test -f specs/retrieval.md",
+        "test -f human/retrieve/index.html && test -f agent/retrieve/index.html && test -f agent/retrieve.md",
+        "rg -n \"all-projects|all-sources|--pinned-session\" specs/retrieval.md agent/retrieve.md"
+      ]
+    }
+  ]
+}

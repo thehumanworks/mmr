@@ -24,6 +24,7 @@ When implementing or reviewing behavior:
 - [Note command](../docs/mmr-note.md)
 - [Redaction before sync](../docs/mmr-redaction.md)
 - [Find command](../docs/mmr-search.md)
+- [Search-to-read retrieval](retrieval.md)
 - [Codex importer](../docs/mmr-codex-importer.md)
 - [Claude importer](../docs/mmr-claude-importer.md)
 - [Cursor importer](../docs/mmr-cursor-importer.md)

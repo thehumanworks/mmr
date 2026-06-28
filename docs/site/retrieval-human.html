@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mmr retrieve - Human</title>
+  <style>
+    :root { color-scheme: light dark; --accent: #0f766e; --line: #94a3b8; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; line-height: 1.55; }
+    main { max-width: 920px; margin: 0 auto; padding: 40px 20px 64px; }
+    .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+    .tab { padding: 10px 14px; text-decoration: none; color: inherit; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; }
+    .tab[aria-selected="true"] { border-color: var(--line); color: var(--accent); font-weight: 700; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="tabs" aria-label="Retrieval view tabs">
+      <a class="tab" aria-selected="true" href="/human/retrieve/">Human</a>
+      <a class="tab" aria-selected="false" href="/agent/retrieve/">Agent</a>
+    </nav>
+    <h1>mmr retrieve Search-to-Read Pipeline</h1>
+    <p><code>mmr retrieve &lt;query&gt;</code> gives users and coding agents a single command for the workflow they were previously doing by hand: search for a phrase, decide which sessions matter, read the selected sessions, and trim the output so it is useful as context.</p>
+    <p>The command returns ranked session packets with exact match citations and bounded message windows. It deliberately stays lexical: no embeddings, no model summary, and no automatic remote fan-out. Use <code>--all-projects</code> and <code>--all-sources</code> to explicitly broaden local retrieval.</p>
+    <p>For the full product contract, read <a href="../../specs/retrieval.md">specs/retrieval.md</a>.</p>
+  </main>
+</body>
+</html>

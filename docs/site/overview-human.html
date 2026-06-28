@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mmr Retrieval Docs - Human</title>
+  <style>
+    :root { color-scheme: light dark; --accent: #0f766e; --line: #94a3b8; --muted: #64748b; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; line-height: 1.55; }
+    main { max-width: 920px; margin: 0 auto; padding: 40px 20px 64px; }
+    .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+    .tab { padding: 10px 14px; text-decoration: none; color: inherit; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; }
+    .tab[aria-selected="true"] { border-color: var(--line); color: var(--accent); font-weight: 700; }
+    pre { overflow-x: auto; padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="tabs" aria-label="Overview view tabs">
+      <a class="tab" aria-selected="true" href="/human/overview/">Human</a>
+      <a class="tab" aria-selected="false" href="/agent/overview/">Agent</a>
+    </nav>
+    <h1>mmr Retrieval Docs Overview</h1>
+    <p>This local docs site is the source of truth for the search-to-read retrieval feature. It describes the finished <code>mmr retrieve &lt;query&gt;</code> workflow before code is written, so implementation can work backwards from the product contract.</p>
+    <p>The feature turns a remembered clue into a bounded packet of prior-session context. It keeps <code>mmr find</code> as exact literal search and adds <code>mmr retrieve</code> for the higher-level workflow.</p>
+    <p><a href="/human/retrieve/">Open the retrieval pipeline human view</a>.</p>
+    <pre><code>python3 -m http.server 8000
+open http://127.0.0.1:8000/docs/site/index.html
+curl -s http://127.0.0.1:8000/.well-known/agents.json | jq .</code></pre>
+  </main>
+</body>
+</html>
