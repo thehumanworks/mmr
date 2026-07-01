@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-memory-fabric-test-gate-stability"
 title: "Stabilize memory fabric test gate"
-status: "active"
+status: "in-progress"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -36,8 +36,8 @@ in the **goal-driven-development** skill.
 
 ## 3. Definition of Done · INVARIANT
 
-- [ ] **DoD-1** — `mvp_release_gate_e2e_fixture_scenario` passes without `CLI_PROXY_API_KEY`, `OPENAI_API_KEY`, or host summarize config — *verify by:* `env -u CLI_PROXY_API_KEY -u OPENAI_API_KEY -u MMR_CONFIG_FILE cargo test --test memory_fabric_contract mvp_release_gate_e2e_fixture_scenario -- --exact --nocapture`
-- [ ] **DoD-2** — `summarize_config_api_key_contract_is_implemented` completes without hanging and validates `summarize.apiKeyEnv` against its local mock — *verify by:* `cargo test --test memory_fabric_contract summarize_config_api_key_contract_is_implemented -- --exact --nocapture`
+- [x] **DoD-1** — `mvp_release_gate_e2e_fixture_scenario` passes without `CLI_PROXY_API_KEY`, `OPENAI_API_KEY`, or host summarize config — *verify by:* `env -u CLI_PROXY_API_KEY -u OPENAI_API_KEY -u MMR_CONFIG_FILE cargo test --test memory_fabric_contract mvp_release_gate_e2e_fixture_scenario -- --exact --nocapture`
+- [x] **DoD-2** — `summarize_config_api_key_contract_is_implemented` completes without hanging and validates `summarize.apiKeyEnv` against its local mock — *verify by:* `cargo test --test memory_fabric_contract summarize_config_api_key_contract_is_implemented -- --exact --nocapture`
 - [ ] **DoD-3** — Default `cargo test` completes and passes on this repo without external credentials — *verify by:* `env -u CLI_PROXY_API_KEY -u OPENAI_API_KEY cargo test`
 - [ ] **DoD-4** — Optional external summary smoke remains gated and still requires explicit opt-in — *verify by:* `cargo test --test memory_fabric_contract optional_external_summary_provider_smoke_is_gated -- --exact --nocapture`
 - [ ] **DoD-5** — Full repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
@@ -56,12 +56,12 @@ in the **goal-driven-development** skill.
 
 ## 5. Tasks · INVARIANT
 
-### T1 · Reproduce both gate failures in isolation · [ ]
+### T1 · Reproduce both gate failures in isolation · [x]
 
 **Steps**
-- [ ] Run the release-gate scenario with external key env vars removed.
-- [ ] Run the summarize config test with `--nocapture` and a bounded timeout if needed.
-- [ ] Identify whether failure comes from leaked host config, local mock behavior, or client request handling.
+- [x] Run the release-gate scenario with external key env vars removed.
+- [x] Run the summarize config test with `--nocapture` and a bounded timeout if needed.
+- [x] Identify whether failure comes from leaked host config, local mock behavior, or client request handling.
 
 **Verification Contract**
 - *Check:* the current failure/hang is captured with exact commands and no external ambiguity.
@@ -69,18 +69,19 @@ in the **goal-driven-development** skill.
 - *Expected:* before the fix, at least one command reproduces the reviewed failure; after the fix, both pass.
 - *BDD scenarios covered:* Given default test env, release-gate and summarize config tests must not require user credentials or hang.
 
-**Confidence:** 0 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2
+**Confidence:** 95 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 10:49 UTC — `env -u CLI_PROXY_API_KEY -u OPENAI_API_KEY -u MMR_CONFIG_FILE cargo test --test memory_fabric_contract mvp_release_gate_e2e_fixture_scenario -- --exact --nocapture` failed before the fix with `stderr=error: environment variable CLI_PROXY_API_KEY (from summarize.apiKeyEnv) must be set for summarize`; 0 passed, 1 failed.
+- 2026-07-01 10:49 UTC — `perl -e 'alarm 60; exec @ARGV' cargo test --test memory_fabric_contract summarize_config_api_key_contract_is_implemented -- --exact --nocapture` timed out with exit 142 after printing `running 1 test`; mock server did not respond because it waited for client close.
 
-### T2 · Isolate summarize config and fix mock HTTP reads · [ ]
+### T2 · Isolate summarize config and fix mock HTTP reads · [x]
 
 **Steps**
-- [ ] Ensure release-gate summarize calls use deterministic mock config/env and do not inherit host `summarize.apiKeyEnv`.
-- [ ] Replace `read_to_end` mock-server reads with request parsing that stops at headers/body `Content-Length`.
-- [ ] Keep optional external-provider smoke gated behind its explicit env var.
-- [ ] Reuse existing mock helpers if possible.
+- [x] Ensure release-gate summarize calls use deterministic mock config/env and do not inherit host `summarize.apiKeyEnv`.
+- [x] Replace `read_to_end` mock-server reads with request parsing that stops at headers/body `Content-Length`.
+- [x] Keep optional external-provider smoke gated behind its explicit env var.
+- [x] Reuse existing mock helpers if possible.
 
 **Verification Contract**
 - *Check:* targeted release-gate and summarize-config tests pass without external credentials and without hangs.
@@ -88,10 +89,11 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0.
 - *BDD scenarios covered:* Given no external API key, mocked summarize still succeeds; given a mock server, the test responds after one request body instead of waiting for client disconnect.
 
-**Confidence:** 0 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 10:52 UTC — `env -u CLI_PROXY_API_KEY -u OPENAI_API_KEY -u MMR_CONFIG_FILE cargo test --test memory_fabric_contract mvp_release_gate_e2e_fixture_scenario -- --exact --nocapture` passed: 1 passed, 0 failed, 44 filtered out.
+- 2026-07-01 10:52 UTC — `cargo test --test memory_fabric_contract summarize_config_api_key_contract_is_implemented -- --exact --nocapture` passed: 1 passed, 0 failed, 44 filtered out.
 
 ### T3 · Restore the default test gate · [ ]
 
