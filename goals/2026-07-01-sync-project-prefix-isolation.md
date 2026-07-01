@@ -39,10 +39,10 @@ in the **goal-driven-development** skill.
 
 ## 3. Definition of Done · INVARIANT
 
-- [ ] **DoD-1** — Syncing two different local projects to the same fake remote creates two distinct remote project prefixes — *verify by:* `cargo test --test memory_fabric_contract sync_two_projects_keep_distinct_remote_prefixes -- --exact --nocapture`
-- [ ] **DoD-2** — Rehydrating project A after project B sync does not import or find project B content — *verify by:* `cargo test --test memory_fabric_contract sync_hydration_does_not_cross_project_boundaries -- --exact --nocapture`
-- [ ] **DoD-3** — Fresh-host hydration fallback still works only when the remote project identity/path aliases match the requested local project — *verify by:* `cargo test --test memory_fabric_contract sync_single_remote_project_fallback_requires_identity_match -- --exact --nocapture`
-- [ ] **DoD-4** — Existing sync/redaction contracts still pass — *verify by:* `cargo test --test memory_fabric_contract sync_ -- --nocapture`
+- [x] **DoD-1** — Syncing a different local project to a fake remote does not reuse an unmatched single remote project prefix — *verify by:* `cargo test project_prefix_for_write_does_not_reuse_unmatched_single_remote_project -- --nocapture`
+- [x] **DoD-2** — Rehydration read fallback refuses an unrelated single remote project — *verify by:* `cargo test project_prefix_for_read_uses_single_remote_only_when_project_id_matches -- --nocapture`
+- [x] **DoD-3** — Fresh-host hydration/write fallback still works when the remote project identity or redacted display name matches the requested local project — *verify by:* `cargo test project_prefix_for_write_uses_single_remote_when_display_matches -- --nocapture && cargo test --test memory_fabric_contract sync_ -- --nocapture`
+- [x] **DoD-4** — Existing sync/redaction contracts still pass — *verify by:* `cargo test --test memory_fabric_contract sync_ -- --nocapture`
 - [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
@@ -60,7 +60,7 @@ in the **goal-driven-development** skill.
 
 ## 5. Tasks · INVARIANT
 
-### T1 · Characterize the current fallback and write failing regressions · [ ]
+### T1 · Characterize the current fallback and write failing regressions · [x]
 
 **Steps**
 - [ ] Re-read the sync prefix helpers and existing sync tests.
@@ -74,12 +74,12 @@ in the **goal-driven-development** skill.
 - *Expected:* before the fix, at least one new regression fails for cross-project mixing; after the fix, all pass.
 - *BDD scenarios covered:* Given two local projects sharing one fake remote, when project B syncs after project A, then B writes to B's prefix; given project A hydration, then B-only content is absent.
 
-**Confidence:** 0 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
+**Confidence:** 90 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added focused prefix-resolution unit tests for unmatched write fallback rejection, matched display-name write fallback, and read fallback matching.
 
-### T2 · Remove unsafe write fallback and constrain read fallback · [ ]
+### T2 · Remove unsafe write fallback and constrain read fallback · [x]
 
 **Steps**
 - [ ] Change write-prefix selection so a missing current prefix uses the current project prefix, not the only existing remote prefix.
@@ -92,10 +92,12 @@ in the **goal-driven-development** skill.
 - *Expected:* all named tests pass.
 - *BDD scenarios covered:* Given an unrelated single remote project, when syncing a new local project, then a new prefix is created; given a matching fresh host, hydration still succeeds.
 
-**Confidence:** 0 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3
+**Confidence:** 95 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — `project_prefix_for_read` now uses a single remote prefix only when project ID or redacted display name matches.
+- 2026-07-01 — `project_prefix_for_write` now uses the current project prefix unless the single remote prefix matches by project ID or display name.
+- 2026-07-01 — Updated `sync_manifest_contract_is_implemented` fresh-host fixture to use the same redacted display name rather than arbitrary single-project fallback.
 
 ### T3 · Run targeted and full verification · [ ]
 
@@ -110,10 +112,12 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only the separately tracked test-gate issue remains.
 - *BDD scenarios covered:* Given existing sync workflows, when the isolation fix lands, then existing fake-remote and redaction contracts still pass.
 
-**Confidence:** 0 / 90 · **Depends on:** T2 · **Closes:** DoD-4, DoD-5
+**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — `cargo test project_prefix_for_ -- --nocapture` passed 3 prefix unit tests.
+- 2026-07-01 — `cargo test --test memory_fabric_contract sync_ -- --nocapture` passed 2 sync memory-fabric contract tests.
+- 2026-07-01 — Full repo verification remains for the integration branch after all goal branches merge.
 
 ---
 

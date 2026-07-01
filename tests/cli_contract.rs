@@ -4559,6 +4559,33 @@ fn share_session_ssh_dry_run_reports_import_bundle_plan() {
 }
 
 #[test]
+fn share_session_ssh_rejects_option_like_target() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "share",
+        "session",
+        "--session",
+        "sess-codex-1",
+        "--project",
+        "/Users/test/codex-proj",
+        "--to=-oProxyCommand=sh",
+        "--dry-run",
+    ]);
+
+    assert_cli_failure(&output, 2, Some("share/session"));
+    let json = parse_stdout_json(&output);
+    assert!(json["planned_commands"].is_null());
+    assert!(
+        json["message"]
+            .as_str()
+            .expect("failure message")
+            .contains("must not start with '-'")
+    );
+}
+
+#[test]
 fn share_session_auto_ignores_legacy_teleport_transport_env() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli_with_env(

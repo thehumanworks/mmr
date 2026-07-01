@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 
@@ -234,9 +234,57 @@ pub fn native_write_targets(
                 source_canonical,
             ),
         };
+        let destination = validate_native_destination(profile, home, destination)?;
         targets.push((bundle_path, destination));
     }
     Ok(targets)
+}
+
+fn validate_native_destination(
+    profile: &dyn TeleportProviderProfile,
+    home: &Path,
+    destination: PathBuf,
+) -> Result<PathBuf, TeleportFailure> {
+    let Some(root) = native_root_for_source(profile.source_name(), home) else {
+        return Ok(destination);
+    };
+    let relative = destination.strip_prefix(&root).map_err(|_| {
+        TeleportFailure::usage(
+            "teleport/apply",
+            format!(
+                "native apply destination {} escapes provider root {}",
+                destination.display(),
+                root.display()
+            ),
+        )
+    })?;
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(TeleportFailure::usage(
+            "teleport/apply",
+            format!(
+                "native apply destination {} contains path traversal outside provider root {}",
+                destination.display(),
+                root.display()
+            ),
+        ));
+    }
+    Ok(destination)
+}
+
+fn native_root_for_source(source: &str, home: &Path) -> Option<PathBuf> {
+    match source {
+        "codex" => Some(home.join(".codex")),
+        "claude" => Some(home.join(".claude").join("projects")),
+        "cursor" => Some(home.join(".cursor").join("projects")),
+        "grok" => Some(home.join(".grok").join("sessions")),
+        "pi" => Some(home.join(".pi").join("agent").join("sessions")),
+        _ => None,
+    }
 }
 
 fn grok_destination_for_artifact(
@@ -335,6 +383,12 @@ pub(crate) fn replace_first_relative_component(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::teleport::bundle::{BUNDLE_FORMAT_VERSION, TeleportBundleFile};
+    use crate::teleport::manifest::{
+        BundleMetadata, ManifestProject, ManifestRestore, ManifestSession, TeleportFidelity,
+        TeleportManifest,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn profile_for_codex_returns_profile() {
@@ -348,6 +402,152 @@ mod tests {
         match profile_for("not-a-provider") {
             Err(err) => assert!(err.message.contains("unsupported teleport provider")),
             Ok(_) => panic!("expected unknown provider to fail"),
+        }
+    }
+
+    #[test]
+    fn native_write_targets_reject_forged_parent_dir_escape() {
+        let profile = profile_for("codex").expect("codex profile");
+        let bundle = test_bundle("codex", "/tmp/.codex/../escape.jsonl");
+        let error = native_write_targets(
+            profile,
+            &bundle,
+            Path::new("/Users/target"),
+            "/Users/target/project",
+        )
+        .expect_err("path traversal should be rejected");
+
+        assert_eq!(error.command, "teleport/apply");
+        assert!(
+            error.message.contains("path traversal")
+                && error.message.contains("/Users/target/.codex")
+        );
+    }
+
+    #[test]
+    fn native_write_targets_reject_forged_absolute_suffix() {
+        let profile = profile_for("codex").expect("codex profile");
+        let bundle = test_bundle("codex", "/tmp/.codex//tmp/escape.jsonl");
+        let error = native_write_targets(
+            profile,
+            &bundle,
+            Path::new("/Users/target"),
+            "/Users/target/project",
+        )
+        .expect_err("absolute suffix should be rejected");
+
+        assert_eq!(error.command, "teleport/apply");
+        assert!(error.message.contains("escapes provider root"));
+    }
+
+    #[test]
+    fn native_write_targets_reject_provider_matrix_parent_dir_escape() {
+        for (source, native_source_file) in [
+            (
+                "claude",
+                "/tmp/.claude/projects/source-project/../escape.jsonl",
+            ),
+            (
+                "cursor",
+                "/tmp/.cursor/projects/source-project/../escape.jsonl",
+            ),
+            (
+                "grok",
+                "/tmp/.grok/sessions/source-project/../escape/updates.jsonl",
+            ),
+            (
+                "pi",
+                "/tmp/.pi/agent/sessions/source-project/../escape.jsonl",
+            ),
+        ] {
+            let profile = profile_for(source).expect("provider profile");
+            let bundle = test_bundle(source, native_source_file);
+            let result = native_write_targets(
+                profile,
+                &bundle,
+                Path::new("/Users/target"),
+                "/Users/target/project",
+            );
+            let error = match result {
+                Ok(targets) => panic!("{source} parent traversal should be rejected: {targets:?}"),
+                Err(error) => error,
+            };
+
+            assert_eq!(error.command, "teleport/apply");
+            assert!(
+                error.message.contains("path traversal"),
+                "{source} error={}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn native_write_targets_accept_provider_root_relative_path() {
+        let profile = profile_for("codex").expect("codex profile");
+        let bundle = test_bundle("codex", "/Users/source/.codex/sessions/2026/07/sess.jsonl");
+        let targets = native_write_targets(
+            profile,
+            &bundle,
+            Path::new("/Users/target"),
+            "/Users/target/project",
+        )
+        .expect("safe native target");
+
+        assert_eq!(
+            targets[0].1,
+            Path::new("/Users/target")
+                .join(".codex")
+                .join("sessions")
+                .join("2026")
+                .join("07")
+                .join("sess.jsonl")
+        );
+    }
+
+    fn test_bundle(source: &str, native_source_file: &str) -> TeleportBundleFile {
+        TeleportBundleFile {
+            mmr_teleport_bundle_version: BUNDLE_FORMAT_VERSION,
+            manifest: TeleportManifest {
+                mmr_teleport_manifest_version: 1,
+                bundle_id: "tp:v1:test".to_string(),
+                created_at: "2026-07-01T00:00:00Z".to_string(),
+                source_host: "source".to_string(),
+                mmr_version: "0.2.0".to_string(),
+                min_mmr_version: "0.2.0".to_string(),
+                source: source.to_string(),
+                parser_version: "test".to_string(),
+                fidelity: TeleportFidelity::Native,
+                session: ManifestSession {
+                    source_session_id: "sess".to_string(),
+                    message_count: 1,
+                    first_timestamp: "2026-07-01T00:00:00Z".to_string(),
+                    last_timestamp: "2026-07-01T00:00:00Z".to_string(),
+                    partial_tail: false,
+                },
+                project: ManifestProject {
+                    canonical_path: "/Users/source/project".to_string(),
+                    aliases: Vec::new(),
+                    path_remap: BTreeMap::new(),
+                },
+                artifacts: Vec::new(),
+                capabilities: Vec::new(),
+                restore: ManifestRestore {
+                    agent_resume: "best_effort".to_string(),
+                    documented_command: "codex exec resume sess".to_string(),
+                    adapters: Vec::new(),
+                },
+            },
+            metadata: BundleMetadata {
+                source: source.to_string(),
+                source_session_id: "sess".to_string(),
+                project_name: "/Users/source/project".to_string(),
+                project_path: "/Users/source/project".to_string(),
+                native_source_file: native_source_file.to_string(),
+                packed_at: "2026-07-01T00:00:00Z".to_string(),
+                notes: None,
+            },
+            files: BTreeMap::new(),
         }
     }
 }

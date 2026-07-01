@@ -4275,7 +4275,7 @@ fn sync_manifest_contract_is_implemented() {
     let data_home_one = tmp.path().join("data-one");
     let data_home_two = tmp.path().join("data-two");
     let project = tmp.path().join("plain-project");
-    let fresh_project = tmp.path().join("fresh-host-project");
+    let fresh_project = tmp.path().join("fresh-host").join("plain-project");
     let remote = tmp.path().join("fake-github");
     std::fs::create_dir_all(&home).expect("create HOME");
     std::fs::create_dir_all(&project).expect("create project");

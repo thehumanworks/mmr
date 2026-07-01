@@ -35,6 +35,7 @@ pub fn parse_ssh_target(to: &str) -> Result<SshTarget, String> {
     if trimmed.is_empty() {
         return Err("--to must name an SSH host (for example user@macbook)".to_string());
     }
+    reject_ssh_target_shell_fragments(trimmed)?;
     if trimmed.contains("://") {
         return Err(format!(
             "teleport send over SSH expects user@host; got transport-specific URL {trimmed:?}"
@@ -49,6 +50,22 @@ pub fn parse_ssh_target(to: &str) -> Result<SshTarget, String> {
     Ok(SshTarget {
         host_spec: trimmed.to_string(),
     })
+}
+
+fn reject_ssh_target_shell_fragments(target: &str) -> Result<(), String> {
+    if target.chars().any(char::is_whitespace) {
+        return Err("teleport send over SSH target must not contain whitespace".to_string());
+    }
+    if target.starts_with('-') {
+        return Err("teleport send over SSH target must not start with '-'".to_string());
+    }
+    let forbidden = [';', '|', '&', '`', '$', '(', ')', '<', '>', '"', '\''];
+    if target.chars().any(|ch| forbidden.contains(&ch)) {
+        return Err(
+            "teleport send over SSH target contains unsupported shell metacharacters".to_string(),
+        );
+    }
+    Ok(())
 }
 
 pub fn remote_inbox_dir(bundle_id: &str) -> String {
@@ -86,6 +103,7 @@ pub fn ssh_base_args(host: &str) -> Vec<String> {
         "ssh".to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
+        "--".to_string(),
         host.to_string(),
     ]
 }
@@ -179,6 +197,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_ssh_target_rejects_option_like_and_shell_fragments() {
+        for target in [
+            "-oProxyCommand=sh",
+            "bob@mac book",
+            "bob@macbook;rm",
+            "bob@macbook&&other",
+            "bob@macbook|other",
+            "bob@macbook`whoami`",
+            "http://studio",
+        ] {
+            assert!(
+                parse_ssh_target(target).is_err(),
+                "target should be rejected: {target}"
+            );
+        }
+    }
+
+    #[test]
     fn ssh_stream_apply_argv_uses_stdin_locator() {
         let argv = ssh_stream_apply_argv("alice@laptop");
         assert_eq!(
@@ -186,6 +222,35 @@ mod tests {
             Some("mmr import bundle --to - --apply")
         );
         assert_eq!(argv.first().map(String::as_str), Some("ssh"));
+    }
+
+    #[test]
+    fn ssh_base_args_delimit_host_and_share_plan_still_matches() {
+        let base = ssh_base_args("bob@macbook");
+        assert!(base.windows(2).any(|args| args == ["--", "bob@macbook"]));
+
+        let plan = build_ssh_command_plan(
+            &SshTarget {
+                host_spec: "bob@macbook".to_string(),
+            },
+            "tp:v1:deadbeef",
+            Path::new("/tmp/bundle.mmr"),
+        );
+        for argv in [
+            &plan.probe_remote_mmr,
+            &plan.stream_apply,
+            &plan.mkdir_inbox,
+        ] {
+            assert!(
+                argv.windows(2).any(|args| args == ["--", "bob@macbook"]),
+                "ssh argv should delimit host: {argv:?}"
+            );
+        }
+        assert_eq!(
+            plan.stream_apply.last().map(String::as_str),
+            Some("mmr import bundle --to - --apply")
+        );
+        assert!(plan.scp_bundle.last().unwrap().contains("bundle.mmr"));
     }
 
     #[test]

@@ -36,10 +36,10 @@ in the **goal-driven-development** skill.
 
 ## 3. Definition of Done · INVARIANT
 
-- [ ] **DoD-1** — Teleport SSH target parsing rejects leading-dash targets, whitespace, and shell metacharacters — *verify by:* `cargo test parse_ssh_target_rejects_option_like_and_shell_fragments -- --nocapture`
-- [ ] **DoD-2** — Teleport SSH argv construction places `--` before the host where OpenSSH supports it, and still builds the expected probe/stream/scp fallback plan — *verify by:* `cargo test ssh_base_args_delimit_host_and_share_plan_still_matches -- --nocapture`
-- [ ] **DoD-3** — `share session --to -oProxyCommand=sh --dry-run` fails as structured usage instead of returning a runnable SSH plan — *verify by:* `cargo test --test cli_contract share_session_ssh_rejects_option_like_target -- --exact --nocapture`
-- [ ] **DoD-4** — Valid SSH targets still work in parser and dry-run contract tests — *verify by:* `cargo test parse_ssh_target_accepts_user_host share_session_ssh_dry_run_reports_import_bundle_plan -- --nocapture`
+- [x] **DoD-1** — Teleport SSH target parsing rejects leading-dash targets, whitespace, and shell metacharacters — *verify by:* `cargo test parse_ssh_target_rejects_option_like_and_shell_fragments -- --nocapture`
+- [x] **DoD-2** — Teleport SSH argv construction places `--` before the host where OpenSSH supports it, and still builds the expected probe/stream/scp fallback plan — *verify by:* `cargo test ssh_base_args_delimit_host_and_share_plan_still_matches -- --nocapture`
+- [x] **DoD-3** — `share session --to -oProxyCommand=sh --dry-run` fails as structured usage instead of returning a runnable SSH plan — *verify by:* `cargo test --test cli_contract share_session_ssh_rejects_option_like_target -- --exact --nocapture`
+- [x] **DoD-4** — Valid SSH targets still work in parser and dry-run contract tests — *verify by:* `cargo test teleport::ssh:: -- --nocapture && cargo test --test cli_contract share_session_ssh_dry_run_reports_import_bundle_plan -- --exact --nocapture`
 - [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
@@ -57,7 +57,7 @@ in the **goal-driven-development** skill.
 
 ## 5. Tasks · INVARIANT
 
-### T1 · Add unsafe-target regressions · [ ]
+### T1 · Add unsafe-target regressions · [x]
 
 **Steps**
 - [ ] Add unit coverage for `-oProxyCommand=sh`, whitespace, semicolons, and URL targets.
@@ -70,12 +70,13 @@ in the **goal-driven-development** skill.
 - *Expected:* all named tests pass after implementation.
 - *BDD scenarios covered:* Given an option-like target, when sharing over SSH, then no SSH argv plan is emitted.
 
-**Confidence:** 0 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
+**Confidence:** 95 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added parser, argv, and CLI dry-run regressions for leading-dash and shell-fragment targets.
+- 2026-07-01 — `cargo test parse_ssh_target_rejects_option_like_and_shell_fragments -- --nocapture`, `cargo test ssh_base_args_delimit_host_and_share_plan_still_matches -- --nocapture`, and `cargo test --test cli_contract share_session_ssh_rejects_option_like_target -- --exact --nocapture` passed.
 
-### T2 · Reuse or mirror the safe peer SSH target rules · [ ]
+### T2 · Reuse or mirror the safe peer SSH target rules · [x]
 
 **Steps**
 - [ ] Factor common SSH target validation if it stays small and avoids coupling churn.
@@ -89,10 +90,12 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0.
 - *BDD scenarios covered:* Given `bob@macbook`, SSH plan still builds; given `-oProxyCommand=sh`, parsing fails.
 
-**Confidence:** 0 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Mirrored peer parser constraints in teleport SSH parsing and inserted `--` before the host in teleport SSH argv construction.
+- 2026-07-01 — `cargo test teleport::ssh:: -- --nocapture` passed 11 SSH unit tests.
+- 2026-07-01 — `cargo test --test cli_contract share_session_ssh_dry_run_reports_import_bundle_plan -- --exact --nocapture` passed.
 
 ### T3 · Verify teleport and repo gates · [ ]
 
@@ -106,10 +109,10 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Given normal dry-run SSH sharing, the plan is still reported; given unsafe target syntax, usage fails early.
 
-**Confidence:** 0 / 90 · **Depends on:** T2 · **Closes:** DoD-5
+**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Targeted teleport SSH unit and CLI dry-run checks passed. Full repo verification remains for the integration branch after all goal branches merge.
 
 ---
 
