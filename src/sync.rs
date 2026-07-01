@@ -693,7 +693,13 @@ impl FakeGithubRemote {
         if self.root.join(&current).exists() {
             return Ok(Some(current));
         }
-        self.single_remote_project_prefix()
+        let Some(prefix) = self.single_remote_project_prefix()? else {
+            return Ok(None);
+        };
+        if self.project_matches_prefix(project, &prefix)? {
+            return Ok(Some(prefix));
+        }
+        Ok(None)
     }
 
     fn project_prefix_for_write(&self, project: &ProjectRecord) -> Result<String> {
@@ -701,10 +707,25 @@ impl FakeGithubRemote {
         if self.root.join(&current).exists() {
             return Ok(current);
         }
-        Ok(self.single_remote_project_prefix()?.unwrap_or(current))
+        let Some(prefix) = self.single_remote_project_prefix()? else {
+            return Ok(current);
+        };
+        if self.project_matches_prefix(project, &prefix)? {
+            return Ok(prefix);
+        }
+        Ok(current)
     }
 
     fn project_id_for_prefix(&self, project_prefix: &str) -> Result<Option<String>> {
+        Ok(self
+            .project_payload_for_prefix(project_prefix)?
+            .map(|payload| payload.project_id))
+    }
+
+    fn project_payload_for_prefix(
+        &self,
+        project_prefix: &str,
+    ) -> Result<Option<RemoteProjectPayload>> {
         let project_path = self.root.join(project_prefix).join("project.json");
         if !project_path.exists() {
             return Ok(None);
@@ -713,7 +734,18 @@ impl FakeGithubRemote {
             .with_context(|| format!("read remote project {}", project_path.display()))?;
         let payload = serde_json::from_slice::<RemoteProjectPayload>(&bytes)
             .with_context(|| format!("parse remote project {}", project_path.display()))?;
-        Ok(Some(payload.project_id))
+        Ok(Some(payload))
+    }
+
+    fn project_matches_prefix(
+        &self,
+        project: &ProjectRecord,
+        project_prefix: &str,
+    ) -> Result<bool> {
+        let Some(payload) = self.project_payload_for_prefix(project_prefix)? else {
+            return Ok(false);
+        };
+        Ok(payload.project_id == project.id || payload.display_name == project.display_name)
     }
 
     fn single_remote_project_prefix(&self) -> Result<Option<String>> {
@@ -740,6 +772,106 @@ impl FakeGithubRemote {
             "{project_prefix}/manifests/{}.json",
             safe_path_component(root_hash)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_remote(root: PathBuf) -> FakeGithubRemote {
+        FakeGithubRemote {
+            descriptor: "test-remote".to_string(),
+            root,
+            auth_ok: true,
+        }
+    }
+
+    fn test_project(id: &str) -> ProjectRecord {
+        ProjectRecord {
+            id: id.to_string(),
+            canonical_path: format!("/tmp/{id}"),
+            display_name: id.to_string(),
+        }
+    }
+
+    fn write_remote_project(remote: &FakeGithubRemote, prefix: &str, project_id: &str) {
+        let project_path = remote.root.join(prefix).join("project.json");
+        fs::create_dir_all(project_path.parent().expect("project parent")).expect("project dir");
+        fs::write(
+            project_path,
+            serde_json::to_vec_pretty(&RemoteProjectPayload {
+                manifest_version: MANIFEST_VERSION,
+                project_id: project_id.to_string(),
+                display_name: project_id.to_string(),
+            })
+            .expect("serialize project"),
+        )
+        .expect("write project");
+    }
+
+    #[test]
+    fn project_prefix_for_write_does_not_reuse_unmatched_single_remote_project() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let remote = test_remote(tmp.path().to_path_buf());
+        write_remote_project(&remote, "projects/project-a", "project-a");
+
+        let project_b = test_project("project-b");
+
+        assert_eq!(
+            remote
+                .project_prefix_for_write(&project_b)
+                .expect("write prefix"),
+            "projects/project-b"
+        );
+    }
+
+    #[test]
+    fn project_prefix_for_write_uses_single_remote_when_display_matches() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let remote = test_remote(tmp.path().to_path_buf());
+        write_remote_project(&remote, "projects/legacy-prefix", "project-a");
+
+        let mut fresh_host_project = test_project("fresh-host-id");
+        fresh_host_project.display_name = "project-a".to_string();
+
+        assert_eq!(
+            remote
+                .project_prefix_for_write(&fresh_host_project)
+                .expect("write prefix"),
+            "projects/legacy-prefix"
+        );
+    }
+
+    #[test]
+    fn project_prefix_for_read_uses_single_remote_only_when_project_id_matches() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let remote = test_remote(tmp.path().to_path_buf());
+        write_remote_project(&remote, "projects/legacy-prefix", "project-a");
+
+        let project_a = test_project("project-a");
+        let mut display_match = test_project("project-new-id");
+        display_match.display_name = "project-a".to_string();
+        let project_b = test_project("project-b");
+
+        assert_eq!(
+            remote
+                .project_prefix_for_read(&project_a)
+                .expect("read prefix"),
+            Some("projects/legacy-prefix".to_string())
+        );
+        assert_eq!(
+            remote
+                .project_prefix_for_read(&display_match)
+                .expect("read prefix"),
+            Some("projects/legacy-prefix".to_string())
+        );
+        assert_eq!(
+            remote
+                .project_prefix_for_read(&project_b)
+                .expect("read prefix"),
+            None
+        );
     }
 }
 

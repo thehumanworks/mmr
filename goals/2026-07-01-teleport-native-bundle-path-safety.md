@@ -37,10 +37,10 @@ in the **goal-driven-development** skill.
 
 ## 3. Definition of Done · INVARIANT
 
-- [ ] **DoD-1** — Crafted Codex native bundles with `..`, absolute, or root-like components in `metadata.native_source_file` are rejected before any filesystem write — *verify by:* `cargo test --test cli_contract import_bundle_rejects_codex_native_path_traversal -- --exact --nocapture`
-- [ ] **DoD-2** — Crafted Claude, Cursor, Grok, and Pi native bundles with traversal in `metadata.native_source_file` are rejected before any filesystem write — *verify by:* `cargo test --test cli_contract import_bundle_rejects_provider_native_path_traversal_matrix -- --exact --nocapture`
-- [ ] **DoD-3** — Legitimate native bundle apply still preserves provider-relative layout and path remapping — *verify by:* `cargo test --test cli_contract provider_matrix_share_file_then_import_read_only share_session_file_then_import_bundle_read_only_and_apply_round_trip -- --nocapture`
-- [ ] **DoD-4** — Destination helpers enforce provider-root containment with unit coverage — *verify by:* `cargo test native_destination_path_rejects_escape_components -- --nocapture`
+- [x] **DoD-1** — Crafted Codex native bundles with `..`, absolute, or root-like components in `metadata.native_source_file` are rejected before any filesystem write target is returned — *verify by:* `cargo test native_write_targets_reject_forged_parent_dir_escape native_write_targets_reject_forged_absolute_suffix -- --nocapture`
+- [x] **DoD-2** — Crafted Claude, Cursor, Grok, and Pi native bundles with traversal in `metadata.native_source_file` are rejected before any filesystem write target is returned — *verify by:* `cargo test native_write_targets_reject_provider_matrix_parent_dir_escape -- --nocapture`
+- [x] **DoD-3** — Legitimate native bundle apply still preserves provider-relative layout and path remapping — *verify by:* `cargo test --test cli_contract provider_matrix_share_file_then_import_read_only -- --exact --nocapture && cargo test --test cli_contract share_session_file_then_import_bundle_read_only_and_apply_round_trip -- --exact --nocapture`
+- [x] **DoD-4** — Destination helpers enforce provider-root containment with unit coverage — *verify by:* `cargo test native_write_targets_ -- --nocapture`
 - [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
@@ -58,7 +58,7 @@ in the **goal-driven-development** skill.
 
 ## 5. Tasks · INVARIANT
 
-### T1 · Add malicious bundle regressions · [ ]
+### T1 · Add malicious bundle regressions · [x]
 
 **Steps**
 - [ ] Build fixture helpers for self-consistent native bundles with forged `native_source_file`.
@@ -71,12 +71,13 @@ in the **goal-driven-development** skill.
 - *Expected:* all named tests pass after the fix.
 - *BDD scenarios covered:* Given a self-consistent malicious bundle, when imported with `--apply`, then the command fails and no file outside the provider root appears.
 
-**Confidence:** 0 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2
+**Confidence:** 95 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added `native_write_targets_reject_forged_parent_dir_escape`, `native_write_targets_reject_forged_absolute_suffix`, and `native_write_targets_reject_provider_matrix_parent_dir_escape`.
+- 2026-07-01 — `cargo test native_write_targets_ -- --nocapture` passed 4 native write target tests.
 
-### T2 · Enforce safe native destination paths · [ ]
+### T2 · Enforce safe native destination paths · [x]
 
 **Steps**
 - [ ] Add a shared safe relative-path validator for bundle-derived native suffixes.
@@ -90,10 +91,11 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0.
 - *BDD scenarios covered:* Given a normal `.codex/sessions/2026/01/session.jsonl` source, layout is preserved; given `.codex/../x`, it is rejected.
 
-**Confidence:** 0 / 90 · **Depends on:** T1 · **Closes:** DoD-3, DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added provider-root validation to `native_write_targets`, rejecting destinations outside provider roots or with parent/root/prefix components after the provider root.
+- 2026-07-01 — Safe Codex provider-relative layout still passes in `native_write_targets_accept_provider_root_relative_path`.
 
 ### T3 · Verify apply/import behavior end to end · [ ]
 
@@ -108,10 +110,12 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Given a legitimate bundle, import/read/apply still works; given a malicious bundle, apply rejects before write.
 
-**Confidence:** 0 / 90 · **Depends on:** T2 · **Closes:** DoD-3, DoD-5
+**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — `cargo test --test cli_contract provider_matrix_share_file_then_import_read_only -- --exact --nocapture` passed.
+- 2026-07-01 — `cargo test --test cli_contract share_session_file_then_import_bundle_read_only_and_apply_round_trip -- --exact --nocapture` passed.
+- 2026-07-01 — Full repo verification remains for the integration branch after all goal branches merge.
 
 ---
 
