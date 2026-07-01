@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::agent::{ai, compact};
@@ -5262,13 +5262,20 @@ struct RetrieveWindow {
 }
 
 #[derive(Debug)]
+struct RetrieveRankedSession {
+    identity: RetrieveSessionIdentity,
+    matches: Vec<RetrieveMatchRecord>,
+    match_count: usize,
+    latest_match_timestamp: String,
+}
+
+#[derive(Debug)]
 struct RetrieveSessionCandidate {
     identity: RetrieveSessionIdentity,
     selected: RetrieveSelectedSession,
-    message_window: RetrieveMessageWindow,
+    message_window: Option<RetrieveMessageWindow>,
     message_history: Vec<ApiMessage>,
     match_count: usize,
-    latest_match_timestamp: String,
 }
 
 fn retrieve_output(
@@ -5317,7 +5324,7 @@ fn retrieve_output(
     }
 
     let mut unreadable_matches = matches.learned_matches;
-    let mut candidates = Vec::new();
+    let mut ranked_sessions = Vec::new();
     for (identity, mut session_matches) in grouped {
         sort_retrieve_matches(&mut session_matches);
         let Some(provider_source) = source_filter_from_name(identity.source.as_str()) else {
@@ -5329,9 +5336,7 @@ fn retrieve_output(
             continue;
         };
 
-        let provider_messages =
-            retrieve_provider_messages(service, &identity, provider_source).unwrap_or_default();
-        if provider_messages.is_empty() {
+        if !retrieve_provider_session_exists(service, &identity, provider_source) {
             unreadable_matches.extend(
                 session_matches
                     .iter()
@@ -5340,16 +5345,10 @@ fn retrieve_output(
             continue;
         }
 
-        candidates.push(build_retrieve_session_candidate(
-            args,
-            &limits,
-            identity,
-            session_matches,
-            provider_messages,
-        ));
+        ranked_sessions.push(build_retrieve_ranked_session(identity, session_matches));
     }
 
-    candidates.sort_by(|left, right| {
+    ranked_sessions.sort_by(|left, right| {
         right
             .match_count
             .cmp(&left.match_count)
@@ -5367,8 +5366,27 @@ fn retrieve_output(
             })
     });
 
-    let total_ranked_sessions = candidates.len();
-    candidates.truncate(limits.max_sessions);
+    let total_ranked_sessions = ranked_sessions.len();
+    ranked_sessions.truncate(limits.max_sessions);
+    let mut candidates = Vec::new();
+    for ranked_session in ranked_sessions {
+        let provider_messages = if args.full_message_history {
+            let provider_source = source_filter_from_name(ranked_session.identity.source.as_str())
+                .expect("ranked retrieve session has supported source");
+            Some(
+                retrieve_provider_messages(service, &ranked_session.identity, provider_source)
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
+        candidates.push(build_retrieve_session_candidate(
+            args,
+            &limits,
+            ranked_session,
+            provider_messages,
+        ));
+    }
     assign_retrieve_ranks(&mut candidates);
     let (next_page, next_offset) = if args.full_message_history {
         apply_retrieve_flattened_pagination(&mut candidates, &limits)
@@ -5411,7 +5429,7 @@ fn retrieve_output(
         .into_iter()
         .map(|mut candidate| {
             if args.full_message_history {
-                candidate.selected.message_window = Some(candidate.message_window);
+                candidate.selected.message_window = candidate.message_window;
                 candidate.selected.messages = Some(candidate.message_history);
             }
             candidate.selected
@@ -5814,6 +5832,7 @@ fn retrieve_provider_messages(
     identity: &RetrieveSessionIdentity,
     source: SourceFilter,
 ) -> Result<Vec<ApiMessage>> {
+    record_retrieve_window_load(identity);
     let response = service.messages(
         std::slice::from_ref(&identity.source_session_id),
         Some(identity.project_name.as_str()),
@@ -5823,21 +5842,68 @@ fn retrieve_provider_messages(
     Ok(response.messages)
 }
 
-fn build_retrieve_session_candidate(
-    args: &RetrieveArgs,
-    limits: &RetrieveLimits,
+fn retrieve_provider_session_exists(
+    service: &QueryService,
+    identity: &RetrieveSessionIdentity,
+    source: SourceFilter,
+) -> bool {
+    let Ok(response) = service.sessions(
+        Some(identity.project_name.as_str()),
+        Some(source),
+        None,
+        0,
+        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+    ) else {
+        return false;
+    };
+    response.sessions.iter().any(|session| {
+        session.source == identity.source && session.session_id == identity.source_session_id
+    })
+}
+
+fn record_retrieve_window_load(identity: &RetrieveSessionIdentity) {
+    let Ok(path) = std::env::var("MMR_TEST_RETRIEVE_WINDOW_LOAD_LOG") else {
+        return;
+    };
+    let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(
+        file,
+        "{}\t{}\t{}",
+        identity.source, identity.project_name, identity.source_session_id
+    );
+}
+
+fn build_retrieve_ranked_session(
     identity: RetrieveSessionIdentity,
     matches: Vec<RetrieveMatchRecord>,
-    provider_messages: Vec<ApiMessage>,
-) -> RetrieveSessionCandidate {
+) -> RetrieveRankedSession {
     let latest_match_timestamp = matches
         .iter()
         .map(|item| item.timestamp.as_str())
         .max()
         .unwrap_or_default()
         .to_string();
-    let rank_reason = RetrieveRankReason {
+    RetrieveRankedSession {
+        identity,
         match_count: matches.len(),
+        latest_match_timestamp,
+        matches,
+    }
+}
+
+fn build_retrieve_session_candidate(
+    args: &RetrieveArgs,
+    limits: &RetrieveLimits,
+    ranked_session: RetrieveRankedSession,
+    provider_messages: Option<Vec<ApiMessage>>,
+) -> RetrieveSessionCandidate {
+    let identity = ranked_session.identity;
+    let matches = ranked_session.matches;
+    let latest_match_timestamp = ranked_session.latest_match_timestamp;
+    let rank_reason = RetrieveRankReason {
+        match_count: ranked_session.match_count,
         latest_match_timestamp: latest_match_timestamp.clone(),
         tie_break: vec![
             identity.source.clone(),
@@ -5849,36 +5915,42 @@ fn build_retrieve_session_candidate(
         .first()
         .map(|item| item.citation.clone())
         .unwrap_or_default();
-    let RetrieveWindow {
-        messages,
-        truncated,
-    } = build_retrieve_message_window(args, limits, &matches, provider_messages);
+    let (message_history, message_window) = if let Some(provider_messages) = provider_messages {
+        let RetrieveWindow {
+            messages,
+            truncated,
+        } = build_retrieve_message_window(args, limits, &matches, provider_messages);
+        (
+            messages,
+            Some(RetrieveMessageWindow {
+                before_messages: limits.before_messages,
+                after_messages: limits.after_messages,
+                max_messages_per_session: limits.max_messages_per_session,
+                truncated,
+            }),
+        )
+    } else {
+        (Vec::new(), None)
+    };
     let selected = RetrieveSelectedSession {
         rank: 0,
         source: identity.source.clone(),
         project_name: identity.project_name.clone(),
         source_session_id: identity.source_session_id.clone(),
         rank_reason,
-        match_count: matches.len(),
+        match_count: ranked_session.match_count,
         first_match_citation,
         matches: matches.iter().map(RetrieveMatchRecord::output).collect(),
         message_window: None,
         messages: None,
-    };
-    let message_window = RetrieveMessageWindow {
-        before_messages: limits.before_messages,
-        after_messages: limits.after_messages,
-        max_messages_per_session: limits.max_messages_per_session,
-        truncated,
     };
 
     RetrieveSessionCandidate {
         identity,
         selected,
         message_window,
-        message_history: messages,
-        match_count: matches.len(),
-        latest_match_timestamp,
+        message_history,
+        match_count: ranked_session.match_count,
     }
 }
 

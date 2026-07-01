@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-retrieve-window-ranking-performance"
 title: "Avoid unused retrieve windows"
-status: "active"
+status: "in-progress"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -37,10 +37,10 @@ in the **goal-driven-development** skill.
 
 ## 3. Definition of Done · INVARIANT
 
-- [ ] **DoD-1** — Retrieve ranks matched session identities from match metadata before loading provider message windows — *verify by:* `cargo test --test memory_fabric_contract retrieve_ranks_before_provider_window_loading -- --exact --nocapture`
-- [ ] **DoD-2** — With default concise output and `--max-sessions 3`, provider windows are materialized only for the selected sessions, not every matched group — *verify by:* `cargo test --test memory_fabric_contract retrieve_default_output_loads_windows_only_for_selected_sessions -- --exact --nocapture`
-- [ ] **DoD-3** — `--full-message-history` pagination, pinned-session continuation, unreadable matches, and ranking tie-breaks remain unchanged — *verify by:* `cargo test --test cli_contract retrieve_flattened_pagination_across_selected_sessions retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions retrieve_next_command_preserves_debug_and_full_message_history -- --nocapture && cargo test --test memory_fabric_contract retrieve_ranking_ties_use_documented_order retrieve_unreadable_matches_include_learned_memory_and_db_only_events -- --nocapture`
-- [ ] **DoD-4** — Retrieve docs/specs still describe the concise default and `--full-message-history` behavior accurately — *verify by:* `rg -n "concise|full-message-history|selected_sessions|messages" specs/retrieval.md docs/site/retrieval-human.md docs/site/retrieval-agent.md`
+- [x] **DoD-1** — Retrieve ranks matched session identities from match metadata before loading provider message windows — *verify by:* `cargo test --test memory_fabric_contract retrieve_ranks_before_provider_window_loading -- --exact --nocapture`
+- [x] **DoD-2** — With default concise output and `--max-sessions 3`, provider windows are materialized only for the selected sessions, not every matched group — *verify by:* `cargo test --test memory_fabric_contract retrieve_default_output_loads_windows_only_for_selected_sessions -- --exact --nocapture`
+- [x] **DoD-3** — `--full-message-history` pagination, pinned-session continuation, unreadable matches, and ranking tie-breaks remain unchanged — *verify by:* `cargo test --test cli_contract retrieve_flattened_pagination_across_selected_sessions retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions retrieve_next_command_preserves_debug_and_full_message_history -- --nocapture && cargo test --test memory_fabric_contract retrieve_ranking_ties_use_documented_order retrieve_unreadable_matches_include_learned_memory_and_db_only_events -- --nocapture`
+- [x] **DoD-4** — Retrieve docs/specs still describe the concise default and `--full-message-history` behavior accurately — *verify by:* `rg -n "concise|full-message-history|selected_sessions|messages" specs/retrieval.md docs/site/retrieval-human.md docs/site/retrieval-agent.md`
 - [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
@@ -58,13 +58,13 @@ in the **goal-driven-development** skill.
 
 ## 5. Tasks · INVARIANT
 
-### T1 · Add retrieve performance guardrails · [ ]
+### T1 · Add retrieve performance guardrails · [x]
 
 **Steps**
-- [ ] Add a fixture with more matched sessions than `--max-sessions`.
-- [ ] Add instrumentation or test seams that count provider-window materialization without changing public JSON.
-- [ ] Assert default concise output does not load windows for discarded groups.
-- [ ] Assert selected ranking remains based on documented metadata.
+- [x] Add a fixture with more matched sessions than `--max-sessions`.
+- [x] Add instrumentation or test seams that count provider-window materialization without changing public JSON.
+- [x] Assert default concise output does not load windows for discarded groups.
+- [x] Assert selected ranking remains based on documented metadata.
 
 **Verification Contract**
 - *Check:* tests can fail if retrieve loads provider windows before truncating to `--max-sessions`.
@@ -72,18 +72,18 @@ in the **goal-driven-development** skill.
 - *Expected:* all named tests pass after implementation.
 - *BDD scenarios covered:* Given many matched sessions and `--max-sessions 3`, only the three selected sessions need provider windows.
 
-**Confidence:** 0 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2
+**Confidence:** 95 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added `retrieve_ranks_before_provider_window_loading` and `retrieve_default_output_loads_windows_only_for_selected_sessions` with `MMR_TEST_RETRIEVE_WINDOW_LOAD_LOG`; `cargo test --test memory_fabric_contract retrieve_ -- --nocapture` passed 9 retrieve tests.
 
-### T2 · Refactor retrieve selection before window loading · [ ]
+### T2 · Refactor retrieve selection before window loading · [x]
 
 **Steps**
-- [ ] Split retrieve candidate ranking metadata from provider message-window materialization.
-- [ ] Sort and truncate identities before calling `retrieve_provider_messages`.
-- [ ] Preserve unreadable-match handling for unsupported or missing provider transcripts.
-- [ ] Keep pinned-session behavior stable.
+- [x] Split retrieve candidate ranking metadata from provider message-window materialization.
+- [x] Sort and truncate identities before calling `retrieve_provider_messages`.
+- [x] Preserve unreadable-match handling for unsupported or missing provider transcripts.
+- [x] Keep pinned-session behavior stable.
 
 **Verification Contract**
 - *Check:* retrieve output stays contract-compatible while avoiding discarded window loads.
@@ -91,16 +91,16 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0.
 - *BDD scenarios covered:* Given normal and pinned retrieve flows, selected sessions/ranks are identical but unused groups do not incur provider-window work.
 
-**Confidence:** 0 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3
+**Confidence:** 95 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Refactored `retrieve_output` to rank/truncate `RetrieveRankedSession` metadata before calling `retrieve_provider_messages`; provider transcript existence now uses session aggregates, and `--full-message-history` windows load only for selected ranked sessions. `cargo test --test cli_contract retrieve_ -- --nocapture` passed 14 retrieve tests.
 
 ### T3 · Verify retrieve contract and docs · [ ]
 
 **Steps**
-- [ ] Run retrieve CLI and memory-fabric contract tests.
-- [ ] Update specs/docs only if implementation terms changed.
+- [x] Run retrieve CLI and memory-fabric contract tests.
+- [x] Update specs/docs only if implementation terms changed.
 - [ ] Run full verification loop or exit on the separate test-gate blocker.
 
 **Verification Contract**
@@ -109,22 +109,24 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Existing retrieve parser, default output, debug, full-history, pagination, pinned-session, and docs contracts remain valid.
 
-**Confidence:** 0 / 90 · **Depends on:** T2 · **Closes:** DoD-3, DoD-4, DoD-5
+**Confidence:** 70 / 90 · **Depends on:** T2 · **Closes:** DoD-3, DoD-4, DoD-5
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — `cargo fmt --check` passed; `rg -n "concise|full-message-history|selected_sessions|messages" specs/retrieval.md docs/site/retrieval-human.md docs/site/retrieval-agent.md` confirmed docs/spec still cover the concise default and full-history behavior.
+- 2026-07-01 — Full verification loop not run in this smaller-scope pass; DoD-5 remains open.
 
 ---
 
 ## 6. Decisions · LIVE (append-only)
 
 - 2026-07-01 — Adversarial self-review: pure wall-clock benchmark assertions would be brittle, so the goal requires a behavior-level guardrail that proves discarded sessions do not trigger provider window materialization. Scope impact: none.
+- 2026-07-01 — Deterministic proof uses an internal `MMR_TEST_RETRIEVE_WINDOW_LOAD_LOG` seam instead of timing assertions or public JSON changes.
 
 ---
 
 ## 7. Learnings · LIVE (append-only)
 
-*(none yet)*
+- 2026-07-01 — Claude session aggregate project names may use provider-native encoding after project-filter resolution, so provider transcript existence checks should rely on the resolved project filter plus source/session identity, not raw aggregate `project_name` equality.
 
 ---
 
