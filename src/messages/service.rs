@@ -148,7 +148,11 @@ pub struct QueryService {
 
 impl QueryService {
     pub fn load() -> Result<Self> {
-        let messages = source::load_messages()?;
+        Self::load_filtered(None)
+    }
+
+    pub fn load_filtered(source_filter: Option<SourceFilter>) -> Result<Self> {
+        let messages = source::load_messages_filtered(source_filter)?;
         Ok(Self::from_messages(messages))
     }
 

@@ -35,10 +35,10 @@ in the **goal-driven-development** skill.
 
 ## 3. Definition of Done · INVARIANT
 
-- [ ] **DoD-1** — `read project --project "/tmp/project with spaces" --limit 1` emits a `next_command` that executes successfully as printed — *verify by:* `cargo test --test cli_contract read_project_next_command_quotes_project_paths_with_spaces -- --exact --nocapture`
-- [ ] **DoD-2** — remote read-project continuation quotes project paths and remote names safely enough to execute as printed in the existing shell harness — *verify by:* `cargo test --test cli_contract read_project_remote_next_command_quotes_shell_values -- --exact --nocapture`
-- [ ] **DoD-3** — recall continuation with `--project "/tmp/project with spaces"` quotes the project path and executes as printed — *verify by:* `cargo test --test cli_contract recall_next_command_quotes_project_paths_with_spaces -- --exact --nocapture`
-- [ ] **DoD-4** — retrieve pinned continuation still passes its existing shell-execution tests after shared quoting changes — *verify by:* `cargo test --test cli_contract retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions retrieve_next_command_preserves_debug_and_full_message_history -- --nocapture`
+- [x] **DoD-1** — `read project --project "/tmp/project with spaces" --limit 1` emits a `next_command` that executes successfully as printed — *verify by:* `cargo test --test cli_contract read_project_next_command_quotes_project_paths_with_spaces -- --exact --nocapture`
+- [x] **DoD-2** — remote read-project continuation quotes project paths and preserves valid remote targets safely enough to execute as printed in a shell harness — *verify by:* `cargo test --test cli_contract read_project_remote_next_command_quotes_shell_values -- --exact --nocapture`
+- [x] **DoD-3** — recall continuation with `--project "/tmp/project with spaces"` quotes the project path and executes as printed — *verify by:* `cargo test --test cli_contract recall_next_command_quotes_project_paths_with_spaces -- --exact --nocapture`
+- [x] **DoD-4** — retrieve pinned continuation still passes its existing shell-execution tests after shared quoting changes — *verify by:* `cargo test --test cli_contract retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions -- --exact --nocapture && cargo test --test cli_contract retrieve_next_command_preserves_debug_and_full_message_history -- --exact --nocapture`
 - [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
@@ -56,7 +56,7 @@ in the **goal-driven-development** skill.
 
 ## 5. Tasks · INVARIANT
 
-### T1 · Add shell-execution regressions for continuations · [ ]
+### T1 · Add shell-execution regressions for continuations · [x]
 
 **Steps**
 - [ ] Add a read-project pagination fixture whose project path contains spaces.
@@ -70,12 +70,13 @@ in the **goal-driven-development** skill.
 - *Expected:* all named tests pass after implementation.
 - *BDD scenarios covered:* Given a project path with spaces, when page 1 emits `next_command`, then page 2 executes successfully and returns the expected next messages.
 
-**Confidence:** 0 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
+**Confidence:** 95 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added `read_project_next_command_quotes_project_paths_with_spaces`, `read_project_remote_next_command_quotes_shell_values`, and `recall_next_command_quotes_project_paths_with_spaces`.
+- 2026-07-01 — All three targeted continuation tests passed after the remote harness was changed to `zsh -fc` so the fake `ssh` path is preserved.
 
-### T2 · Apply shared shell quoting to continuation builders · [ ]
+### T2 · Apply shared shell quoting to continuation builders · [x]
 
 **Steps**
 - [ ] Reuse `shell_quote` or `shell_quote_path` for project, remote, and other shell values.
@@ -88,10 +89,11 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0.
 - *BDD scenarios covered:* Given local, remote, recall, and retrieve continuations, each emitted command remains executable as printed.
 
-**Confidence:** 0 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3, DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3, DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Updated read-project, remote read-project, recall, and read-session continuation builders to pass user/path tokens through `shell_quote`.
+- 2026-07-01 — Preserved project/all scope when session-axis pagination emits `mmr read session ...` continuations.
 
 ### T3 · Verify continuation and repo gates · [ ]
 
@@ -105,10 +107,13 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Existing pagination behavior and next-command semantics remain compatible.
 
-**Confidence:** 0 / 90 · **Depends on:** T2 · **Closes:** DoD-4, DoD-5
+**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — `cargo test --test cli_contract retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions -- --exact --nocapture` passed.
+- 2026-07-01 — `cargo test --test cli_contract retrieve_next_command_preserves_debug_and_full_message_history -- --exact --nocapture` passed.
+- 2026-07-01 — `cargo test --test cli_contract session_axis_pagination_pins_to_concrete_session_not_recency_age -- --exact --nocapture` passed.
+- 2026-07-01 — `cargo fmt --check` passed. Full repo verification remains for the integration branch after all goal branches merge.
 
 ---
 

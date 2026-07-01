@@ -1106,7 +1106,11 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         return peer_command_response(args, source_filter, cli.pretty);
     }
 
-    let service = QueryService::load()?;
+    let provider_load_filter = match &cli.command {
+        Commands::Retrieve(args) if args.all_sources && cli.source.is_none() => None,
+        _ => source_filter,
+    };
+    let service = QueryService::load_filtered(provider_load_filter)?;
 
     let response = match cli.command {
         Commands::List(args) => list_command_response(&service, args, source_filter, cli.pretty)?,
@@ -2030,7 +2034,8 @@ fn build_next_read_project_command(
     }
     parts.push("read project".to_string());
     if let Some(project) = project {
-        parts.push(format!("--project {project}"));
+        parts.push("--project".to_string());
+        parts.push(shell_quote(project));
     }
     if let Some(limit) = limit {
         parts.push(format!("--limit {limit}"));
@@ -2052,10 +2057,12 @@ fn build_next_read_project_command_with_remotes(
     }
     parts.push("read project".to_string());
     if let Some(project) = project {
-        parts.push(format!("--project {project}"));
+        parts.push("--project".to_string());
+        parts.push(shell_quote(project));
     }
     for remote in remotes {
-        parts.push(format!("--remote {remote}"));
+        parts.push("--remote".to_string());
+        parts.push(shell_quote(remote));
     }
     if let Some(limit) = limit {
         parts.push(format!("--limit {limit}"));
@@ -7081,12 +7088,13 @@ fn build_next_messages_command(
 
     if session.len() == 1 {
         parts.push("read session".to_string());
-        parts.push(session[0].clone());
+        parts.push(shell_quote(&session[0]));
     } else {
         parts.push("read project".to_string());
     }
     if let Some(proj) = project {
-        parts.push(format!("--project {proj}"));
+        parts.push("--project".to_string());
+        parts.push(shell_quote(proj));
     }
     if all {
         parts.push("--all".to_string());
@@ -7138,13 +7146,15 @@ fn build_next_recall_command_with_remotes(
     }
     parts.push("recall".to_string());
     if let Some(project) = project {
-        parts.push(format!("--project {project}"));
+        parts.push("--project".to_string());
+        parts.push(shell_quote(project));
     }
     if all {
         parts.push("--all".to_string());
     }
     for remote in remotes {
-        parts.push(format!("--remote {remote}"));
+        parts.push("--remote".to_string());
+        parts.push(shell_quote(remote));
     }
     if include_newest {
         parts.push("--include-newest".to_string());
@@ -7215,8 +7225,8 @@ fn run_session_axis(
             cli_source,
             pretty,
             &session_ids,
-            None,
-            false,
+            project_scope.as_deref(),
+            all,
             options.message_index_range,
             options.limit.unwrap_or(0),
             response.next_offset as usize,
