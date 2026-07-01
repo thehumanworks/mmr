@@ -2,7 +2,7 @@
 title: "Execute review finding goals"
 description: "Use specialized subagents in separate git worktrees to implement, test, merge, and verify the review-finding goals on local main."
 date: 2026-07-01
-status: in-progress
+status: done
 ---
 
 # GOAL: Execute the review finding backlog on local main
@@ -34,9 +34,15 @@ the completed work back to local `main` with verification evidence.
 
 ## Definition of Done
 
-- [ ] Specialized project-scoped Codex agent definitions exist and validate.
-- [ ] Each review-finding child goal is either implemented and verified, or
+- [x] Specialized project-scoped Codex agent definitions exist and validate.
+- [x] Each review-finding child goal is either implemented and verified, or
       explicitly marked blocked with the smallest missing fact.
-- [ ] Completed implementation branches are merged into local `main`.
-- [ ] The full repo verification loop passes on local `main`.
-- [ ] This goal status is updated to `done` or `blocked`.
+- [x] Completed implementation branches are merged into local `main`.
+- [x] The full repo verification loop passes on local `main`.
+- [x] This goal status is updated to `done` or `blocked`.
+
+## Evidence
+
+- 2026-07-01 — Project-scoped agents under `.codex/agents/` validated with `validate_codex_agent.py`.
+- 2026-07-01 — Merged `review/memory-fabric-test-gate`, `review/security-teleport-sync`, `review/cli-contract-fixes`, and `review/retrieve-window-performance` into local `main`.
+- 2026-07-01 — On local `main`, `cargo fmt --check`, `cargo test`, `cargo test --test cli_benchmark -- --ignored --nocapture`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo build --release` all passed.

@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-retrieve-window-ranking-performance"
 title: "Avoid unused retrieve windows"
-status: "in-progress"
+status: "done"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -41,7 +41,7 @@ in the **goal-driven-development** skill.
 - [x] **DoD-2** — With default concise output and `--max-sessions 3`, provider windows are materialized only for the selected sessions, not every matched group — *verify by:* `cargo test --test memory_fabric_contract retrieve_default_output_loads_windows_only_for_selected_sessions -- --exact --nocapture`
 - [x] **DoD-3** — `--full-message-history` pagination, pinned-session continuation, unreadable matches, and ranking tie-breaks remain unchanged — *verify by:* `cargo test --test cli_contract retrieve_flattened_pagination_across_selected_sessions retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions retrieve_next_command_preserves_debug_and_full_message_history -- --nocapture && cargo test --test memory_fabric_contract retrieve_ranking_ties_use_documented_order retrieve_unreadable_matches_include_learned_memory_and_db_only_events -- --nocapture`
 - [x] **DoD-4** — Retrieve docs/specs still describe the concise default and `--full-message-history` behavior accurately — *verify by:* `rg -n "concise|full-message-history|selected_sessions|messages" specs/retrieval.md docs/site/retrieval-human.md docs/site/retrieval-agent.md`
-- [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
+- [x] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
 
@@ -96,12 +96,12 @@ in the **goal-driven-development** skill.
 **Evidence (required before tick; append-only)**
 - 2026-07-01 — Refactored `retrieve_output` to rank/truncate `RetrieveRankedSession` metadata before calling `retrieve_provider_messages`; provider transcript existence now uses session aggregates, and `--full-message-history` windows load only for selected ranked sessions. `cargo test --test cli_contract retrieve_ -- --nocapture` passed 14 retrieve tests.
 
-### T3 · Verify retrieve contract and docs · [ ]
+### T3 · Verify retrieve contract and docs · [x]
 
 **Steps**
 - [x] Run retrieve CLI and memory-fabric contract tests.
 - [x] Update specs/docs only if implementation terms changed.
-- [ ] Run full verification loop or exit on the separate test-gate blocker.
+- [x] Run full verification loop or exit on the separate test-gate blocker.
 
 **Verification Contract**
 - *Check:* performance refactor preserves retrieve behavior and documentation.
@@ -109,11 +109,11 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Existing retrieve parser, default output, debug, full-history, pagination, pinned-session, and docs contracts remain valid.
 
-**Confidence:** 70 / 90 · **Depends on:** T2 · **Closes:** DoD-3, DoD-4, DoD-5
+**Confidence:** 95 / 90 · **Depends on:** T2 · **Closes:** DoD-3, DoD-4, DoD-5
 
 **Evidence (required before tick; append-only)**
 - 2026-07-01 — `cargo fmt --check` passed; `rg -n "concise|full-message-history|selected_sessions|messages" specs/retrieval.md docs/site/retrieval-human.md docs/site/retrieval-agent.md` confirmed docs/spec still cover the concise default and full-history behavior.
-- 2026-07-01 — Full verification loop not run in this smaller-scope pass; DoD-5 remains open.
+- 2026-07-01 — On merged `main`, `cargo test`, `cargo test --test cli_benchmark -- --ignored --nocapture`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo build --release` all passed.
 
 ---
 

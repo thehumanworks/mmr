@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-shell-safe-next-commands"
 title: "Quote continuation commands"
-status: "active"
+status: "done"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -39,7 +39,7 @@ in the **goal-driven-development** skill.
 - [x] **DoD-2** — remote read-project continuation quotes project paths and preserves valid remote targets safely enough to execute as printed in a shell harness — *verify by:* `cargo test --test cli_contract read_project_remote_next_command_quotes_shell_values -- --exact --nocapture`
 - [x] **DoD-3** — recall continuation with `--project "/tmp/project with spaces"` quotes the project path and executes as printed — *verify by:* `cargo test --test cli_contract recall_next_command_quotes_project_paths_with_spaces -- --exact --nocapture`
 - [x] **DoD-4** — retrieve pinned continuation still passes its existing shell-execution tests after shared quoting changes — *verify by:* `cargo test --test cli_contract retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions -- --exact --nocapture && cargo test --test cli_contract retrieve_next_command_preserves_debug_and_full_message_history -- --exact --nocapture`
-- [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
+- [x] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
 
@@ -95,7 +95,7 @@ in the **goal-driven-development** skill.
 - 2026-07-01 — Updated read-project, remote read-project, recall, and read-session continuation builders to pass user/path tokens through `shell_quote`.
 - 2026-07-01 — Preserved project/all scope when session-axis pagination emits `mmr read session ...` continuations.
 
-### T3 · Verify continuation and repo gates · [ ]
+### T3 · Verify continuation and repo gates · [x]
 
 **Steps**
 - [ ] Run continuation-related CLI tests.
@@ -107,13 +107,14 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Existing pagination behavior and next-command semantics remain compatible.
 
-**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T2 · **Closes:** DoD-4, DoD-5
 
 **Evidence (required before tick; append-only)**
 - 2026-07-01 — `cargo test --test cli_contract retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions -- --exact --nocapture` passed.
 - 2026-07-01 — `cargo test --test cli_contract retrieve_next_command_preserves_debug_and_full_message_history -- --exact --nocapture` passed.
 - 2026-07-01 — `cargo test --test cli_contract session_axis_pagination_pins_to_concrete_session_not_recency_age -- --exact --nocapture` passed.
-- 2026-07-01 — `cargo fmt --check` passed. Full repo verification remains for the integration branch after all goal branches merge.
+- 2026-07-01 — `cargo fmt --check` passed.
+- 2026-07-01 — On merged `main`, `cargo test`, ignored benchmark tests, clippy with warnings denied, and release build all passed.
 
 ---
 

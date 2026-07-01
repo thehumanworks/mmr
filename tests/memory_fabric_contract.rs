@@ -11,7 +11,7 @@ use mmr::store::{LATEST_SCHEMA_VERSION, NewDreamCandidate, NewLearnedMemory, Sto
 mod common;
 use common::RetrieveContractFixture;
 use std::collections::BTreeSet;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -1398,7 +1398,7 @@ fn mvp_release_gate_e2e_fixture_scenario() {
     let data_home = tmp.path().join("data");
     let fresh_data_home = tmp.path().join("fresh-data");
     let project = tmp.path().join("release-project");
-    let fresh_project = tmp.path().join("fresh-release-project");
+    let fresh_project = tmp.path().join("fresh-host").join("release-project");
     let remote = tmp.path().join("fake-github");
     std::fs::create_dir_all(&home).expect("create HOME");
     std::fs::create_dir_all(&fresh_home).expect("create fresh HOME");

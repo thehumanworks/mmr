@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-sync-project-prefix-isolation"
 title: "Isolate sync project prefixes"
-status: "active"
+status: "done"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -43,7 +43,7 @@ in the **goal-driven-development** skill.
 - [x] **DoD-2** — Rehydration read fallback refuses an unrelated single remote project — *verify by:* `cargo test project_prefix_for_read_uses_single_remote_only_when_project_id_matches -- --nocapture`
 - [x] **DoD-3** — Fresh-host hydration/write fallback still works when the remote project identity or redacted display name matches the requested local project — *verify by:* `cargo test project_prefix_for_write_uses_single_remote_when_display_matches -- --nocapture && cargo test --test memory_fabric_contract sync_ -- --nocapture`
 - [x] **DoD-4** — Existing sync/redaction contracts still pass — *verify by:* `cargo test --test memory_fabric_contract sync_ -- --nocapture`
-- [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
+- [x] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
 
@@ -99,7 +99,7 @@ in the **goal-driven-development** skill.
 - 2026-07-01 — `project_prefix_for_write` now uses the current project prefix unless the single remote prefix matches by project ID or display name.
 - 2026-07-01 — Updated `sync_manifest_contract_is_implemented` fresh-host fixture to use the same redacted display name rather than arbitrary single-project fallback.
 
-### T3 · Run targeted and full verification · [ ]
+### T3 · Run targeted and full verification · [x]
 
 **Steps**
 - [ ] Run all sync-focused memory fabric tests.
@@ -112,12 +112,12 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only the separately tracked test-gate issue remains.
 - *BDD scenarios covered:* Given existing sync workflows, when the isolation fix lands, then existing fake-remote and redaction contracts still pass.
 
-**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T2 · **Closes:** DoD-4, DoD-5
 
 **Evidence (required before tick; append-only)**
 - 2026-07-01 — `cargo test project_prefix_for_ -- --nocapture` passed 3 prefix unit tests.
 - 2026-07-01 — `cargo test --test memory_fabric_contract sync_ -- --nocapture` passed 2 sync memory-fabric contract tests.
-- 2026-07-01 — Full repo verification remains for the integration branch after all goal branches merge.
+- 2026-07-01 — On merged `main`, `cargo test`, ignored benchmark tests, clippy with warnings denied, and release build all passed.
 
 ---
 

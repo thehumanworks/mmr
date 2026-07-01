@@ -775,106 +775,6 @@ impl FakeGithubRemote {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_remote(root: PathBuf) -> FakeGithubRemote {
-        FakeGithubRemote {
-            descriptor: "test-remote".to_string(),
-            root,
-            auth_ok: true,
-        }
-    }
-
-    fn test_project(id: &str) -> ProjectRecord {
-        ProjectRecord {
-            id: id.to_string(),
-            canonical_path: format!("/tmp/{id}"),
-            display_name: id.to_string(),
-        }
-    }
-
-    fn write_remote_project(remote: &FakeGithubRemote, prefix: &str, project_id: &str) {
-        let project_path = remote.root.join(prefix).join("project.json");
-        fs::create_dir_all(project_path.parent().expect("project parent")).expect("project dir");
-        fs::write(
-            project_path,
-            serde_json::to_vec_pretty(&RemoteProjectPayload {
-                manifest_version: MANIFEST_VERSION,
-                project_id: project_id.to_string(),
-                display_name: project_id.to_string(),
-            })
-            .expect("serialize project"),
-        )
-        .expect("write project");
-    }
-
-    #[test]
-    fn project_prefix_for_write_does_not_reuse_unmatched_single_remote_project() {
-        let tmp = tempfile::tempdir().expect("tmp");
-        let remote = test_remote(tmp.path().to_path_buf());
-        write_remote_project(&remote, "projects/project-a", "project-a");
-
-        let project_b = test_project("project-b");
-
-        assert_eq!(
-            remote
-                .project_prefix_for_write(&project_b)
-                .expect("write prefix"),
-            "projects/project-b"
-        );
-    }
-
-    #[test]
-    fn project_prefix_for_write_uses_single_remote_when_display_matches() {
-        let tmp = tempfile::tempdir().expect("tmp");
-        let remote = test_remote(tmp.path().to_path_buf());
-        write_remote_project(&remote, "projects/legacy-prefix", "project-a");
-
-        let mut fresh_host_project = test_project("fresh-host-id");
-        fresh_host_project.display_name = "project-a".to_string();
-
-        assert_eq!(
-            remote
-                .project_prefix_for_write(&fresh_host_project)
-                .expect("write prefix"),
-            "projects/legacy-prefix"
-        );
-    }
-
-    #[test]
-    fn project_prefix_for_read_uses_single_remote_only_when_project_id_matches() {
-        let tmp = tempfile::tempdir().expect("tmp");
-        let remote = test_remote(tmp.path().to_path_buf());
-        write_remote_project(&remote, "projects/legacy-prefix", "project-a");
-
-        let project_a = test_project("project-a");
-        let mut display_match = test_project("project-new-id");
-        display_match.display_name = "project-a".to_string();
-        let project_b = test_project("project-b");
-
-        assert_eq!(
-            remote
-                .project_prefix_for_read(&project_a)
-                .expect("read prefix"),
-            Some("projects/legacy-prefix".to_string())
-        );
-        assert_eq!(
-            remote
-                .project_prefix_for_read(&display_match)
-                .expect("read prefix"),
-            Some("projects/legacy-prefix".to_string())
-        );
-        assert_eq!(
-            remote
-                .project_prefix_for_read(&project_b)
-                .expect("read prefix"),
-            None
-        );
-    }
-}
-
 impl SyncProjection {
     fn from_event(project_prefix: &str, event: &EventRecord, content_text: String) -> Self {
         let projected_event = NewEvent::new(
@@ -1329,4 +1229,104 @@ fn safe_path_component(value: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_remote(root: PathBuf) -> FakeGithubRemote {
+        FakeGithubRemote {
+            descriptor: "test-remote".to_string(),
+            root,
+            auth_ok: true,
+        }
+    }
+
+    fn test_project(id: &str) -> ProjectRecord {
+        ProjectRecord {
+            id: id.to_string(),
+            canonical_path: format!("/tmp/{id}"),
+            display_name: id.to_string(),
+        }
+    }
+
+    fn write_remote_project(remote: &FakeGithubRemote, prefix: &str, project_id: &str) {
+        let project_path = remote.root.join(prefix).join("project.json");
+        fs::create_dir_all(project_path.parent().expect("project parent")).expect("project dir");
+        fs::write(
+            project_path,
+            serde_json::to_vec_pretty(&RemoteProjectPayload {
+                manifest_version: MANIFEST_VERSION,
+                project_id: project_id.to_string(),
+                display_name: project_id.to_string(),
+            })
+            .expect("serialize project"),
+        )
+        .expect("write project");
+    }
+
+    #[test]
+    fn project_prefix_for_write_does_not_reuse_unmatched_single_remote_project() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let remote = test_remote(tmp.path().to_path_buf());
+        write_remote_project(&remote, "projects/project-a", "project-a");
+
+        let project_b = test_project("project-b");
+
+        assert_eq!(
+            remote
+                .project_prefix_for_write(&project_b)
+                .expect("write prefix"),
+            "projects/project-b"
+        );
+    }
+
+    #[test]
+    fn project_prefix_for_write_uses_single_remote_when_display_matches() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let remote = test_remote(tmp.path().to_path_buf());
+        write_remote_project(&remote, "projects/legacy-prefix", "project-a");
+
+        let mut fresh_host_project = test_project("fresh-host-id");
+        fresh_host_project.display_name = "project-a".to_string();
+
+        assert_eq!(
+            remote
+                .project_prefix_for_write(&fresh_host_project)
+                .expect("write prefix"),
+            "projects/legacy-prefix"
+        );
+    }
+
+    #[test]
+    fn project_prefix_for_read_uses_single_remote_only_when_project_id_matches() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let remote = test_remote(tmp.path().to_path_buf());
+        write_remote_project(&remote, "projects/legacy-prefix", "project-a");
+
+        let project_a = test_project("project-a");
+        let mut display_match = test_project("project-new-id");
+        display_match.display_name = "project-a".to_string();
+        let project_b = test_project("project-b");
+
+        assert_eq!(
+            remote
+                .project_prefix_for_read(&project_a)
+                .expect("read prefix"),
+            Some("projects/legacy-prefix".to_string())
+        );
+        assert_eq!(
+            remote
+                .project_prefix_for_read(&display_match)
+                .expect("read prefix"),
+            Some("projects/legacy-prefix".to_string())
+        );
+        assert_eq!(
+            remote
+                .project_prefix_for_read(&project_b)
+                .expect("read prefix"),
+            None
+        );
+    }
 }

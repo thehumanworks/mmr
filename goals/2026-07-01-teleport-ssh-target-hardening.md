@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-teleport-ssh-target-hardening"
 title: "Harden teleport SSH targets"
-status: "active"
+status: "done"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -40,7 +40,7 @@ in the **goal-driven-development** skill.
 - [x] **DoD-2** — Teleport SSH argv construction places `--` before the host where OpenSSH supports it, and still builds the expected probe/stream/scp fallback plan — *verify by:* `cargo test ssh_base_args_delimit_host_and_share_plan_still_matches -- --nocapture`
 - [x] **DoD-3** — `share session --to -oProxyCommand=sh --dry-run` fails as structured usage instead of returning a runnable SSH plan — *verify by:* `cargo test --test cli_contract share_session_ssh_rejects_option_like_target -- --exact --nocapture`
 - [x] **DoD-4** — Valid SSH targets still work in parser and dry-run contract tests — *verify by:* `cargo test teleport::ssh:: -- --nocapture && cargo test --test cli_contract share_session_ssh_dry_run_reports_import_bundle_plan -- --exact --nocapture`
-- [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
+- [x] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
 
@@ -97,7 +97,7 @@ in the **goal-driven-development** skill.
 - 2026-07-01 — `cargo test teleport::ssh:: -- --nocapture` passed 11 SSH unit tests.
 - 2026-07-01 — `cargo test --test cli_contract share_session_ssh_dry_run_reports_import_bundle_plan -- --exact --nocapture` passed.
 
-### T3 · Verify teleport and repo gates · [ ]
+### T3 · Verify teleport and repo gates · [x]
 
 **Steps**
 - [ ] Run teleport SSH unit and CLI tests.
@@ -109,10 +109,11 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Given normal dry-run SSH sharing, the plan is still reported; given unsafe target syntax, usage fails early.
 
-**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T2 · **Closes:** DoD-4, DoD-5
 
 **Evidence (required before tick; append-only)**
-- 2026-07-01 — Targeted teleport SSH unit and CLI dry-run checks passed. Full repo verification remains for the integration branch after all goal branches merge.
+- 2026-07-01 — Targeted teleport SSH unit and CLI dry-run checks passed.
+- 2026-07-01 — On merged `main`, `cargo test`, ignored benchmark tests, clippy with warnings denied, and release build all passed.
 
 ---
 

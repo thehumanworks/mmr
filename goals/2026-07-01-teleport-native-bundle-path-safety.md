@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-teleport-native-bundle-path-safety"
 title: "Harden native bundle apply paths"
-status: "active"
+status: "done"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -41,7 +41,7 @@ in the **goal-driven-development** skill.
 - [x] **DoD-2** — Crafted Claude, Cursor, Grok, and Pi native bundles with traversal in `metadata.native_source_file` are rejected before any filesystem write target is returned — *verify by:* `cargo test native_write_targets_reject_provider_matrix_parent_dir_escape -- --nocapture`
 - [x] **DoD-3** — Legitimate native bundle apply still preserves provider-relative layout and path remapping — *verify by:* `cargo test --test cli_contract provider_matrix_share_file_then_import_read_only -- --exact --nocapture && cargo test --test cli_contract share_session_file_then_import_bundle_read_only_and_apply_round_trip -- --exact --nocapture`
 - [x] **DoD-4** — Destination helpers enforce provider-root containment with unit coverage — *verify by:* `cargo test native_write_targets_ -- --nocapture`
-- [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
+- [x] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
 
@@ -97,7 +97,7 @@ in the **goal-driven-development** skill.
 - 2026-07-01 — Added provider-root validation to `native_write_targets`, rejecting destinations outside provider roots or with parent/root/prefix components after the provider root.
 - 2026-07-01 — Safe Codex provider-relative layout still passes in `native_write_targets_accept_provider_root_relative_path`.
 
-### T3 · Verify apply/import behavior end to end · [ ]
+### T3 · Verify apply/import behavior end to end · [x]
 
 **Steps**
 - [ ] Run provider matrix import/read-only/apply tests.
@@ -110,12 +110,12 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Given a legitimate bundle, import/read/apply still works; given a malicious bundle, apply rejects before write.
 
-**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-3
+**Confidence:** 95 / 90 · **Depends on:** T2 · **Closes:** DoD-3, DoD-5
 
 **Evidence (required before tick; append-only)**
 - 2026-07-01 — `cargo test --test cli_contract provider_matrix_share_file_then_import_read_only -- --exact --nocapture` passed.
 - 2026-07-01 — `cargo test --test cli_contract share_session_file_then_import_bundle_read_only_and_apply_round_trip -- --exact --nocapture` passed.
-- 2026-07-01 — Full repo verification remains for the integration branch after all goal branches merge.
+- 2026-07-01 — On merged `main`, `cargo test`, ignored benchmark tests, clippy with warnings denied, and release build all passed.
 
 ---
 

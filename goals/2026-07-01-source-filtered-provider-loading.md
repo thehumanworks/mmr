@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-01-source-filtered-provider-loading"
 title: "Load only selected providers"
-status: "active"
+status: "done"
 confidence_floor: 90
 created: "2026-07-01"
 updated: "2026-07-01"
@@ -40,7 +40,7 @@ in the **goal-driven-development** skill.
 - [x] **DoD-2** — `MMR_DEFAULT_SOURCE=codex mmr list projects` uses the same filtered loading behavior as explicit `--source codex` — *verify by:* `cargo test --test cli_contract default_source_filters_provider_loading -- --exact --nocapture`
 - [x] **DoD-3** — all-source commands still surface provider load errors with enough context to diagnose the failing source directory — *verify by:* `cargo test --test cli_contract all_source_commands_report_provider_load_errors -- --exact --nocapture`
 - [x] **DoD-4** — source-filtered read/context/summarize/retrieve/MCP contract tests pass — *verify by:* `cargo test --test cli_contract source_ -- --nocapture && cargo test --test cli_contract retrieve_filters_apply_source_env_session_role_event_and_context -- --exact --nocapture && cargo test --test mcp_contract`
-- [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
+- [x] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
 
@@ -95,7 +95,7 @@ in the **goal-driven-development** skill.
 **Evidence (required before tick; append-only)**
 - 2026-07-01 — Added `load_messages_filtered`, `QueryService::load_filtered`, and command-aware provider load selection so `retrieve --all-sources` overrides `MMR_DEFAULT_SOURCE` only when no explicit `--source` was provided.
 
-### T3 · Verify source-filter parity across surfaces · [ ]
+### T3 · Verify source-filter parity across surfaces · [x]
 
 **Steps**
 - [ ] Run source-related CLI contract tests.
@@ -109,13 +109,14 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Given each public source surface, when a source filter is active, then output and failure modes stay consistent.
 
-**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
+**Confidence:** 95 / 90 · **Depends on:** T2 · **Closes:** DoD-4, DoD-5
 
 **Evidence (required before tick; append-only)**
 - 2026-07-01 — `cargo test --test cli_contract source_ -- --nocapture` passed 30 tests after fixing `retrieve --all-sources` provider-loading precedence.
 - 2026-07-01 — `cargo test --test cli_contract retrieve_filters_apply_source_env_session_role_event_and_context -- --exact --nocapture` passed.
 - 2026-07-01 — `cargo test --test mcp_contract` passed 9 tests.
-- 2026-07-01 — `cargo fmt --check` passed. Full repo verification remains for the integration branch after all goal branches merge.
+- 2026-07-01 — `cargo fmt --check` passed.
+- 2026-07-01 — On merged `main`, `cargo test`, ignored benchmark tests, clippy with warnings denied, and release build all passed.
 
 ---
 
