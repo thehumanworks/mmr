@@ -10,7 +10,7 @@ use mmr::store::{LATEST_SCHEMA_VERSION, NewDreamCandidate, NewLearnedMemory, Sto
 #[allow(dead_code)]
 mod common;
 use common::RetrieveContractFixture;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -1414,6 +1414,8 @@ fn mvp_release_gate_e2e_fixture_scenario() {
             .env("HOME", &home)
             .env("SIMPLEMMR_HOME", &home)
             .env("XDG_DATA_HOME", data_home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("MMR_CONFIG_FILE")
             .env("MMR_FAKE_REMOTE_DIR", &remote)
             .env("MMR_GITHUB_USER", "fixture-user")
             .current_dir(cwd);
@@ -1425,6 +1427,8 @@ fn mvp_release_gate_e2e_fixture_scenario() {
             .args(name.split_whitespace())
             .env("HOME", &fresh_home)
             .env("XDG_DATA_HOME", &fresh_data_home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("MMR_CONFIG_FILE")
             .env("MMR_FAKE_REMOTE_DIR", &remote)
             .env("MMR_GITHUB_USER", "fixture-user")
             .current_dir(&fresh_project);
@@ -3933,21 +3937,9 @@ fn summarize_config_api_key_contract_is_implemented() {
     )
     .expect("write claude fixture");
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock server");
-    let addr = listener.local_addr().expect("local addr");
-    let base_url = format!("http://{addr}");
-    let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept request");
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).expect("read request");
-        let response = r#"{"id":"config-contract","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"apiKeyEnv contract summary"}}]}"#;
-        let http_response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            response.len(),
-            response
-        );
-        std::io::Write::write_all(&mut stream, http_response.as_bytes()).expect("write response");
-    });
+    let (base_url, _captured, handle) = start_mock_chat_completions_server(
+        r#"{"id":"config-contract","model":"gpt-5.5","choices":[{"message":{"role":"assistant","content":"apiKeyEnv contract summary"}}]}"#.to_string(),
+    );
 
     mmr::config::write_summarize_config_for_tests_with_api(
         &home,
