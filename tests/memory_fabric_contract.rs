@@ -10,6 +10,7 @@ use mmr::store::{LATEST_SCHEMA_VERSION, NewDreamCandidate, NewLearnedMemory, Sto
 #[allow(dead_code)]
 mod common;
 use common::RetrieveContractFixture;
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -2304,6 +2305,116 @@ fn retrieve_store_to_provider_mapping_uses_public_source_session_id() {
     assert!(messages.iter().all(|message| {
         message["session_id"] == "retrieve-codex-alpha" && message["source"] == "codex"
     }));
+}
+
+fn retrieve_window_loads(path: &Path) -> Vec<(String, String, String)> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .map(|line| {
+            let parts = line.splitn(3, '\t').collect::<Vec<_>>();
+            assert_eq!(
+                parts.len(),
+                3,
+                "invalid retrieve window load log line: {line}"
+            );
+            (
+                parts[0].to_string(),
+                parts[1].to_string(),
+                parts[2].to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn retrieve_ranks_before_provider_window_loading() {
+    let fixture = RetrieveContractFixture::seeded();
+    let log_path = fixture.data_home.join("retrieve-window-loads.log");
+    let log_arg = log_path.to_str().expect("window load log path UTF-8");
+    let output = fixture.run_cli_with_env(
+        &[
+            "retrieve",
+            "ranking tie marker",
+            "--full-message-history",
+            "--max-sessions",
+            "1",
+            "--max-messages-per-session",
+            "4",
+            "--limit",
+            "4",
+        ],
+        &[("MMR_TEST_RETRIEVE_WINDOW_LOAD_LOG", log_arg)],
+    );
+    assert_success_ref(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ranking retrieve JSON");
+    let selected = json["selected_sessions"].as_array().expect("sessions");
+
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0]["source"], "claude");
+    assert_eq!(selected[0]["source_session_id"], "retrieve-claude-alpha");
+    assert_eq!(
+        retrieve_window_loads(&log_path),
+        vec![(
+            "claude".to_string(),
+            fixture.project_arg().to_string(),
+            "retrieve-claude-alpha".to_string(),
+        )]
+    );
+}
+
+#[test]
+fn retrieve_default_output_loads_windows_only_for_selected_sessions() {
+    let fixture = RetrieveContractFixture::seeded();
+    fixture.add_newer_matching_session("ranking tie marker");
+    let log_path = fixture.data_home.join("retrieve-default-window-loads.log");
+    let log_arg = log_path.to_str().expect("window load log path UTF-8");
+    let output = fixture.run_cli_with_env(
+        &["retrieve", "ranking tie marker", "--max-sessions", "3"],
+        &[("MMR_TEST_RETRIEVE_WINDOW_LOAD_LOG", log_arg)],
+    );
+    assert_success_ref(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("default retrieve JSON");
+    let selected = json["selected_sessions"].as_array().expect("sessions");
+
+    assert_eq!(selected.len(), 3);
+    assert!(
+        json["total_matches"].as_u64().unwrap() > selected.len() as u64,
+        "fixture should contain more matched sessions than max-sessions"
+    );
+    assert!(selected.iter().all(|session| {
+        session.get("messages").is_none() && session.get("message_window").is_none()
+    }));
+    let selected_keys = selected
+        .iter()
+        .map(|session| {
+            (
+                session["source"].as_str().unwrap().to_string(),
+                session["project_name"].as_str().unwrap().to_string(),
+                session["source_session_id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let loads = retrieve_window_loads(&log_path);
+
+    assert!(
+        loads.iter().all(|load| selected_keys.contains(load)),
+        "discarded matched sessions loaded provider windows: loads={loads:?}, selected={selected_keys:?}"
+    );
+    assert!(
+        !loads
+            .iter()
+            .any(|(_, _, session_id)| session_id == "retrieve-codex-newer"),
+        "lower-ranked discarded session should not load a provider window"
+    );
+    assert!(
+        loads.len() <= selected_keys.len(),
+        "provider windows should not be loaded more often than selected sessions"
+    );
 }
 
 #[test]
