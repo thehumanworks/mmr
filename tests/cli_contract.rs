@@ -30,6 +30,12 @@ fn stdout_text(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout UTF-8")
 }
 
+fn replace_claude_projects_with_file(home: &Path) {
+    let projects = home.join(".claude").join("projects");
+    fs::remove_dir_all(&projects).expect("remove claude projects dir");
+    fs::write(&projects, "not a directory").expect("replace claude projects dir");
+}
+
 #[test]
 fn root_version_flag_is_available_for_ssh_share_probe() {
     let fixture = TestFixture::seeded();
@@ -460,6 +466,71 @@ fn projects_with_source_codex_filters() {
     for project in projects {
         assert_eq!(project["source"].as_str().unwrap(), "codex");
     }
+}
+
+#[test]
+fn source_filtered_commands_ignore_unselected_provider_load_errors() {
+    let fixture = TestFixture::seeded();
+    replace_claude_projects_with_file(&fixture.home);
+
+    let codex = fixture.run_cli(&["--source", "codex", "list", "projects"]);
+    assert!(
+        codex.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&codex.stderr)
+    );
+    let codex_json = parse_stdout_json(&codex);
+    assert!(
+        codex_json["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|project| project["source"] == "codex")
+    );
+
+    let claude = fixture.run_cli(&["--source", "claude", "list", "projects"]);
+    assert!(!claude.status.success());
+    let stderr = String::from_utf8_lossy(&claude.stderr);
+    assert!(
+        stderr.contains("failed to read") && stderr.contains(".claude/projects"),
+        "stderr={stderr}"
+    );
+}
+
+#[test]
+fn default_source_filters_provider_loading() {
+    let fixture = TestFixture::seeded();
+    replace_claude_projects_with_file(&fixture.home);
+
+    let output =
+        fixture.run_cli_with_env(&["list", "projects"], &[("MMR_DEFAULT_SOURCE", "codex")]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert!(
+        json["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|project| project["source"] == "codex")
+    );
+}
+
+#[test]
+fn all_source_commands_report_provider_load_errors() {
+    let fixture = TestFixture::seeded();
+    replace_claude_projects_with_file(&fixture.home);
+
+    let output = fixture.run_cli(&["list", "projects"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to read") && stderr.contains(".claude/projects"),
+        "stderr={stderr}"
+    );
 }
 
 #[test]
@@ -3440,6 +3511,130 @@ fn read_project_pagination_includes_next_page_and_next_command() {
 }
 
 #[test]
+fn read_project_next_command_quotes_project_paths_with_spaces() {
+    let fixture = RetrieveContractFixture::seeded();
+    let page1 = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "read",
+        "project",
+        "--project",
+        fixture.project_arg(),
+        "--limit",
+        "1",
+    ]);
+    assert!(
+        page1.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
+
+    let page1_json = parse_stdout_json(&page1);
+    assert!(page1_json["next_page"].as_bool().unwrap());
+    let next_command = page1_json["next_command"].as_str().unwrap();
+    assert!(
+        next_command.contains("--project '"),
+        "next_command={next_command}"
+    );
+    assert!(
+        next_command.contains(fixture.project_arg()),
+        "next_command={next_command}"
+    );
+
+    let page2 = fixture.run_shell_command(next_command);
+    assert!(
+        page2.status.success(),
+        "next_command={next_command}\nstderr={}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
+    let page2_json = parse_stdout_json(&page2);
+    assert_eq!(page2_json["messages"].as_array().unwrap().len(), 1);
+    assert!(
+        page2_json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| message["project_name"] == fixture.project_arg())
+    );
+}
+
+#[test]
+fn read_project_remote_next_command_quotes_shell_values() {
+    let fixture = RetrieveContractFixture::seeded();
+    let fake_bin = fixture.home.join("fake-bin-remote-next");
+    fs::create_dir_all(&fake_bin).expect("fake bin");
+    write_executable(
+        &fake_bin.join("ssh"),
+        r#"#!/bin/sh
+cat >/dev/null
+printf '{"messages":[{"session_id":"remote-page-session","source":"codex","project_name":"%s","role":"user","content":"remote page context","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}\n' "$MMR_FAKE_PROJECT"
+"#,
+    );
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let path = format!("{}:{original_path}", fake_bin.display());
+    let page1 = fixture.run_cli_with_env(
+        &[
+            "--source",
+            "codex",
+            "read",
+            "project",
+            "--project",
+            fixture.project_arg(),
+            "--remote",
+            "studio",
+            "--limit",
+            "1",
+        ],
+        &[
+            ("PATH", path.as_str()),
+            ("MMR_FAKE_PROJECT", fixture.project_arg()),
+        ],
+    );
+    assert!(
+        page1.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
+
+    let page1_json = parse_stdout_json(&page1);
+    assert!(page1_json["next_page"].as_bool().unwrap());
+    let next_command = page1_json["next_command"].as_str().unwrap();
+    assert!(
+        next_command.contains("--project '"),
+        "next_command={next_command}"
+    );
+    assert!(
+        next_command.contains("--remote studio"),
+        "next_command={next_command}"
+    );
+
+    let binary_dir = Path::new(env!("CARGO_BIN_EXE_mmr"))
+        .parent()
+        .expect("mmr binary parent");
+    let shell_path = format!("{}:{path}", binary_dir.display());
+    let page2 = Command::new("zsh")
+        .arg("-fc")
+        .arg(next_command)
+        .env("PATH", shell_path)
+        .env("HOME", &fixture.home)
+        .env("XDG_DATA_HOME", &fixture.data_home)
+        .env("MMR_FAKE_PROJECT", fixture.project_arg())
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("MMR_CONFIG_FILE")
+        .current_dir(&fixture.project)
+        .output()
+        .expect("run remote next_command");
+    assert!(
+        page2.status.success(),
+        "next_command={next_command}\nstderr={}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
+    let page2_json = parse_stdout_json(&page2);
+    assert_eq!(page2_json["messages"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn read_source_pagination_no_next_command_when_all_results_fit() {
     let fixture = TestFixture::seeded();
     let output = fixture.run_cli(&["--source", "codex", "read", "source", "--limit", "100"]);
@@ -3701,6 +3896,53 @@ fn recall_zero_with_include_newest_returns_newest() {
     assert!(
         selection["skipped_newest"].is_null(),
         "include-newest means nothing is skipped"
+    );
+}
+
+#[test]
+fn recall_next_command_quotes_project_paths_with_spaces() {
+    let fixture = RetrieveContractFixture::seeded();
+    let page1 = fixture.run_cli(&[
+        "--source",
+        "codex",
+        "recall",
+        "--project",
+        fixture.project_arg(),
+        "1",
+        "--limit",
+        "1",
+    ]);
+    assert!(
+        page1.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&page1.stderr)
+    );
+
+    let page1_json = parse_stdout_json(&page1);
+    assert!(page1_json["next_page"].as_bool().unwrap());
+    let next_command = page1_json["next_command"].as_str().unwrap();
+    assert!(
+        next_command.contains("--project '"),
+        "next_command={next_command}"
+    );
+    assert!(
+        next_command.contains(fixture.project_arg()),
+        "next_command={next_command}"
+    );
+
+    let page2 = fixture.run_shell_command(next_command);
+    assert!(
+        page2.status.success(),
+        "next_command={next_command}\nstderr={}",
+        String::from_utf8_lossy(&page2.stderr)
+    );
+    let page2_json = parse_stdout_json(&page2);
+    let messages = page2_json["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(
+        messages
+            .iter()
+            .all(|message| message["project_name"] == fixture.project_arg())
     );
 }
 

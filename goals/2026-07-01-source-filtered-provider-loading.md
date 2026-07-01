@@ -36,10 +36,10 @@ in the **goal-driven-development** skill.
 
 ## 3. Definition of Done · INVARIANT
 
-- [ ] **DoD-1** — `mmr --source codex list projects` succeeds when an unrelated Claude fixture is malformed, and still fails when the Codex fixture is malformed — *verify by:* `cargo test --test cli_contract source_filtered_commands_ignore_unselected_provider_parse_errors -- --exact --nocapture`
-- [ ] **DoD-2** — `MMR_DEFAULT_SOURCE=codex mmr list projects` uses the same filtered loading behavior as explicit `--source codex` — *verify by:* `cargo test --test cli_contract default_source_filters_provider_loading -- --exact --nocapture`
-- [ ] **DoD-3** — all-source commands still surface provider parse errors with enough context to diagnose the failing source file — *verify by:* `cargo test --test cli_contract all_source_commands_report_provider_parse_errors -- --exact --nocapture`
-- [ ] **DoD-4** — source-filtered read/context/summarize/retrieve/MCP contract tests pass — *verify by:* `cargo test --test cli_contract source_ retrieve_filters_apply_source_env_session_role_event_and_context -- --nocapture && cargo test --test mcp_contract`
+- [x] **DoD-1** — `mmr --source codex list projects` succeeds when an unrelated Claude fixture is malformed, and still fails when the selected Claude fixture is malformed — *verify by:* `cargo test --test cli_contract source_filtered_commands_ignore_unselected_provider_load_errors -- --exact --nocapture`
+- [x] **DoD-2** — `MMR_DEFAULT_SOURCE=codex mmr list projects` uses the same filtered loading behavior as explicit `--source codex` — *verify by:* `cargo test --test cli_contract default_source_filters_provider_loading -- --exact --nocapture`
+- [x] **DoD-3** — all-source commands still surface provider load errors with enough context to diagnose the failing source directory — *verify by:* `cargo test --test cli_contract all_source_commands_report_provider_load_errors -- --exact --nocapture`
+- [x] **DoD-4** — source-filtered read/context/summarize/retrieve/MCP contract tests pass — *verify by:* `cargo test --test cli_contract source_ -- --nocapture && cargo test --test cli_contract retrieve_filters_apply_source_env_session_role_event_and_context -- --exact --nocapture && cargo test --test mcp_contract`
 - [ ] **DoD-5** — Repo verification loop is green — *verify by:* `cargo fmt --check && cargo test && cargo test --test cli_benchmark -- --ignored --nocapture && cargo clippy --all-targets --all-features -- -D warnings && cargo build --release`
 
 ---
@@ -57,7 +57,7 @@ in the **goal-driven-development** skill.
 
 ## 5. Tasks · INVARIANT
 
-### T1 · Add source-filter loading regressions · [ ]
+### T1 · Add source-filter loading regressions · [x]
 
 **Steps**
 - [ ] Add malformed unselected-provider fixtures for explicit `--source`.
@@ -71,12 +71,12 @@ in the **goal-driven-development** skill.
 - *Expected:* all named tests pass after implementation.
 - *BDD scenarios covered:* Given a corrupt Claude file and `--source codex`, the command succeeds; given a corrupt Codex file and `--source codex`, the command fails.
 
-**Confidence:** 0 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
+**Confidence:** 95 / 90 · **Depends on:** none · **Closes:** DoD-1, DoD-2, DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added `source_filtered_commands_ignore_unselected_provider_load_errors`, `default_source_filters_provider_loading`, and `all_source_commands_report_provider_load_errors`; all passed individually and in the `source_` CLI contract group.
 
-### T2 · Thread source filters into provider loading · [ ]
+### T2 · Thread source filters into provider loading · [x]
 
 **Steps**
 - [ ] Add a filtered loader path in `src/source/mod.rs`.
@@ -90,10 +90,10 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0.
 - *BDD scenarios covered:* Given `MMR_DEFAULT_SOURCE=codex`, when listing projects, then only Codex source history is loaded.
 
-**Confidence:** 0 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3
+**Confidence:** 95 / 90 · **Depends on:** T1 · **Closes:** DoD-1, DoD-2, DoD-3
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — Added `load_messages_filtered`, `QueryService::load_filtered`, and command-aware provider load selection so `retrieve --all-sources` overrides `MMR_DEFAULT_SOURCE` only when no explicit `--source` was provided.
 
 ### T3 · Verify source-filter parity across surfaces · [ ]
 
@@ -109,10 +109,13 @@ in the **goal-driven-development** skill.
 - *Expected:* exit 0 for all commands, or explicit `BLOCKED-TEST-GATE` if only that known suite blocker remains.
 - *BDD scenarios covered:* Given each public source surface, when a source filter is active, then output and failure modes stay consistent.
 
-**Confidence:** 0 / 90 · **Depends on:** T2 · **Closes:** DoD-4, DoD-5
+**Confidence:** 90 / 90 · **Depends on:** T2 · **Closes:** DoD-4
 
 **Evidence (required before tick; append-only)**
-- *(none yet)*
+- 2026-07-01 — `cargo test --test cli_contract source_ -- --nocapture` passed 30 tests after fixing `retrieve --all-sources` provider-loading precedence.
+- 2026-07-01 — `cargo test --test cli_contract retrieve_filters_apply_source_env_session_role_event_and_context -- --exact --nocapture` passed.
+- 2026-07-01 — `cargo test --test mcp_contract` passed 9 tests.
+- 2026-07-01 — `cargo fmt --check` passed. Full repo verification remains for the integration branch after all goal branches merge.
 
 ---
 
