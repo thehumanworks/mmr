@@ -7,9 +7,18 @@ as a goal-driven prompt document under `goals/`. Before writing or changing code
 create `goals/<YYYY-MM-DD>-<kebab-title>.md` with YAML frontmatter (`title`,
 `description`, `date`, `status`) and a body that states the outcome, the surface
 touched, the validation plan, and the definition of done. Drive the work from
-that document and update its `status` as it progresses (`in-progress` → `done`,
-or `blocked` with the smallest missing fact). Existing goals in `goals/` are the
-template; `goals/2026-05-29-reverse-session-selection.md` is a worked example.
+that document and update its `status` as it progresses (`draft` → `ready` →
+`in-progress` → `done`, or `exited` via an exit condition).
+
+**Approval model:** deliver the goal doc (and optional root `GOAL.md` index for
+multi-goal plans). The user may comment on or edit the goal freely. Pointing the
+agent at a goal file — path in the message, attachment, or explicit
+`implement goals/foo.md` — is approval to execute; do not ask for a separate
+confirmation step. Pointing at root `GOAL.md` approves the next `ready` phase
+goal listed there. Do not set frontmatter `status: blocked`; use exit conditions
+(`SCOPE-CHANGE`, `CONFIDENCE-STALL`, `BLOCKED-DEP`, etc.) instead. Existing
+goals in `goals/` are the template; `goals/2026-05-29-reverse-session-selection.md`
+is a worked example.
 
 When a goal reaches done and confidence is high, commit and push the completed
 work before ending the turn, provided the full relevant verification loop has
@@ -41,12 +50,18 @@ commit unsafe.
 - `.agents/skills/mmr-teleport-providers/`: provider-profile native teleport layouts and verification notes.
 - `.agents/skills/mmr/`: parent skill for the local `mmr` history tool. Use for general mmr questions or when unsure which mmr capability applies.
 - `.agents/skills/mmr/session-mining/`: (subskill) retrieve previous sessions via `mmr recall` and `mmr read session`, analyze them, and produce continuity context. Critical for surviving context compaction and clearing. Use when you need to remind an agent (or yourself) of prior work.
+- `.agents/skills/mmr/goal-closeout/`: (subskill) targeted tests → full verification loop → `gdd_status.py` evidence → scoped commit when appropriate → mark goal done.
+- `.agents/skills/mmr/review-remediation/`: (subskill) deep review findings → goal docs → parallel git worktrees → merge → post-merge verification on `main`.
+- `.agents/skills/mmr/docs-first-contract-change/`: (subskill) specs-first CLI contract changes with continuation/pagination regression coverage.
+- `.agents/skills/mmr/command-surface-removal/`: (subskill) remove public CLI commands with rejection contract tests and active-surface grep hygiene.
 
 ## Cursor Rules
 
 Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 - `verification-loop.mdc`: mandatory verification sequence before claiming completion.
+- `goal-driven-development.mdc`: deliver goal docs; pointer-at-goal-file approves execution; no `blocked` frontmatter status.
+- `goal-closeout.mdc`: goal finish loop (targeted tests, verification, evidence, optional commit, mark done).
 - `cli-contract.mdc`: CLI contract constraints for source semantics and response behavior.
 - `ingest-parsing.mdc`: ingestion/parsing constraints for `src/source/**/*.rs`.
 - `test-discipline.mdc`: fixture and benchmark expectations for `tests/**/*.rs`.

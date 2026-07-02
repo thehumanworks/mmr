@@ -1,0 +1,32 @@
+---
+description: Goal Driven Development approval model — deliver goal docs; pointer-as-approval to execute
+alwaysApply: true
+---
+
+# Goal Driven Development
+
+Follow the **goal-driven-development** skill (`~/.agents/skills/goal-driven-development/SKILL.md`) for full Author/Execute procedure, templates, and `gdd_status.py` usage.
+
+## Deliver goal docs
+
+- Create or update delivery contracts under `goals/` (optional root `GOAL.md` index for multi-goal plans).
+- **Never** set frontmatter `status: blocked`. Use exit conditions and `SCOPE-CHANGE` stops instead.
+- Valid statuses: `draft` (authoring), `ready` (delivered for user review), `in-progress`, `done`, `exited`.
+- The user may comment on or edit the goal file freely before execution.
+
+## Approval to execute
+
+- When the user points you at a goal file — path in the message, attachment, or explicit `implement goals/foo.md` — treat that as **approval to execute**. Do not ask for a separate confirmation step.
+- Set `status: in-progress` and begin the Execute workflow from the skill.
+
+## Scope invariants (unchanged)
+
+- Scope freezes once execution begins: only tick boxes, update confidence, append Evidence/Decisions/Learnings/Skills, and update `status`/`updated`.
+- Needed DoD/Task changes are a `SCOPE-CHANGE` exit, not silent edits.
+
+## Example
+
+User: *Implement `goals/2026-07-02-codify-agent-workflows.md`.*
+
+✅ Read the goal, set `in-progress`, work tasks in order, log Evidence.  
+❌ *"Should I proceed with this goal?"* — the pointer is the approval.

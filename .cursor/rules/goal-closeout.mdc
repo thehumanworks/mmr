@@ -1,0 +1,50 @@
+---
+description: Goal closeout loop — verify, update evidence, commit when asked, mark done
+alwaysApply: true
+---
+
+# Goal Closeout
+
+Run this loop before claiming a goal is complete. See also `.cursor/rules/verification-loop.mdc`.
+
+## 1. Targeted tests
+
+Run the narrowest commands that prove the change (task Verification Contracts, DoD `verify by:` checks, named `cargo test` filters).
+
+## 2. Full verification
+
+After meaningful code changes, run the full sequence from **verification-loop.mdc**:
+
+```bash
+cargo fmt
+cargo test
+cargo test --test cli_benchmark -- --ignored --nocapture
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --release
+```
+
+Fix failures with concrete command output before continuing.
+
+## 3. Goal evidence update
+
+```bash
+GDD_SKILL="$HOME/.agents/skills/goal-driven-development"
+python "$GDD_SKILL/scripts/gdd_status.py" goals/<slug>.md
+```
+
+- Tick Tasks and DoD only with Evidence (date + command + outcome) and confidence ≥ floor.
+- Append Decisions/Learnings when non-obvious; confirm `gdd_status.py` reports done-eligible.
+
+## 4. Git (only when user asked or goal requires it)
+
+```bash
+git diff --check
+git add <scoped paths only>
+git commit -m "imperative summary of why"
+```
+
+Do not commit unless the user requested it or the goal's DoD explicitly requires it.
+
+## 5. Mark done
+
+Set frontmatter `status: done`, bump `updated`, and cite verification evidence in the final response.

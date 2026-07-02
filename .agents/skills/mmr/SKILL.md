@@ -34,7 +34,39 @@ Use `session-mining` when you need to:
 
 It provides reusable patterns and guidance beyond what the basic `mmr` commands or `mmr summarize` deliver on their own.
 
-See the subskill documentation: `.agents/skills/mmr/session-mining/SKILL.md`
+See: `.agents/skills/mmr/session-mining/SKILL.md`
+
+### goal-closeout
+
+**Location:** `mmr/goal-closeout`
+
+Closes goal execution: targeted tests → full verification loop → goal evidence → diff check → scoped commit. Uses `gdd_status.py` before marking goals done.
+
+See: `.agents/skills/mmr/goal-closeout/SKILL.md`
+
+### review-remediation
+
+**Location:** `mmr/review-remediation`
+
+Deep review → findings → GDD goal docs → parallel git worktrees per concern → merge to main → post-merge fixture fixes → merged-main verification.
+
+See: `.agents/skills/mmr/review-remediation/SKILL.md`
+
+### docs-first-contract-change
+
+**Location:** `mmr/docs-first-contract-change`
+
+CLI contract changes docs-first: `specs/*.md` → `src/cli.rs` → `cli_contract` + `memory_fabric_contract` tests → live smoke; preserve `next_command` continuation (e.g. retrieve `--debug`, `--full-message-history`).
+
+See: `.agents/skills/mmr/docs-first-contract-change/SKILL.md`
+
+### command-surface-removal
+
+**Location:** `mmr/command-surface-removal`
+
+Safely removes public CLI commands: no-backwards-compat goal → strip clap/tests/docs/scripts → rejection contract test → grep active surface → dead code cleanup → verification.
+
+See: `.agents/skills/mmr/command-surface-removal/SKILL.md`
 
 ## When to Use This Parent Skill
 
@@ -50,5 +82,6 @@ For most continuity and previous-session work, load the `session-mining` subskil
 
 - `mmr-clap-colored-cli` — Developing the mmr CLI surface, contracts, and output behavior
 - `mmr-native-bundle-providers` — Maintaining native session bundle profiles across providers
+- `goal-driven-development` — Authoring and executing `goals/*.md` delivery contracts (`gdd_status.py`)
 
-Prefer the most specific skill for the task at hand.
+Prefer the most specific subskill for the task at hand; fall back to this parent when unsure.
