@@ -2,10 +2,15 @@
 mod common;
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::thread;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use common::{TestFixture, parse_stdout_json};
@@ -80,6 +85,10 @@ fn mcp_python_bootstrap_cli_contract() -> anyhow::Result<()> {
     let legacy_text = String::from_utf8_lossy(&legacy_help.stdout);
     assert!(
         legacy_text.contains("--transport <TRANSPORT>"),
+        "{legacy_text}"
+    );
+    assert!(
+        legacy_text.contains("local loopback REST backing endpoint"),
         "{legacy_text}"
     );
     Ok(())
@@ -509,6 +518,93 @@ async fn mcp_read_source_requires_explicit_source() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn mcp_stdio_autostarts_rest_backing_when_missing() -> anyhow::Result<()> {
+    let fixture = TestFixture::seeded();
+    let (mut mcp, mut stderr) =
+        StdioMcp::spawn_with_env(&fixture, &[("MMR_MCP_REST_BACKING_BIND", "127.0.0.1:0")])?;
+    let startup = read_stderr_line(&mut stderr)?;
+    assert!(
+        startup.contains("mmr REST backing server listening on http://127.0.0.1:"),
+        "startup stderr: {startup}"
+    );
+    let api_base_url = first_http_url(&startup)?;
+
+    let client = reqwest::Client::new();
+    let openapi: Value = client
+        .get(format!("{api_base_url}/openapi.json"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(openapi["openapi"], "3.1.0");
+
+    let status: Value = client
+        .get(format!("{api_base_url}/v1/status"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(status["command"], "status", "{status}");
+
+    let response = mcp.send_request(
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+        2,
+    )?;
+    assert!(
+        response["result"]["tools"].as_array().is_some(),
+        "{response}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_stdio_reuses_existing_rest_backing() -> anyhow::Result<()> {
+    let fixture = TestFixture::seeded();
+    let mock = start_mock_rest_status_server()?;
+    let base_url = mock.base_url.clone();
+    let (mut mcp, mut stderr) = StdioMcp::spawn_with_env(
+        &fixture,
+        &[
+            ("MMR_MCP_REST_BACKING_BIND", "127.0.0.1:0"),
+            ("MMR_MCP_REST_BACKING_BASE_URL", &base_url),
+        ],
+    )?;
+    let startup = read_stderr_line(&mut stderr)?;
+    assert!(
+        startup.contains(&format!(
+            "mmr REST backing server already available at {base_url}"
+        )),
+        "startup stderr: {startup}"
+    );
+    assert!(
+        mock.requests.load(Ordering::SeqCst) >= 1,
+        "mock status endpoint was not probed"
+    );
+
+    let response = mcp.send_request(
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }),
+        2,
+    )?;
+    assert!(
+        response["result"]["tools"].as_array().is_some(),
+        "{response}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_stdio_subprocess_protocol_smoke() -> anyhow::Result<()> {
     let fixture = TestFixture::seeded();
     let mut mcp = StdioMcp::spawn(&fixture)?;
@@ -597,21 +693,40 @@ struct StdioMcp {
 
 impl StdioMcp {
     fn spawn(fixture: &TestFixture) -> anyhow::Result<Self> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        let (mcp, _stderr) = Self::spawn_with_env(fixture, &[])?;
+        Ok(mcp)
+    }
+
+    fn spawn_with_env(
+        fixture: &TestFixture,
+        envs: &[(&str, &str)],
+    ) -> anyhow::Result<(Self, BufReader<ChildStderr>)> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
+        command
             .args(["mcp", "--transport", "stdio"])
             .env("HOME", &fixture.home)
+            .env("MMR_MCP_REST_BACKING_BIND", "127.0.0.1:0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("stdin pipe");
         let stdout = BufReader::new(child.stdout.take().expect("stdout pipe"));
+        let stderr = BufReader::new(child.stderr.take().expect("stderr pipe"));
         let mut mcp = Self {
             child,
             stdin,
             stdout,
         };
-        let init = mcp.send_request(
+        mcp.initialize()?;
+        Ok((mcp, stderr))
+    }
+
+    fn initialize(&mut self) -> anyhow::Result<()> {
+        let init = self.send_request(
             json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -632,11 +747,11 @@ impl StdioMcp {
             init["result"]["capabilities"]["prompts"].is_object(),
             "{init}"
         );
-        mcp.send_notification(json!({
+        self.send_notification(json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         }))?;
-        Ok(mcp)
+        Ok(())
     }
 
     fn call_tool(&mut self, id: i64, name: &str, arguments: Value) -> anyhow::Result<Value> {
@@ -717,6 +832,80 @@ fn parse_streamable_http_body(body: &str) -> anyhow::Result<Value> {
         }
     }
     anyhow::bail!("streamable HTTP body did not contain JSON result: {body}");
+}
+
+fn read_stderr_line(stderr: &mut BufReader<ChildStderr>) -> anyhow::Result<String> {
+    let mut line = String::new();
+    stderr.read_line(&mut line)?;
+    if line.trim().is_empty() {
+        anyhow::bail!("stderr closed before startup line");
+    }
+    Ok(line)
+}
+
+fn first_http_url(line: &str) -> anyhow::Result<String> {
+    line.split_whitespace()
+        .find(|part| part.starts_with("http://"))
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("no http URL in line: {line}"))
+}
+
+struct MockRestServer {
+    base_url: String,
+    requests: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for MockRestServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn start_mock_rest_status_server() -> anyhow::Result<MockRestServer> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let requests = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_requests = Arc::clone(&requests);
+    let thread_stop = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !thread_stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    thread_requests.fetch_add(1, Ordering::SeqCst);
+                    let mut buffer = [0_u8; 1024];
+                    let _ = stream.read(&mut buffer);
+                    let request = String::from_utf8_lossy(&buffer);
+                    let (status, body) = if request.starts_with("GET /v1/status ") {
+                        ("HTTP/1.1 200 OK", r#"{"command":"status","store":{}}"#)
+                    } else {
+                        ("HTTP/1.1 404 Not Found", r#"{"error":"not found"}"#)
+                    };
+                    let response = format!(
+                        "{status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok(MockRestServer {
+        base_url,
+        requests,
+        stop,
+        handle: Some(handle),
+    })
 }
 
 fn stderr_text(output: &std::process::Output) -> String {

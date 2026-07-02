@@ -17,8 +17,11 @@ node scripts/generate-api-docs.mjs
 ## Python FastMCP bootstrap
 
 `mmr mcp --transport stdio` and `mmr mcp --transport http` run the native Rust
-MCP server. Use `mmr mcp python-bootstrap` only when you want a Python FastMCP
-bridge generated from the REST OpenAPI contract.
+MCP server. The stdio command is the default setup path for MCP clients: it
+checks the local loopback REST backing endpoint and starts one when none is
+already available, so users do not need to start a separate REST API process.
+Use `mmr mcp python-bootstrap` only when you want to print, write, or manually
+launch a Python FastMCP bridge generated from the REST OpenAPI contract.
 
 ```sh
 mmr mcp python-bootstrap > server.py

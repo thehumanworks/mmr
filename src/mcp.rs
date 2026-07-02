@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -41,13 +43,18 @@ use crate::cli::{Cli, run_cli};
 
 const PYTHON_BOOTSTRAP_CONTENT: &str = include_str!("../scripts/mmr_rest_mcp_bootstrap.py");
 const REST_OPENAPI_CONTENT: &str = include_str!("../docs/api/openapi.json");
+const STDIO_REST_BACKING_DEFAULT_BIND: &str = "127.0.0.1:8765";
+const STDIO_REST_BACKING_BIND_ENV: &str = "MMR_MCP_REST_BACKING_BIND";
+const STDIO_REST_BACKING_BASE_URL_ENV: &str = "MMR_MCP_REST_BACKING_BASE_URL";
 
 #[derive(Args, Debug)]
 pub struct McpArgs {
     /// Create or launch a Python FastMCP server generated from the mmr REST OpenAPI document.
     #[command(subcommand)]
     pub command: Option<McpCommand>,
-    /// Transport to serve MCP over: stdio or streamable HTTP
+    /// Transport to serve MCP over: stdio or streamable HTTP.
+    ///
+    /// Stdio also ensures a local loopback REST backing endpoint is available.
     #[arg(long, value_enum)]
     pub transport: Option<McpTransportArg>,
     /// HTTP bind address. Ignored for stdio.
@@ -358,7 +365,11 @@ struct RestBackingServer {
 
 impl RestBackingServer {
     async fn start() -> Result<Self> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        Self::start_on("127.0.0.1:0".parse()?).await
+    }
+
+    async fn start_on(bind: SocketAddr) -> Result<Self> {
+        let listener = tokio::net::TcpListener::bind(bind)
             .await
             .context("bind internal mmr REST backing server")?;
         let local_addr = listener.local_addr()?;
@@ -616,9 +627,81 @@ fn serialize_mcp_response<T: Serialize>(value: &T, pretty: bool) -> Result<Strin
 }
 
 async fn run_stdio() -> Result<()> {
-    let service = MmrMcpServer::new().serve(rmcp::transport::stdio()).await?;
-    service.waiting().await?;
+    let rest_backing = ensure_stdio_rest_backing().await?;
+    let result = async {
+        let service = MmrMcpServer::new().serve(rmcp::transport::stdio()).await?;
+        service.waiting().await?;
+        anyhow::Ok(())
+    }
+    .await;
+    let shutdown = rest_backing.shutdown().await;
+    result?;
+    shutdown?;
     Ok(())
+}
+
+enum StdioRestBacking {
+    Existing,
+    Started(RestBackingServer),
+}
+
+impl StdioRestBacking {
+    async fn shutdown(self) -> Result<()> {
+        match self {
+            StdioRestBacking::Existing => Ok(()),
+            StdioRestBacking::Started(server) => server.shutdown().await,
+        }
+    }
+}
+
+async fn ensure_stdio_rest_backing() -> Result<StdioRestBacking> {
+    let bind = stdio_rest_backing_bind()?;
+    if let Some(api_base_url) = stdio_rest_backing_probe_url(bind) {
+        if rest_backing_is_healthy(&api_base_url).await {
+            eprintln!("mmr REST backing server already available at {api_base_url}");
+            return Ok(StdioRestBacking::Existing);
+        }
+    }
+
+    let server = RestBackingServer::start_on(bind).await?;
+    let api_base_url = server.api_base_url();
+    eprintln!("mmr REST backing server listening on {api_base_url}");
+    Ok(StdioRestBacking::Started(server))
+}
+
+fn stdio_rest_backing_bind() -> Result<SocketAddr> {
+    let bind = env::var(STDIO_REST_BACKING_BIND_ENV)
+        .unwrap_or_else(|_| STDIO_REST_BACKING_DEFAULT_BIND.to_string());
+    bind.parse()
+        .with_context(|| format!("parse {STDIO_REST_BACKING_BIND_ENV}={bind:?} as socket address"))
+}
+
+fn stdio_rest_backing_probe_url(bind: SocketAddr) -> Option<String> {
+    if let Ok(api_base_url) = env::var(STDIO_REST_BACKING_BASE_URL_ENV) {
+        let trimmed = api_base_url.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if bind.port() == 0 {
+        None
+    } else {
+        Some(format!("http://{bind}"))
+    }
+}
+
+async fn rest_backing_is_healthy(api_base_url: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_millis(300))
+        .build()
+    else {
+        return false;
+    };
+    let url = format!("{}/v1/status", api_base_url.trim_end_matches('/'));
+    match client.get(url).send().await {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
 }
 
 async fn run_http(bind: SocketAddr, path: &str) -> Result<()> {
