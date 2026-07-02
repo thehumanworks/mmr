@@ -1,0 +1,10 @@
+#:schema https://pitchfork.jdx.dev/schema.json
+
+[daemons.api-docs]
+run = "python3 scripts/serve-api-docs.py"
+dir = "."
+port = 8765
+ready_http = "http://127.0.0.1:8765/"
+auto = ["start"]
+retry = 3
+env = { PYTHONUNBUFFERED = "1", PORT = "8765", MMR_API_DOCS_DIR = "docs/api" }
