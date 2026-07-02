@@ -1,0 +1,6984 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MMR REST API",
+    "version": "0.2.0",
+    "summary": "REST contract for the MMR local memory fabric.",
+    "description": "This OpenAPI contract maps MMR's current intent-first CLI and product specs into a REST API surface. Responses preserve the machine-readable JSON shapes used by the CLI where practical. Operations that can expose raw transcripts, contact SSH peers, or write provider files are marked as local-sensitive and require bearer-token authentication in HTTP deployments.",
+    "license": {
+      "name": "UNLICENSED",
+      "identifier": "LicenseRef-UNLICENSED"
+    }
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765",
+      "description": "Local development server"
+    },
+    {
+      "url": "http://{tailscale_host}:8765",
+      "description": "Private Tailscale-accessible host",
+      "variables": {
+        "tailscale_host": {
+          "default": "100.x.y.z",
+          "description": "Tailscale IP or MagicDNS name for the machine running MMR."
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Status",
+      "description": "Setup, store health, and sync readiness."
+    },
+    {
+      "name": "History",
+      "description": "Projects, sessions, raw reads, and previous-session recall."
+    },
+    {
+      "name": "Search",
+      "description": "Exact search and search-to-read retrieval."
+    },
+    {
+      "name": "Context",
+      "description": "Bounded context packets for agents."
+    },
+    {
+      "name": "Models",
+      "description": "Summarization, compacting, and assimilation handoffs."
+    },
+    {
+      "name": "Memory",
+      "description": "Notes, event ingestion, redaction, and sync."
+    },
+    {
+      "name": "Movement",
+      "description": "Trusted peer reads and native session bundle movement."
+    }
+  ],
+  "paths": {
+    "/v1/status": {
+      "get": {
+        "tags": [
+          "Status"
+        ],
+        "operationId": "getStatus",
+        "summary": "Inspect local project, store, remote, redaction, and provider readiness",
+        "description": "REST equivalent of `mmr status`. Without a project parameter, the server uses its current directory or configured project context.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Project path, provider project name, or known project alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/v1/init": {
+      "post": {
+        "tags": [
+          "Status"
+        ],
+        "operationId": "initProject",
+        "summary": "Set up or repair the local MMR store and project link",
+        "description": "REST equivalent of `mmr init`. This can import local provider history and may sync redacted state when remote auth is available.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/projects": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "operationId": "listProjects",
+        "summary": "List known projects with source coverage and recency metadata",
+        "description": "REST equivalent of `mmr list projects`. Remote targets are explicit trusted SSH peers.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiProjectsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of returned items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of sorted items to skip before returning a page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "description": "Sort key.",
+            "schema": {
+              "$ref": "#/components/schemas/SortBy"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort order.",
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder"
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "description": "Explicit trusted SSH peer target. Repeat to merge multiple named peers.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1/sessions": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "operationId": "listSessions",
+        "summary": "List sessions in a project, source, or all-project scope",
+        "description": "REST equivalent of `mmr list sessions`. When project and all are omitted, cwd project auto-discovery semantics apply.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiSessionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Project path, provider project name, or known project alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "description": "Search across all projects instead of cwd or explicit project scope.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of returned items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of sorted items to skip before returning a page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "description": "Sort key.",
+            "schema": {
+              "$ref": "#/components/schemas/SortBy"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort order.",
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder"
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "description": "Explicit trusted SSH peer target. Repeat to merge multiple named peers.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/messages": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "operationId": "readSessionMessages",
+        "summary": "Read one explicit session by source session ID",
+        "description": "REST equivalent of `mmr read session <session-id>`. Without project or source, the session is searched globally.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiMessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "description": "Public source session identifier.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Project path, provider project name, or known project alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of returned items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of sorted items to skip before returning a page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "description": "Explicit trusted SSH peer target. Repeat to merge multiple named peers.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1/messages": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "operationId": "readMessages",
+        "summary": "Read project-scoped or source-scoped history",
+        "description": "REST equivalent of `mmr read project` or `mmr read source`. Use scope=project for cwd/explicit project history and scope=source with an explicit source for harness-wide history.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiMessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "description": "History scope to read.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "project",
+                "source"
+              ]
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Project path, provider project name, or known project alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of returned items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of sorted items to skip before returning a page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "description": "Explicit trusted SSH peer target. Repeat to merge multiple named peers.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1/recall": {
+      "get": {
+        "tags": [
+          "History"
+        ],
+        "operationId": "recallPreviousSession",
+        "summary": "Retrieve a previous stable session in scope",
+        "description": "REST equivalent of `mmr recall`. Age 0 is held back unless include_newest is true; paged responses pin the resolved concrete session in the continuation.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiMessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "n",
+            "in": "query",
+            "required": false,
+            "description": "How many sessions back to read. 1 means previous stable session.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Project path, provider project name, or known project alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "all",
+            "in": "query",
+            "required": false,
+            "description": "Search across all projects instead of cwd or explicit project scope.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "include_newest",
+            "in": "query",
+            "required": false,
+            "description": "Make newest visible session, age 0, addressable.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of returned items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of sorted items to skip before returning a page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "description": "Explicit trusted SSH peer target. Repeat to merge multiple named peers.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1/find": {
+      "get": {
+        "tags": [
+          "Search"
+        ],
+        "operationId": "findEvents",
+        "summary": "Search normalized events and learned memory with literal text",
+        "description": "REST equivalent of `mmr find` JSON output. The CLI-only tab-delimited line format is intentionally excluded.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "description": "Literal query or pattern to find.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Project path, provider project name, or known project alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "session",
+            "in": "query",
+            "required": false,
+            "description": "Public source session id to search.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "description": "Event role filter.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "required": false,
+            "description": "Event type filter.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ignore_case",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive literal matching.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "context",
+            "in": "query",
+            "required": false,
+            "description": "Context lines before and after each match.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/v1/retrievals": {
+      "post": {
+        "tags": [
+          "Search"
+        ],
+        "operationId": "retrieveContext",
+        "summary": "Search matching events, rank sessions, and optionally return provider message windows",
+        "description": "REST equivalent of `mmr retrieve`. Broad local scopes are explicit; remote retrieval is intentionally out of v1.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrieveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrieveRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/context/project": {
+      "get": {
+        "tags": [
+          "Context"
+        ],
+        "operationId": "getProjectContext",
+        "summary": "Produce project-specific context across sources",
+        "description": "REST equivalent of `mmr context project`.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "description": "Project path, provider project name, or known project alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "Provider source filter. Omitting it means all provider sources.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of returned items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "description": "Explicit trusted SSH peer target. Repeat to merge multiple named peers.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1/context/source": {
+      "get": {
+        "tags": [
+          "Context"
+        ],
+        "operationId": "getSourceContext",
+        "summary": "Produce source-wide context for one explicit provider source",
+        "description": "REST equivalent of `mmr --source <source> context source`.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": true,
+            "description": "Required provider source filter.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "cursor",
+                "grok",
+                "pi"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of returned items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "description": "Explicit trusted SSH peer target. Repeat to merge multiple named peers.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "/v1/summaries": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "operationId": "createSummary",
+        "summary": "Run a stateless summary over project, source, or session history",
+        "description": "REST equivalent of `mmr summarize project|source|session`. The server calls the configured OpenAI-compatible summarizer.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RememberResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SummaryRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/compactions": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "operationId": "createCompaction",
+        "summary": "Compact scoped history with Morph Compact without rewriting surviving lines",
+        "description": "REST equivalent of `mmr compact project|source|session`.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompactRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/assimilation-handoffs": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "operationId": "createAssimilationHandoff",
+        "summary": "Return prompt, runbook, output contract, and evidence for memory assimilation",
+        "description": "REST equivalent of `mmr assimilate project|source`. It returns an agent handoff and does not run a provider as a side effect.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DreamResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssimilationRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/notes": {
+      "post": {
+        "tags": [
+          "Memory"
+        ],
+        "operationId": "createNote",
+        "summary": "Add a human-authored project event",
+        "description": "REST equivalent of `mmr note`.",
+        "x-mmr-status": "rest-contract",
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ingest/events": {
+      "post": {
+        "tags": [
+          "Memory"
+        ],
+        "operationId": "ingestEvents",
+        "summary": "Ingest provider history into normalized local events",
+        "description": "REST equivalent of `mmr --source codex|claude|cursor ingest events`. Provider source is required.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestEventsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestEventsRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/redactions/scan": {
+      "post": {
+        "tags": [
+          "Memory"
+        ],
+        "operationId": "scanRedactions",
+        "summary": "Scan linked project events and persist redaction runs",
+        "description": "REST equivalent of `mmr redact scan`.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedactScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedactScanRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/redactions/events/{event_id}": {
+      "get": {
+        "tags": [
+          "Memory"
+        ],
+        "operationId": "explainRedaction",
+        "summary": "Explain the latest redaction result for one event",
+        "description": "REST equivalent of `mmr redact explain <event-id>`.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedactExplainResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "description": "Normalized event id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/sync-dry-runs": {
+      "post": {
+        "tags": [
+          "Memory"
+        ],
+        "operationId": "dryRunSync",
+        "summary": "Preview sync safety without contacting a remote",
+        "description": "REST equivalent of `mmr sync --dry-run`. It must not mutate redaction or sync state.",
+        "x-mmr-status": "rest-contract",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncDryRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sync-runs": {
+      "post": {
+        "tags": [
+          "Memory"
+        ],
+        "operationId": "runSync",
+        "summary": "Safely reconcile redacted project memory with the configured remote",
+        "description": "REST equivalent of `mmr sync`. Unsafe events and degraded PII coverage block upload.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-contacts-peer": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/session-shares": {
+      "post": {
+        "tags": [
+          "Movement"
+        ],
+        "operationId": "shareSession",
+        "summary": "Share one native provider session over SSH, file inbox, or one-shot HTTP",
+        "description": "REST equivalent of `mmr share session`. This is local-sensitive and may contact a peer or serve a one-shot locator.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-contacts-peer": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionShareRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/session-bundles": {
+      "post": {
+        "tags": [
+          "Movement"
+        ],
+        "operationId": "packSessionBundle",
+        "summary": "Create or preview a local native provider session bundle",
+        "description": "REST adapter for the native bundle packing step used by `mmr share session`; mirrors the internal `teleport/pack` JSON response.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionBundleRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/session-imports": {
+      "post": {
+        "tags": [
+          "Movement"
+        ],
+        "operationId": "importSession",
+        "summary": "Pull a selected native session bundle from an SSH peer",
+        "description": "REST equivalent of `mmr import session`. Apply mode writes native provider files.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-contacts-peer": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionImportRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/bundle-imports": {
+      "post": {
+        "tags": [
+          "Movement"
+        ],
+        "operationId": "importBundle",
+        "summary": "Read or apply an existing bundle locator",
+        "description": "REST equivalent of `mmr import bundle`. Locators may be local paths, inbox entries, stdin streams in CLI form, or one-shot HTTP locators.",
+        "x-mmr-status": "rest-contract",
+        "x-local-sensitive": true,
+        "x-writes-files": true,
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleImportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or unsupported option combination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested project, session, event, or bundle was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous selector, stale continuation, or conflicting state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request is understood but blocked by privacy or safety policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Named peer, remote provider, or upstream model call failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Named peer or upstream model call timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MmrError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BundleImportRequest"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque local token",
+        "description": "Required for HTTP deployments because MMR exposes local transcript and project memory."
+      }
+    },
+    "schemas": {
+      "ProviderSource": {
+        "type": "string",
+        "enum": [
+          "claude",
+          "codex",
+          "cursor",
+          "grok",
+          "pi"
+        ]
+      },
+      "EventSource": {
+        "type": "string",
+        "description": "Provider or normalized event source such as claude, codex, cursor, grok, pi, note, or learned_memory."
+      },
+      "SortBy": {
+        "type": "string",
+        "enum": [
+          "timestamp",
+          "message-count"
+        ]
+      },
+      "SortOrder": {
+        "type": "string",
+        "enum": [
+          "asc",
+          "desc"
+        ]
+      },
+      "MmrError": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "status",
+          "error_kind",
+          "message"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "failed"
+          },
+          "error_kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_sessions_in_scope": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "max_selectable_age": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "requested_age": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "requested_newest_age": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "requested_oldest_age": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "details": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "RestContinuationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "method",
+          "path"
+        ],
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "body": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "ApiMessageOrigin": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host",
+          "transport"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string",
+            "examples": [
+              "ssh",
+              "local"
+            ]
+          },
+          "remote_mmr_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ApiPeerResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host",
+          "transport",
+          "command",
+          "status"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "remote_mmr_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_messages": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "format": "int64"
+          },
+          "total_sessions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "format": "int64"
+          }
+        }
+      },
+      "ApiProject": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "source",
+          "original_path",
+          "session_count",
+          "message_count",
+          "last_activity"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "original_path": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "session_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "message_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_activity": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ApiMessageOrigin"
+          }
+        }
+      },
+      "ApiProjectsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "projects",
+          "total_messages",
+          "total_sessions"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiProject"
+            }
+          },
+          "total_messages": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "total_sessions": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "peer_results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiPeerResult"
+            }
+          }
+        }
+      },
+      "ApiSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_id",
+          "source",
+          "project_name",
+          "project_path",
+          "first_timestamp",
+          "last_timestamp",
+          "message_count",
+          "user_messages",
+          "assistant_messages",
+          "preview"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "project_path": {
+            "type": "string"
+          },
+          "first_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "user_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "assistant_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preview": {
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ApiMessageOrigin"
+          }
+        }
+      },
+      "ApiSessionsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessions",
+          "total_sessions"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiSession"
+            }
+          },
+          "total_sessions": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "peer_results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiPeerResult"
+            }
+          }
+        }
+      },
+      "ApiMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_id",
+          "source",
+          "project_name",
+          "role",
+          "content",
+          "model",
+          "timestamp",
+          "is_subagent",
+          "msg_type",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "is_subagent": {
+            "type": "boolean"
+          },
+          "msg_type": {
+            "type": "string"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ApiMessageOrigin"
+          }
+        }
+      },
+      "SessionSelectionScope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "all",
+          "source"
+        ],
+        "properties": {
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "all": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SelectedSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "age",
+          "session_id",
+          "source",
+          "project_name",
+          "first_timestamp",
+          "last_timestamp",
+          "message_count",
+          "equivalent_command"
+        ],
+        "properties": {
+          "age": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "first_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "equivalent_command": {
+            "type": "string"
+          }
+        }
+      },
+      "SkippedNewest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "age",
+          "session_id",
+          "last_timestamp",
+          "assumed_live"
+        ],
+        "properties": {
+          "age": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "last_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "assumed_live": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SessionSelection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope",
+          "axis",
+          "total_sessions_in_scope",
+          "selected"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/SessionSelectionScope"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "session-back"
+            ]
+          },
+          "total_sessions_in_scope": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "selected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectedSession"
+            }
+          },
+          "skipped_newest": {
+            "$ref": "#/components/schemas/SkippedNewest"
+          }
+        }
+      },
+      "ApiMessagesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "messages",
+          "total_messages",
+          "next_page",
+          "next_offset"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiMessage"
+            }
+          },
+          "total_messages": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "next_page": {
+            "type": "boolean"
+          },
+          "next_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "next_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RestContinuationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_selection": {
+            "$ref": "#/components/schemas/SessionSelection"
+          },
+          "peer_results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiPeerResult"
+            }
+          }
+        }
+      },
+      "ContextResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "scope",
+          "source",
+          "project",
+          "total_sessions",
+          "total_messages",
+          "sessions",
+          "messages"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "examples": [
+              "context/project"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "source"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_sessions": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "total_messages": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiSession"
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiMessage"
+            }
+          },
+          "peer_results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiPeerResult"
+            }
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "source",
+          "session_id",
+          "event_id",
+          "event_type",
+          "role",
+          "timestamp",
+          "citation",
+          "line_number",
+          "snippet",
+          "before",
+          "after"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "citation": {
+            "type": "string",
+            "examples": [
+              "mmr://event/event:v1:abc123"
+            ]
+          },
+          "line_number": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "before": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SearchResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query",
+          "total_results",
+          "results"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            }
+          },
+          "total_results": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RetrieveLimits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "max_sessions",
+          "before_messages",
+          "after_messages",
+          "max_messages_per_session",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "max_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "before_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "after_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_messages_per_session": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RetrieveScope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "all_projects",
+          "all_sources",
+          "source_filter",
+          "total_projects_searched",
+          "projects"
+        ],
+        "properties": {
+          "all_projects": {
+            "type": "boolean"
+          },
+          "all_sources": {
+            "type": "boolean"
+          },
+          "source_filter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_projects_searched": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RetrieveDebug": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "limits",
+          "scope",
+          "total_ranked_sessions"
+        ],
+        "properties": {
+          "limits": {
+            "$ref": "#/components/schemas/RetrieveLimits"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RetrieveScope"
+          },
+          "total_ranked_sessions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RetrieveSessionIdentity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "project_name",
+          "source_session_id"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "source_session_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RetrieveRankReason": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "match_count",
+          "latest_match_timestamp",
+          "tie_break"
+        ],
+        "properties": {
+          "match_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "latest_match_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "tie_break": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RetrieveMessageWindow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "before_messages",
+          "after_messages",
+          "max_messages_per_session",
+          "truncated"
+        ],
+        "properties": {
+          "before_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "after_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_messages_per_session": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RetrieveMatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "project_name",
+          "source_session_id",
+          "event_id",
+          "event_type",
+          "role",
+          "timestamp",
+          "citation",
+          "line_number",
+          "snippet",
+          "before",
+          "after"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "source_session_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "citation": {
+            "type": "string"
+          },
+          "line_number": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "before": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RetrieveUnreadableMatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "project_name",
+          "event_id",
+          "event_type",
+          "role",
+          "timestamp",
+          "citation",
+          "line_number",
+          "snippet",
+          "before",
+          "after",
+          "reason"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "source_session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "citation": {
+            "type": "string"
+          },
+          "line_number": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "before": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "RetrieveSelectedSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rank",
+          "source",
+          "project_name",
+          "source_session_id",
+          "rank_reason",
+          "match_count",
+          "first_match_citation",
+          "matches"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "source_session_id": {
+            "type": "string"
+          },
+          "rank_reason": {
+            "$ref": "#/components/schemas/RetrieveRankReason"
+          },
+          "match_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "first_match_citation": {
+            "type": "string"
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrieveMatch"
+            }
+          },
+          "message_window": {
+            "$ref": "#/components/schemas/RetrieveMessageWindow"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiMessage"
+            }
+          }
+        }
+      },
+      "RetrieveResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query",
+          "total_matches",
+          "total_selected_sessions",
+          "selected_sessions",
+          "unreadable_matches",
+          "suggested_next_action"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "debug": {
+            "$ref": "#/components/schemas/RetrieveDebug"
+          },
+          "total_matches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_selected_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "selected_sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrieveSelectedSession"
+            }
+          },
+          "unreadable_matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrieveUnreadableMatch"
+            }
+          },
+          "next_page": {
+            "type": "boolean"
+          },
+          "next_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_request": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RestContinuationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suggested_next_action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RetrieveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "all_projects": {
+            "type": "boolean"
+          },
+          "all_sources": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "debug": {
+            "type": "boolean"
+          },
+          "full_message_history": {
+            "type": "boolean"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ignore_case": {
+            "type": "boolean"
+          },
+          "context": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "before_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "after_messages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_messages_per_session": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pinned_sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetrieveSessionIdentity"
+            }
+          }
+        }
+      },
+      "RememberResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "backend",
+          "model",
+          "text"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "SummaryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "source",
+              "session"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "md"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "source"
+                }
+              },
+              "required": [
+                "scope"
+              ]
+            },
+            "then": {
+              "required": [
+                "source"
+              ],
+              "properties": {
+                "source": {
+                  "$ref": "#/components/schemas/ProviderSource"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "session"
+                }
+              },
+              "required": [
+                "scope"
+              ]
+            },
+            "then": {
+              "required": [
+                "session_id"
+              ],
+              "properties": {
+                "session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CompactResponseMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "compacted_line_ranges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LineRange"
+            }
+          },
+          "kept_line_ranges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LineRange"
+            }
+          }
+        }
+      },
+      "LineRange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "start": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "end": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CompactUsage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "compression_ratio",
+          "processing_time_ms"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "compression_ratio": {
+            "type": "number",
+            "minimum": 0
+          },
+          "processing_time_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CompactResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "backend",
+          "model",
+          "output",
+          "messages"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string",
+            "const": "morph-compact"
+          },
+          "model": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompactResponseMessage"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/CompactUsage"
+          }
+        }
+      },
+      "CompactRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "source",
+              "session"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "remotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "compression_ratio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "preserve_recent": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "no_line_ranges": {
+            "type": "boolean"
+          },
+          "no_markers": {
+            "type": "boolean"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "md"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "source"
+                }
+              },
+              "required": [
+                "scope"
+              ]
+            },
+            "then": {
+              "required": [
+                "source"
+              ],
+              "properties": {
+                "source": {
+                  "$ref": "#/components/schemas/ProviderSource"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "session"
+                }
+              },
+              "required": [
+                "scope"
+              ]
+            },
+            "then": {
+              "required": [
+                "session_id"
+              ],
+              "properties": {
+                "session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "PiiCoverage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "detector",
+          "reason"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "degraded"
+            ]
+          },
+          "detector": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "RedactionSpan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "start_byte",
+          "end_byte",
+          "replacement",
+          "confidence",
+          "blocks_sync"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "start_byte": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "end_byte": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "replacement": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "blocks_sync": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RedactedEventSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "status",
+          "span_count",
+          "blocking_findings",
+          "kinds"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "span_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocking_findings": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RedactScanResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "policy_id",
+          "events_scanned",
+          "passed",
+          "blocked",
+          "pii_coverage",
+          "events"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "events_scanned": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "passed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pii_coverage": {
+            "$ref": "#/components/schemas/PiiCoverage"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RedactedEventSummary"
+            }
+          }
+        }
+      },
+      "RedactExplainResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "policy_id",
+          "status",
+          "blocking_findings",
+          "spans",
+          "redacted_text"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "blocking_findings": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "spans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RedactionSpan"
+            }
+          },
+          "redacted_text": {
+            "type": "string"
+          }
+        }
+      },
+      "RedactScanRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          }
+        }
+      },
+      "SyncDryRunEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "source",
+          "status",
+          "would_sync",
+          "blocked_reasons"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "status": {
+            "type": "string"
+          },
+          "would_sync": {
+            "type": "boolean"
+          },
+          "payload_preview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocked_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SyncDryRunResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "dry_run",
+          "project_id",
+          "remote",
+          "policy_id",
+          "total_events",
+          "syncable_events",
+          "blocked_events",
+          "pii_coverage",
+          "events"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "const": true
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "remote": {
+            "type": "string"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "total_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "syncable_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pii_coverage": {
+            "$ref": "#/components/schemas/PiiCoverage"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncDryRunEvent"
+            }
+          }
+        }
+      },
+      "RemoteSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "descriptor",
+          "backend",
+          "available",
+          "auth_status",
+          "created"
+        ],
+        "properties": {
+          "descriptor": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "auth_status": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          }
+        }
+      },
+      "HydrationReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "remote_events",
+          "inserted_events",
+          "existing_events",
+          "remote_learned_memory",
+          "inserted_learned_memory",
+          "existing_learned_memory"
+        ],
+        "properties": {
+          "remote_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inserted_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "existing_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remote_learned_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inserted_learned_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "existing_learned_memory": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "SyncBlockedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "source",
+          "event_type",
+          "reasons"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SyncReport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "remote",
+          "policy_id",
+          "manifest_id",
+          "root_hash",
+          "total_events",
+          "synced_events",
+          "uploaded_events",
+          "uploaded_search_documents",
+          "synced_learned_memory",
+          "uploaded_learned_memory",
+          "blocked_events",
+          "blocked_learned_memory",
+          "remote_events",
+          "remote_learned_memory",
+          "append_only",
+          "pii_coverage",
+          "blocked"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "remote": {
+            "$ref": "#/components/schemas/RemoteSummary"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "manifest_id": {
+            "type": "string"
+          },
+          "root_hash": {
+            "type": "string"
+          },
+          "total_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "synced_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uploaded_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uploaded_search_documents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "synced_learned_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uploaded_learned_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked_learned_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remote_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remote_learned_memory": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "append_only": {
+            "type": "boolean"
+          },
+          "pii_coverage": {
+            "$ref": "#/components/schemas/PiiCoverage"
+          },
+          "blocked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncBlockedEvent"
+            }
+          }
+        }
+      },
+      "SyncRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          }
+        }
+      },
+      "ProjectStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "display_name",
+          "path_hash"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "path_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "store",
+          "project",
+          "remote",
+          "status",
+          "diagnostics"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "status"
+          },
+          "store": {
+            "$ref": "#/components/schemas/StatusStoreDiagnostics"
+          },
+          "project": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProjectStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "remote": {
+            "$ref": "#/components/schemas/RemoteSummary"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusProjectSnapshot"
+          },
+          "diagnostics": {
+            "$ref": "#/components/schemas/StatusDiagnostics"
+          }
+        }
+      },
+      "StoreStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          }
+        }
+      },
+      "StatusStoreDiagnostics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "db_path",
+          "exists",
+          "existed_before_command",
+          "schema_version",
+          "expected_schema_version",
+          "schema_status"
+        ],
+        "properties": {
+          "db_path": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "existed_before_command": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "expected_schema_version": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "schema_status": {
+            "type": "string"
+          }
+        }
+      },
+      "StatusProjectSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "linked",
+          "sync_status",
+          "events_total",
+          "source_counts",
+          "sync_status_counts",
+          "redaction",
+          "sync"
+        ],
+        "properties": {
+          "linked": {
+            "type": "boolean"
+          },
+          "sync_status": {
+            "type": "string"
+          },
+          "events_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "sync_status_counts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "redaction": {
+            "$ref": "#/components/schemas/StatusRedactionSnapshot"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/StatusSyncSnapshot"
+          }
+        }
+      },
+      "StatusRedactionSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "policy_id",
+          "redacted_or_synced",
+          "blocked",
+          "pending"
+        ],
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "redacted_or_synced": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "StatusSyncSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "remote_events",
+          "local_manifests",
+          "latest_manifest_id",
+          "blocked_events",
+          "unsynced_events"
+        ],
+        "properties": {
+          "remote_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "local_manifests": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "latest_manifest_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocked_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unsynced_events": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "StatusDiagnostics": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema",
+          "remote",
+          "sources",
+          "privacy_filter",
+          "summary_runner",
+          "dream_runner",
+          "actions"
+        ],
+        "properties": {
+          "schema": {
+            "$ref": "#/components/schemas/StatusSchemaDiagnostic"
+          },
+          "remote": {
+            "$ref": "#/components/schemas/StatusRemoteDiagnostic"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatusSourceDiagnostic"
+            }
+          },
+          "privacy_filter": {
+            "$ref": "#/components/schemas/StatusPrivacyDiagnostic"
+          },
+          "summary_runner": {
+            "$ref": "#/components/schemas/StatusSummaryRunnerDiagnostic"
+          },
+          "dream_runner": {
+            "$ref": "#/components/schemas/StatusDreamRunnerDiagnostic"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "StatusSchemaDiagnostic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "current_version",
+          "expected_version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "current_version": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StatusRemoteDiagnostic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "descriptor",
+          "backend",
+          "available",
+          "auth_status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "descriptor": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "auth_status": {
+            "type": "string"
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StatusSourceDiagnostic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "status",
+          "event_count"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "status": {
+            "type": "string"
+          },
+          "event_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StatusPrivacyDiagnostic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "detector",
+          "reason"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "degraded"
+            ]
+          },
+          "detector": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StatusSummaryRunnerDiagnostic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "backend",
+          "status",
+          "endpoint",
+          "model",
+          "config_file",
+          "api_key_env"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "config_file": {
+            "type": "string"
+          },
+          "api_key_env": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "StatusDreamRunnerDiagnostic": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runner",
+          "status",
+          "command_configured",
+          "command_env"
+        ],
+        "properties": {
+          "runner": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "command_configured": {
+            "type": "boolean"
+          },
+          "command_env": {
+            "type": "string"
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LinkResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "already_linked",
+          "store",
+          "project",
+          "remote",
+          "hydration",
+          "imports",
+          "rebuilt_search_documents",
+          "sync",
+          "status",
+          "suggested_import_commands"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "init"
+          },
+          "already_linked": {
+            "type": "boolean"
+          },
+          "store": {
+            "$ref": "#/components/schemas/StoreStatus"
+          },
+          "project": {
+            "$ref": "#/components/schemas/ProjectStatus"
+          },
+          "remote": {
+            "$ref": "#/components/schemas/RemoteSummary"
+          },
+          "hydration": {
+            "$ref": "#/components/schemas/HydrationReport"
+          },
+          "imports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceImportStatus"
+            }
+          },
+          "rebuilt_search_documents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sync": {
+            "$ref": "#/components/schemas/SyncReport"
+          },
+          "status": {
+            "$ref": "#/components/schemas/StatusProjectSnapshot"
+          },
+          "suggested_import_commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "InitRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "link_only": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          }
+        }
+      },
+      "SourceImportStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "status",
+          "discovered_sessions",
+          "imported_events",
+          "warnings"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "status": {
+            "type": "string"
+          },
+          "discovered_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "imported_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "IngestEventsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "source"
+        ],
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude",
+              "cursor"
+            ]
+          },
+          "source_root": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "IngestEventsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "source",
+          "discovered_sessions",
+          "imported_events",
+          "warnings",
+          "event_ids"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EventSource"
+          },
+          "discovered_sessions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "imported_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "event_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "NoteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NoteResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "event_id",
+          "source",
+          "citation"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "const": "note"
+          },
+          "citation": {
+            "type": "string",
+            "examples": [
+              "mmr://event/event:v1:abc123"
+            ]
+          }
+        }
+      },
+      "DreamResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "mode",
+          "scope",
+          "evidence",
+          "system_prompt",
+          "runbook",
+          "output_contract",
+          "guardrails",
+          "suggested_commands"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "examples": [
+              "assimilate/project"
+            ]
+          },
+          "mode": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "source"
+            ]
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "per_project_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/DreamEvidenceResponse"
+          },
+          "system_prompt": {
+            "type": "string"
+          },
+          "runbook": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DreamRunbookStep"
+            }
+          },
+          "output_contract": {
+            "$ref": "#/components/schemas/DreamOutputContract"
+          },
+          "guardrails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suggested_commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DreamEvidenceResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "access",
+          "included_events",
+          "omitted_events",
+          "evidence_hash",
+          "pii_coverage",
+          "events",
+          "omitted"
+        ],
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "included_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "omitted_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "evidence_hash": {
+            "type": "string"
+          },
+          "pii_coverage": {
+            "type": "string",
+            "enum": [
+              "available",
+              "degraded"
+            ]
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "omitted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "DreamRunbookStep": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "objective",
+          "instructions"
+        ],
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DreamOutputContract": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "format",
+          "required_sections",
+          "memory_candidate_fields",
+          "refusal_conditions"
+        ],
+        "properties": {
+          "format": {
+            "type": "string"
+          },
+          "required_sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "memory_candidate_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "refusal_conditions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AssimilationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "source"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "evidence_mode": {
+            "type": "string",
+            "enum": [
+              "shared-safe",
+              "local-raw"
+            ]
+          },
+          "allow_raw_evidence": {
+            "type": "boolean"
+          },
+          "per_project_limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "source"
+                }
+              },
+              "required": [
+                "scope"
+              ]
+            },
+            "then": {
+              "required": [
+                "source"
+              ],
+              "properties": {
+                "source": {
+                  "$ref": "#/components/schemas/ProviderSource"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "TeleportStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "skipped",
+          "partial",
+          "failed",
+          "unsupported"
+        ]
+      },
+      "TeleportFidelity": {
+        "type": "string",
+        "enum": [
+          "native",
+          "shared-safe"
+        ]
+      },
+      "PackArtifactSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256",
+          "required"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TeleportScanSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "blocking_findings",
+          "redacted_findings"
+        ],
+        "properties": {
+          "blocking_findings": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "redacted_findings": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pii_coverage": {
+            "type": "string"
+          }
+        }
+      },
+      "PackSessionSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "source_session_id"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "source_session_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PackResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "status",
+          "bundle_id",
+          "fidelity",
+          "session",
+          "artifacts",
+          "scan",
+          "dry_run"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "examples": [
+              "teleport/pack"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TeleportStatus"
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "bundle_path": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "fidelity": {
+            "$ref": "#/components/schemas/TeleportFidelity"
+          },
+          "session": {
+            "$ref": "#/components/schemas/PackSessionSummary"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackArtifactSummary"
+            }
+          },
+          "scan": {
+            "$ref": "#/components/schemas/TeleportScanSummary"
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SendRemoteApplySummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attempted",
+          "status"
+        ],
+        "properties": {
+          "attempted": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          }
+        }
+      },
+      "SendPlannedCommands": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "probe_remote_mmr",
+          "stream_apply",
+          "mkdir_inbox",
+          "scp_bundle"
+        ],
+        "properties": {
+          "probe_remote_mmr": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stream_apply": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mkdir_inbox": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scp_bundle": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "FileSendPlan": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "inbox_path",
+          "bundle_path",
+          "sha256_path",
+          "ready_path"
+        ],
+        "properties": {
+          "inbox_path": {
+            "type": "string"
+          },
+          "bundle_path": {
+            "type": "string"
+          },
+          "sha256_path": {
+            "type": "string"
+          },
+          "ready_path": {
+            "type": "string"
+          }
+        }
+      },
+      "SendResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "status",
+          "bundle_id",
+          "bundle_path",
+          "transport",
+          "to",
+          "session",
+          "dry_run"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "examples": [
+              "share/session"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TeleportStatus"
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "bundle_path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "ssh",
+              "file"
+            ]
+          },
+          "to": {
+            "type": "string"
+          },
+          "inbox_path": {
+            "type": "string"
+          },
+          "ready_path": {
+            "type": "string"
+          },
+          "remote_inbox": {
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/components/schemas/PackSessionSummary"
+          },
+          "remote_apply": {
+            "$ref": "#/components/schemas/SendRemoteApplySummary"
+          },
+          "fidelity": {
+            "$ref": "#/components/schemas/TeleportFidelity"
+          },
+          "next_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "planned_commands": {
+            "$ref": "#/components/schemas/SendPlannedCommands"
+          },
+          "planned_inbox": {
+            "$ref": "#/components/schemas/FileSendPlan"
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ImportSessionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "status",
+          "transport",
+          "from",
+          "bundle_id",
+          "bundle_path",
+          "remote_mmr_version",
+          "read_only"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "import/session"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TeleportStatus"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "bundle_path": {
+            "type": "string"
+          },
+          "remote_mmr_version": {
+            "type": "string"
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "read": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "apply": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ReadSessionSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "source_session_id"
+        ],
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "source_session_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          }
+        }
+      },
+      "ReceiveStagedSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bundle_id",
+          "inbox_path",
+          "bundle_path",
+          "sha256"
+        ],
+        "properties": {
+          "bundle_id": {
+            "type": "string"
+          },
+          "inbox_path": {
+            "type": "string"
+          },
+          "bundle_path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "TeleportReadResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "status",
+          "transport",
+          "locator",
+          "cached",
+          "bundle_id",
+          "bundle_path",
+          "session",
+          "message_count",
+          "messages",
+          "dry_run"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TeleportStatus"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "file",
+              "http"
+            ]
+          },
+          "locator": {
+            "type": "string"
+          },
+          "cached": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReceiveStagedSummary"
+            }
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "bundle_path": {
+            "type": "string"
+          },
+          "session": {
+            "$ref": "#/components/schemas/ReadSessionSummary"
+          },
+          "message_count": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiMessage"
+            }
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "ApplyNativeSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "written",
+          "paths"
+        ],
+        "properties": {
+          "written": {
+            "type": "boolean"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ApplyStoreSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "imported_events",
+          "skipped_events"
+        ],
+        "properties": {
+          "imported_events": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          },
+          "skipped_events": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "int64"
+          }
+        }
+      },
+      "ApplyResumeSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "documented_command",
+          "agent_resume",
+          "status"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "documented_command": {
+            "type": "string"
+          },
+          "agent_resume": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "TeleportApplyResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "status",
+          "bundle_id",
+          "target_project",
+          "native",
+          "store",
+          "resume",
+          "path_remap_applied",
+          "dry_run"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TeleportStatus"
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "target_project": {
+            "type": "string"
+          },
+          "native": {
+            "$ref": "#/components/schemas/ApplyNativeSummary"
+          },
+          "store": {
+            "$ref": "#/components/schemas/ApplyStoreSummary"
+          },
+          "resume": {
+            "$ref": "#/components/schemas/ApplyResumeSummary"
+          },
+          "path_remap_applied": {
+            "type": "boolean"
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ReceiveResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "status",
+          "transport",
+          "locator",
+          "staged",
+          "dry_run"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "import/bundle"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TeleportStatus"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "file",
+              "http"
+            ]
+          },
+          "locator": {
+            "type": "string"
+          },
+          "staged": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReceiveStagedSummary"
+            }
+          },
+          "apply": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TeleportApplyResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BundleImportResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TeleportReadResponse"
+          },
+          {
+            "$ref": "#/components/schemas/ReceiveResponse"
+          },
+          {
+            "$ref": "#/components/schemas/TeleportApplyResponse"
+          }
+        ]
+      },
+      "SessionBundleRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "selector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest": {
+            "type": "boolean"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "output_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fidelity": {
+            "$ref": "#/components/schemas/TeleportFidelity"
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SessionShareRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "selector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest": {
+            "type": "boolean"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "via": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "ssh",
+              "http",
+              "file"
+            ]
+          },
+          "bind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SessionImportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest": {
+            "type": "boolean"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProviderSource"
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "apply": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BundleImportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "locator": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "apply": {
+            "type": "boolean"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "md"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

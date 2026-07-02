@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MMR REST API Docs</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8f6;
+      --ink: #17211b;
+      --muted: #5a665f;
+      --line: #d9ded8;
+      --panel: #ffffff;
+      --accent: #176f5d;
+      --post: #235d9f;
+      --get: #1f7a4d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    header {
+      padding: 28px min(5vw, 56px) 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; letter-spacing: 0; }
+    h2 { margin: 34px 0 6px; font-size: 22px; letter-spacing: 0; }
+    h3 { margin: 12px 0 6px; font-size: 16px; letter-spacing: 0; }
+    p { margin: 0; color: var(--muted); max-width: 920px; }
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    nav a, .spec-link {
+      color: var(--accent);
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 7px 10px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    main { padding: 0 min(5vw, 56px) 56px; }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 18px;
+      color: var(--muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .endpoint {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .endpoint-head {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      overflow-wrap: anywhere;
+    }
+    .method {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 48px;
+      padding: 4px 6px;
+      border-radius: 5px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .method.get { background: var(--get); }
+    .method.post { background: var(--post); }
+    details { margin-top: 10px; color: var(--muted); }
+    summary { cursor: pointer; font-weight: 700; color: var(--ink); }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; }
+    dt { font-weight: 700; color: var(--ink); }
+    ul.schema-list {
+      columns: 3 220px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 16px 16px 34px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MMR REST API</h1>
+    <p>This OpenAPI contract maps MMR's current intent-first CLI and product specs into a REST API surface. Responses preserve the machine-readable JSON shapes used by the CLI where practical. Operations that can expose raw transcripts, contact SSH peers, or write provider files are marked as local-sensitive and require bearer-token authentication in HTTP deployments.</p>
+    <div class="meta">
+      <span>OpenAPI 3.1.0</span>
+      <span>24 operations</span>
+      <span>102 schemas</span>
+      <a class="spec-link" href="./openapi.json">openapi.json</a>
+    </div>
+    <nav><a href="#tag-Status">Status</a><a href="#tag-History">History</a><a href="#tag-Search">Search</a><a href="#tag-Context">Context</a><a href="#tag-Models">Models</a><a href="#tag-Memory">Memory</a><a href="#tag-Movement">Movement</a></nav>
+  </header>
+  <main>
+    
+      <section id="tag-Status">
+        <h2>Status</h2>
+        <p>Setup, store health, and sync readiness.</p>
+        <div class="grid">
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/status</code>
+            </div>
+            <h3>Inspect local project, store, remote, redaction, and provider readiness</h3>
+            <p>REST equivalent of `mmr status`. Without a project parameter, the server uses its current directory or configured project context.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>getStatus</code></dd>
+                <dt>response</dt><dd><code>StatusResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/init</code>
+            </div>
+            <h3>Set up or repair the local MMR store and project link</h3>
+            <p>REST equivalent of `mmr init`. This can import local provider history and may sync redacted state when remote auth is available.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>initProject</code></dd>
+                <dt>response</dt><dd><code>LinkResponse</code></dd>
+              </dl>
+            </details>
+          </article></div>
+      </section>
+      <section id="tag-History">
+        <h2>History</h2>
+        <p>Projects, sessions, raw reads, and previous-session recall.</p>
+        <div class="grid">
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/projects</code>
+            </div>
+            <h3>List known projects with source coverage and recency metadata</h3>
+            <p>REST equivalent of `mmr list projects`. Remote targets are explicit trusted SSH peers.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>listProjects</code></dd>
+                <dt>response</dt><dd><code>ApiProjectsResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/sessions</code>
+            </div>
+            <h3>List sessions in a project, source, or all-project scope</h3>
+            <p>REST equivalent of `mmr list sessions`. When project and all are omitted, cwd project auto-discovery semantics apply.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>listSessions</code></dd>
+                <dt>response</dt><dd><code>ApiSessionsResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/sessions/{session_id}/messages</code>
+            </div>
+            <h3>Read one explicit session by source session ID</h3>
+            <p>REST equivalent of `mmr read session &lt;session-id&gt;`. Without project or source, the session is searched globally.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>readSessionMessages</code></dd>
+                <dt>response</dt><dd><code>ApiMessagesResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/messages</code>
+            </div>
+            <h3>Read project-scoped or source-scoped history</h3>
+            <p>REST equivalent of `mmr read project` or `mmr read source`. Use scope=project for cwd/explicit project history and scope=source with an explicit source for harness-wide history.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>readMessages</code></dd>
+                <dt>response</dt><dd><code>ApiMessagesResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/recall</code>
+            </div>
+            <h3>Retrieve a previous stable session in scope</h3>
+            <p>REST equivalent of `mmr recall`. Age 0 is held back unless include_newest is true; paged responses pin the resolved concrete session in the continuation.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>recallPreviousSession</code></dd>
+                <dt>response</dt><dd><code>ApiMessagesResponse</code></dd>
+              </dl>
+            </details>
+          </article></div>
+      </section>
+      <section id="tag-Search">
+        <h2>Search</h2>
+        <p>Exact search and search-to-read retrieval.</p>
+        <div class="grid">
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/find</code>
+            </div>
+            <h3>Search normalized events and learned memory with literal text</h3>
+            <p>REST equivalent of `mmr find` JSON output. The CLI-only tab-delimited line format is intentionally excluded.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>findEvents</code></dd>
+                <dt>response</dt><dd><code>SearchResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/retrievals</code>
+            </div>
+            <h3>Search matching events, rank sessions, and optionally return provider message windows</h3>
+            <p>REST equivalent of `mmr retrieve`. Broad local scopes are explicit; remote retrieval is intentionally out of v1.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>retrieveContext</code></dd>
+                <dt>response</dt><dd><code>RetrieveResponse</code></dd>
+              </dl>
+            </details>
+          </article></div>
+      </section>
+      <section id="tag-Context">
+        <h2>Context</h2>
+        <p>Bounded context packets for agents.</p>
+        <div class="grid">
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/context/project</code>
+            </div>
+            <h3>Produce project-specific context across sources</h3>
+            <p>REST equivalent of `mmr context project`.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>getProjectContext</code></dd>
+                <dt>response</dt><dd><code>ContextResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/context/source</code>
+            </div>
+            <h3>Produce source-wide context for one explicit provider source</h3>
+            <p>REST equivalent of `mmr --source &lt;source&gt; context source`.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>getSourceContext</code></dd>
+                <dt>response</dt><dd><code>ContextResponse</code></dd>
+              </dl>
+            </details>
+          </article></div>
+      </section>
+      <section id="tag-Models">
+        <h2>Models</h2>
+        <p>Summarization, compacting, and assimilation handoffs.</p>
+        <div class="grid">
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/summaries</code>
+            </div>
+            <h3>Run a stateless summary over project, source, or session history</h3>
+            <p>REST equivalent of `mmr summarize project|source|session`. The server calls the configured OpenAI-compatible summarizer.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>createSummary</code></dd>
+                <dt>response</dt><dd><code>RememberResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/compactions</code>
+            </div>
+            <h3>Compact scoped history with Morph Compact without rewriting surviving lines</h3>
+            <p>REST equivalent of `mmr compact project|source|session`.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>createCompaction</code></dd>
+                <dt>response</dt><dd><code>CompactResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/assimilation-handoffs</code>
+            </div>
+            <h3>Return prompt, runbook, output contract, and evidence for memory assimilation</h3>
+            <p>REST equivalent of `mmr assimilate project|source`. It returns an agent handoff and does not run a provider as a side effect.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>createAssimilationHandoff</code></dd>
+                <dt>response</dt><dd><code>DreamResponse</code></dd>
+              </dl>
+            </details>
+          </article></div>
+      </section>
+      <section id="tag-Memory">
+        <h2>Memory</h2>
+        <p>Notes, event ingestion, redaction, and sync.</p>
+        <div class="grid">
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/notes</code>
+            </div>
+            <h3>Add a human-authored project event</h3>
+            <p>REST equivalent of `mmr note`.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>createNote</code></dd>
+                <dt>response</dt><dd><code>NoteResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/ingest/events</code>
+            </div>
+            <h3>Ingest provider history into normalized local events</h3>
+            <p>REST equivalent of `mmr --source codex|claude|cursor ingest events`. Provider source is required.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>ingestEvents</code></dd>
+                <dt>response</dt><dd><code>IngestEventsResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/redactions/scan</code>
+            </div>
+            <h3>Scan linked project events and persist redaction runs</h3>
+            <p>REST equivalent of `mmr redact scan`.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>scanRedactions</code></dd>
+                <dt>response</dt><dd><code>RedactScanResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method get">GET</span>
+              <code>/v1/redactions/events/{event_id}</code>
+            </div>
+            <h3>Explain the latest redaction result for one event</h3>
+            <p>REST equivalent of `mmr redact explain &lt;event-id&gt;`.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>explainRedaction</code></dd>
+                <dt>response</dt><dd><code>RedactExplainResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/sync-dry-runs</code>
+            </div>
+            <h3>Preview sync safety without contacting a remote</h3>
+            <p>REST equivalent of `mmr sync --dry-run`. It must not mutate redaction or sync state.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>dryRunSync</code></dd>
+                <dt>response</dt><dd><code>SyncDryRunResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/sync-runs</code>
+            </div>
+            <h3>Safely reconcile redacted project memory with the configured remote</h3>
+            <p>REST equivalent of `mmr sync`. Unsafe events and degraded PII coverage block upload.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>runSync</code></dd>
+                <dt>response</dt><dd><code>SyncReport</code></dd>
+              </dl>
+            </details>
+          </article></div>
+      </section>
+      <section id="tag-Movement">
+        <h2>Movement</h2>
+        <p>Trusted peer reads and native session bundle movement.</p>
+        <div class="grid">
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/session-shares</code>
+            </div>
+            <h3>Share one native provider session over SSH, file inbox, or one-shot HTTP</h3>
+            <p>REST equivalent of `mmr share session`. This is local-sensitive and may contact a peer or serve a one-shot locator.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>shareSession</code></dd>
+                <dt>response</dt><dd><code>SendResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/session-bundles</code>
+            </div>
+            <h3>Create or preview a local native provider session bundle</h3>
+            <p>REST adapter for the native bundle packing step used by `mmr share session`; mirrors the internal `teleport/pack` JSON response.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>packSessionBundle</code></dd>
+                <dt>response</dt><dd><code>PackResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/session-imports</code>
+            </div>
+            <h3>Pull a selected native session bundle from an SSH peer</h3>
+            <p>REST equivalent of `mmr import session`. Apply mode writes native provider files.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>importSession</code></dd>
+                <dt>response</dt><dd><code>ImportSessionResponse</code></dd>
+              </dl>
+            </details>
+          </article>
+          <article class="endpoint">
+            <div class="endpoint-head">
+              <span class="method post">POST</span>
+              <code>/v1/bundle-imports</code>
+            </div>
+            <h3>Read or apply an existing bundle locator</h3>
+            <p>REST equivalent of `mmr import bundle`. Locators may be local paths, inbox entries, stdin streams in CLI form, or one-shot HTTP locators.</p>
+            <details>
+              <summary>Operation details</summary>
+              <dl>
+                <dt>operationId</dt><dd><code>importBundle</code></dd>
+                <dt>response</dt><dd><code>BundleImportResponse</code></dd>
+              </dl>
+            </details>
+          </article></div>
+      </section>
+    <section>
+      <h2>Schemas</h2>
+      <p>Component schemas are emitted from the same OpenAPI JSON used to render these docs.</p>
+      <ul class="schema-list"><li><code>ApiMessage</code></li><li><code>ApiMessageOrigin</code></li><li><code>ApiMessagesResponse</code></li><li><code>ApiPeerResult</code></li><li><code>ApiProject</code></li><li><code>ApiProjectsResponse</code></li><li><code>ApiSession</code></li><li><code>ApiSessionsResponse</code></li><li><code>ApplyNativeSummary</code></li><li><code>ApplyResumeSummary</code></li><li><code>ApplyStoreSummary</code></li><li><code>AssimilationRequest</code></li><li><code>BundleImportRequest</code></li><li><code>BundleImportResponse</code></li><li><code>CompactRequest</code></li><li><code>CompactResponse</code></li><li><code>CompactResponseMessage</code></li><li><code>CompactUsage</code></li><li><code>ContextResponse</code></li><li><code>DreamEvidenceResponse</code></li><li><code>DreamOutputContract</code></li><li><code>DreamResponse</code></li><li><code>DreamRunbookStep</code></li><li><code>EventSource</code></li><li><code>FileSendPlan</code></li><li><code>HydrationReport</code></li><li><code>ImportSessionResponse</code></li><li><code>IngestEventsRequest</code></li><li><code>IngestEventsResponse</code></li><li><code>InitRequest</code></li><li><code>LineRange</code></li><li><code>LinkResponse</code></li><li><code>MmrError</code></li><li><code>NoteRequest</code></li><li><code>NoteResponse</code></li><li><code>PackArtifactSummary</code></li><li><code>PackResponse</code></li><li><code>PackSessionSummary</code></li><li><code>PiiCoverage</code></li><li><code>ProjectStatus</code></li><li><code>ProviderSource</code></li><li><code>ReadSessionSummary</code></li><li><code>ReceiveResponse</code></li><li><code>ReceiveStagedSummary</code></li><li><code>RedactExplainResponse</code></li><li><code>RedactScanRequest</code></li><li><code>RedactScanResponse</code></li><li><code>RedactedEventSummary</code></li><li><code>RedactionSpan</code></li><li><code>RememberResponse</code></li><li><code>RemoteSummary</code></li><li><code>RestContinuationRequest</code></li><li><code>RetrieveDebug</code></li><li><code>RetrieveLimits</code></li><li><code>RetrieveMatch</code></li><li><code>RetrieveMessageWindow</code></li><li><code>RetrieveRankReason</code></li><li><code>RetrieveRequest</code></li><li><code>RetrieveResponse</code></li><li><code>RetrieveScope</code></li><li><code>RetrieveSelectedSession</code></li><li><code>RetrieveSessionIdentity</code></li><li><code>RetrieveUnreadableMatch</code></li><li><code>SearchResponse</code></li><li><code>SearchResult</code></li><li><code>SelectedSession</code></li><li><code>SendPlannedCommands</code></li><li><code>SendRemoteApplySummary</code></li><li><code>SendResponse</code></li><li><code>SessionBundleRequest</code></li><li><code>SessionImportRequest</code></li><li><code>SessionSelection</code></li><li><code>SessionSelectionScope</code></li><li><code>SessionShareRequest</code></li><li><code>SkippedNewest</code></li><li><code>SortBy</code></li><li><code>SortOrder</code></li><li><code>SourceImportStatus</code></li><li><code>StatusDiagnostics</code></li><li><code>StatusDreamRunnerDiagnostic</code></li><li><code>StatusPrivacyDiagnostic</code></li><li><code>StatusProjectSnapshot</code></li><li><code>StatusRedactionSnapshot</code></li><li><code>StatusRemoteDiagnostic</code></li><li><code>StatusResponse</code></li><li><code>StatusSchemaDiagnostic</code></li><li><code>StatusSourceDiagnostic</code></li><li><code>StatusStoreDiagnostics</code></li><li><code>StatusSummaryRunnerDiagnostic</code></li><li><code>StatusSyncSnapshot</code></li><li><code>StoreStatus</code></li><li><code>SummaryRequest</code></li><li><code>SyncBlockedEvent</code></li><li><code>SyncDryRunEvent</code></li><li><code>SyncDryRunResponse</code></li><li><code>SyncReport</code></li><li><code>SyncRequest</code></li><li><code>TeleportApplyResponse</code></li><li><code>TeleportFidelity</code></li><li><code>TeleportReadResponse</code></li><li><code>TeleportScanSummary</code></li><li><code>TeleportStatus</code></li></ul>
+    </section>
+  </main>
+</body>
+</html>
