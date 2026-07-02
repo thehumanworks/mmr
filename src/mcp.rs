@@ -1,10 +1,13 @@
+use std::collections::BTreeMap;
+use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use axum::Router;
-use clap::{Args, Parser, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -22,22 +25,34 @@ use rmcp::{
     tool_handler, tool_router,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cli::{Cli, run_cli};
 
+const PYTHON_BOOTSTRAP_CONTENT: &str = include_str!("../scripts/mmr_rest_mcp_bootstrap.py");
+
 #[derive(Args, Debug)]
 pub struct McpArgs {
+    /// Create or launch a Python FastMCP server generated from the mmr REST OpenAPI document.
+    #[command(subcommand)]
+    pub command: Option<McpCommand>,
     /// Transport to serve MCP over: stdio or streamable HTTP
     #[arg(long, value_enum)]
-    pub transport: McpTransportArg,
+    pub transport: Option<McpTransportArg>,
     /// HTTP bind address. Ignored for stdio.
     #[arg(long, default_value = "127.0.0.1:8765")]
     pub bind: SocketAddr,
     /// HTTP mount path. Ignored for stdio.
     #[arg(long, default_value = "/mcp")]
     pub path: String,
+}
+
+#[derive(Subcommand, Debug)]
+#[clap(rename_all = "kebab-case")]
+pub enum McpCommand {
+    /// Print, write, dry-run, or launch the Python FastMCP OpenAPI bootstrap.
+    PythonBootstrap(PythonBootstrapArgs),
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,10 +62,209 @@ pub enum McpTransportArg {
     Http,
 }
 
-pub async fn run_mcp(args: &McpArgs) -> Result<()> {
+impl McpTransportArg {
+    fn as_env_value(self) -> &'static str {
+        match self {
+            McpTransportArg::Stdio => "stdio",
+            McpTransportArg::Http => "http",
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct PythonBootstrapArgs {
+    /// REST API base URL exposed by the mmr API server.
+    #[arg(long, default_value = "http://127.0.0.1:8765")]
+    pub api_base_url: String,
+    /// OpenAPI document URL or local JSON file path.
+    #[arg(long, default_value = "docs/api/openapi.json")]
+    pub openapi_url: String,
+    /// Environment variable name that contains the optional REST bearer token.
+    #[arg(long, default_value = "API_TOKEN")]
+    pub api_token_env: String,
+    /// Python executable used for --run.
+    #[arg(long, default_value = "python3")]
+    pub python: PathBuf,
+    /// Existing bootstrap script to launch with --run. Defaults to the bundled script.
+    #[arg(long)]
+    pub script: Option<PathBuf>,
+    /// MCP transport used by the Python FastMCP server when --run is set.
+    #[arg(long, value_enum, default_value = "stdio")]
+    pub transport: McpTransportArg,
+    /// HTTP host used by the Python FastMCP server when --transport http and --run are set.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+    /// HTTP port used by the Python FastMCP server when --transport http and --run are set.
+    #[arg(long, default_value_t = 8766)]
+    pub port: u16,
+    /// Print the bundled Python bootstrap to stdout. This is the default action.
+    #[arg(long)]
+    pub print: bool,
+    /// Write the bundled Python bootstrap to this path.
+    #[arg(long, value_name = "PATH")]
+    pub write: Option<PathBuf>,
+    /// Print deterministic launch metadata as JSON without importing FastMCP or starting Python.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Launch the Python FastMCP bootstrap. Requires Python dependencies: fastmcp and httpx.
+    #[arg(long)]
+    pub run: bool,
+}
+
+#[derive(Serialize)]
+struct PythonBootstrapWriteResponse {
+    command: &'static str,
+    action: &'static str,
+    path: String,
+    bytes: usize,
+}
+
+#[derive(Serialize)]
+struct PythonBootstrapLaunchPlan {
+    command: &'static str,
+    action: &'static str,
+    python: String,
+    script: String,
+    argv: Vec<String>,
+    env: BTreeMap<&'static str, String>,
+}
+
+pub async fn run_mcp(args: &McpArgs, pretty: bool) -> Result<String> {
+    if let Some(command) = &args.command {
+        return match command {
+            McpCommand::PythonBootstrap(bootstrap_args) => {
+                run_python_bootstrap(bootstrap_args, pretty)
+            }
+        };
+    }
+
     match args.transport {
-        McpTransportArg::Stdio => run_stdio().await,
-        McpTransportArg::Http => run_http(args.bind, &args.path).await,
+        Some(McpTransportArg::Stdio) => run_stdio().await?,
+        Some(McpTransportArg::Http) => run_http(args.bind, &args.path).await?,
+        None => bail!(
+            "missing --transport <stdio|http>; use `mmr mcp --transport stdio`, \
+             `mmr mcp --transport http`, or `mmr mcp python-bootstrap`"
+        ),
+    }
+    Ok(String::new())
+}
+
+fn run_python_bootstrap(args: &PythonBootstrapArgs, pretty: bool) -> Result<String> {
+    let actions = usize::from(args.print)
+        + usize::from(args.write.is_some())
+        + usize::from(args.dry_run)
+        + usize::from(args.run);
+    if actions > 1 {
+        bail!("choose only one python-bootstrap action: --print, --write, --dry-run, or --run");
+    }
+
+    if let Some(path) = &args.write {
+        fs::write(path, PYTHON_BOOTSTRAP_CONTENT)
+            .with_context(|| format!("write Python MCP bootstrap to {}", path.display()))?;
+        return serialize_mcp_response(
+            &PythonBootstrapWriteResponse {
+                command: "mcp/python-bootstrap",
+                action: "write",
+                path: path.display().to_string(),
+                bytes: PYTHON_BOOTSTRAP_CONTENT.len(),
+            },
+            pretty,
+        );
+    }
+
+    if args.dry_run {
+        return serialize_mcp_response(&python_bootstrap_launch_plan(args, "dry-run"), pretty);
+    }
+
+    if args.run {
+        run_python_bootstrap_process(args)?;
+        return Ok(String::new());
+    }
+
+    Ok(PYTHON_BOOTSTRAP_CONTENT.to_string())
+}
+
+fn python_bootstrap_launch_plan(
+    args: &PythonBootstrapArgs,
+    action: &'static str,
+) -> PythonBootstrapLaunchPlan {
+    let script = python_bootstrap_script_path(args);
+    PythonBootstrapLaunchPlan {
+        command: "mcp/python-bootstrap",
+        action,
+        python: args.python.display().to_string(),
+        script: script.display().to_string(),
+        argv: vec![
+            args.python.display().to_string(),
+            script.display().to_string(),
+        ],
+        env: python_bootstrap_env(args),
+    }
+}
+
+fn python_bootstrap_env(args: &PythonBootstrapArgs) -> BTreeMap<&'static str, String> {
+    BTreeMap::from([
+        ("API_BASE_URL", args.api_base_url.clone()),
+        ("OPENAPI_URL", args.openapi_url.clone()),
+        ("API_TOKEN_ENV", args.api_token_env.clone()),
+        ("MCP_TRANSPORT", args.transport.as_env_value().to_string()),
+        ("MCP_HOST", args.host.clone()),
+        ("MCP_PORT", args.port.to_string()),
+    ])
+}
+
+fn python_bootstrap_script_path(args: &PythonBootstrapArgs) -> PathBuf {
+    args.script.clone().unwrap_or_else(|| {
+        std::env::temp_dir().join(format!(
+            "mmr-{}-rest-mcp-bootstrap.py",
+            env!("CARGO_PKG_VERSION")
+        ))
+    })
+}
+
+fn ensure_python_bootstrap_script(args: &PythonBootstrapArgs) -> Result<PathBuf> {
+    if let Some(path) = &args.script {
+        return Ok(path.clone());
+    }
+    let path = python_bootstrap_script_path(args);
+    fs::write(&path, PYTHON_BOOTSTRAP_CONTENT)
+        .with_context(|| format!("write bundled Python MCP bootstrap to {}", path.display()))?;
+    Ok(path)
+}
+
+fn run_python_bootstrap_process(args: &PythonBootstrapArgs) -> Result<()> {
+    let script = ensure_python_bootstrap_script(args)?;
+    let mut command = Command::new(&args.python);
+    command
+        .arg(&script)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    for (key, value) in python_bootstrap_env(args) {
+        command.env(key, value);
+    }
+
+    let status = command.status().with_context(|| {
+        format!(
+            "failed to start Python MCP bootstrap with {}; ensure Python is installed and install \
+             dependencies with `python3 -m pip install fastmcp httpx`",
+            args.python.display()
+        )
+    })?;
+    if !status.success() {
+        bail!(
+            "Python MCP bootstrap exited with {status}. Install dependencies with \
+             `python3 -m pip install fastmcp httpx` and verify API_BASE_URL/OPENAPI_URL."
+        );
+    }
+    Ok(())
+}
+
+fn serialize_mcp_response<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
+    if pretty {
+        Ok(serde_json::to_string_pretty(value)?)
+    } else {
+        Ok(serde_json::to_string(value)?)
     }
 }
 

@@ -120,7 +120,7 @@ const BUNDLED_MMR_SKILL_FILES: &[BundledSkillFile] = &[
     name = "mmr",
     version = env!("CARGO_PKG_VERSION"),
     about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
-    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --remote mini --project /path/to/project\n  mmr recall --remote mini --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --remote mini\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr --source codex ingest events --project /path/to/project\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr compact project --project /path/to/project --query \"current task\"\n  mmr assimilate project --pretty\n  mmr skill load\n  mmr skill install --local\n  mmr mcp --transport stdio\n  mmr mcp --transport http\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
+    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr list sessions --remote mini --project /path/to/project\n  mmr recall --remote mini --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --remote mini\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr --source codex ingest events --project /path/to/project\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr compact project --project /path/to/project --query \"current task\"\n  mmr assimilate project --pretty\n  mmr skill load\n  mmr skill install --local\n  mmr mcp --transport stdio\n  mmr mcp --transport http\n  mmr mcp python-bootstrap --write server.py\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -1056,8 +1056,7 @@ impl From<BundleOutputFormatArg> for TeleportOutputFormat {
 pub async fn run_cli(cli: Cli) -> Result<String> {
     let source_filter = effective_source(cli.source);
     if let Commands::Mcp(args) = &cli.command {
-        crate::mcp::run_mcp(args).await?;
-        return Ok(String::new());
+        return crate::mcp::run_mcp(args, cli.pretty).await;
     }
     if let Commands::Note { text } = &cli.command {
         return serialize(&note_response(text.clone())?, cli.pretty);

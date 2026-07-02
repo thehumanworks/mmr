@@ -13,3 +13,32 @@ Regenerate after contract edits:
 ```sh
 node scripts/generate-api-docs.mjs
 ```
+
+## Python FastMCP bootstrap
+
+`mmr mcp --transport stdio` and `mmr mcp --transport http` run the native Rust
+MCP server. Use `mmr mcp python-bootstrap` only when you want a Python FastMCP
+bridge generated from the REST OpenAPI contract.
+
+```sh
+mmr mcp python-bootstrap > server.py
+mmr mcp python-bootstrap --write server.py
+mmr mcp python-bootstrap --dry-run --api-base-url http://127.0.0.1:8765 --openapi-url docs/api/openapi.json
+mmr mcp python-bootstrap --run --transport stdio
+mmr mcp python-bootstrap --run --transport http --host 127.0.0.1 --port 8766
+```
+
+The launcher passes these environment variables to the Python process:
+
+- `API_BASE_URL` — REST API base URL, default `http://127.0.0.1:8765`.
+- `OPENAPI_URL` — OpenAPI URL or local JSON path, default `docs/api/openapi.json`.
+- `API_TOKEN_ENV` — name of the optional bearer-token env var, default `API_TOKEN`.
+- `MCP_TRANSPORT` — `stdio` or `http`.
+- `MCP_HOST` / `MCP_PORT` — HTTP bind settings for Python FastMCP.
+
+`--print`, `--write`, and `--dry-run` do not import FastMCP. `--run` starts
+Python and requires:
+
+```sh
+python3 -m pip install fastmcp httpx
+```

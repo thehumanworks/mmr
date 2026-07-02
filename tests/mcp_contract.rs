@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod common;
 
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -39,6 +40,152 @@ const EXPECTED_PROMPTS: &[&str] = &[
     "mmr_memory_assimilation",
     "mmr_find_then_read",
 ];
+
+#[test]
+fn mcp_python_bootstrap_cli_contract() -> anyhow::Result<()> {
+    let fixture = TestFixture::seeded();
+
+    let help = fixture.run_cli(&["mcp", "python-bootstrap", "--help"]);
+    assert!(help.status.success(), "help stderr: {}", stderr_text(&help));
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(help_text.contains("FastMCP"), "{help_text}");
+    assert!(help_text.contains("--api-base-url"), "{help_text}");
+    assert!(help_text.contains("--openapi-url"), "{help_text}");
+    assert!(help_text.contains("--api-token-env"), "{help_text}");
+    assert!(help_text.contains("--transport"), "{help_text}");
+    assert!(help_text.contains("--run"), "{help_text}");
+
+    let bootstrap = fixture.run_cli(&["mcp", "python-bootstrap"]);
+    assert!(
+        bootstrap.status.success(),
+        "bootstrap stderr: {}",
+        stderr_text(&bootstrap)
+    );
+    let stdout = String::from_utf8_lossy(&bootstrap.stdout);
+    assert!(stdout.contains("FastMCP.from_openapi"), "{stdout}");
+    assert!(stdout.contains("API_BASE_URL"), "{stdout}");
+    assert!(stdout.contains("OPENAPI_URL"), "{stdout}");
+    assert!(stdout.contains("mcp_names"), "{stdout}");
+
+    let legacy_help = fixture.run_cli(&["mcp", "--transport", "stdio", "--help"]);
+    assert!(
+        legacy_help.status.success(),
+        "legacy help stderr: {}",
+        stderr_text(&legacy_help)
+    );
+    let legacy_text = String::from_utf8_lossy(&legacy_help.stdout);
+    assert!(
+        legacy_text.contains("--transport <TRANSPORT>"),
+        "{legacy_text}"
+    );
+    Ok(())
+}
+
+#[test]
+fn mcp_python_bootstrap_writes_expected_server() -> anyhow::Result<()> {
+    let fixture = TestFixture::seeded();
+    let tmp = tempfile::tempdir()?;
+    let server = tmp.path().join("server.py");
+
+    let output = fixture.run_cli(&[
+        "mcp",
+        "python-bootstrap",
+        "--write",
+        server.to_str().expect("server path UTF-8"),
+    ]);
+    assert!(
+        output.status.success(),
+        "write stderr: {}",
+        stderr_text(&output)
+    );
+    let parsed = parse_stdout_json(&output);
+    assert_eq!(parsed["command"], "mcp/python-bootstrap");
+    assert_eq!(parsed["action"], "write");
+    assert_eq!(parsed["path"], server.display().to_string());
+
+    let contents = fs::read_to_string(&server)?;
+    assert!(
+        contents.contains("from fastmcp import FastMCP"),
+        "{contents}"
+    );
+    assert!(contents.contains("import httpx"), "{contents}");
+    assert!(contents.contains("FastMCP.from_openapi"), "{contents}");
+    assert!(contents.contains("mcp_names"), "{contents}");
+    assert!(
+        contents.contains("mcp_component_fn=customize_components"),
+        "{contents}"
+    );
+    assert!(contents.contains("mmr_list_projects"), "{contents}");
+    assert!(contents.contains("MCP_TRANSPORT"), "{contents}");
+
+    let compile = Command::new("python3")
+        .args([
+            "-m",
+            "py_compile",
+            server.to_str().expect("server path UTF-8"),
+        ])
+        .output()?;
+    assert!(
+        compile.status.success(),
+        "py_compile stderr: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn mcp_python_bootstrap_dry_run_and_missing_dependency_contract() -> anyhow::Result<()> {
+    let fixture = TestFixture::seeded();
+
+    let dry_run = fixture.run_cli(&[
+        "mcp",
+        "python-bootstrap",
+        "--dry-run",
+        "--api-base-url",
+        "http://127.0.0.1:8765",
+        "--openapi-url",
+        "docs/api/openapi.json",
+        "--api-token-env",
+        "MMR_REST_TOKEN",
+        "--transport",
+        "http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "9876",
+    ]);
+    assert!(
+        dry_run.status.success(),
+        "dry-run stderr: {}",
+        stderr_text(&dry_run)
+    );
+    let parsed = parse_stdout_json(&dry_run);
+    assert_eq!(parsed["command"], "mcp/python-bootstrap");
+    assert_eq!(parsed["action"], "dry-run");
+    assert_eq!(parsed["env"]["API_BASE_URL"], "http://127.0.0.1:8765");
+    assert_eq!(parsed["env"]["OPENAPI_URL"], "docs/api/openapi.json");
+    assert_eq!(parsed["env"]["API_TOKEN_ENV"], "MMR_REST_TOKEN");
+    assert_eq!(parsed["env"]["MCP_TRANSPORT"], "http");
+    assert_eq!(parsed["env"]["MCP_HOST"], "127.0.0.1");
+    assert_eq!(parsed["env"]["MCP_PORT"], "9876");
+    assert_eq!(parsed["argv"][0], "python3");
+
+    let missing = fixture.run_cli(&[
+        "mcp",
+        "python-bootstrap",
+        "--run",
+        "--python",
+        "/no/such/mmr-python3",
+    ]);
+    assert!(!missing.status.success(), "missing python should fail");
+    let stderr = stderr_text(&missing);
+    assert!(
+        stderr.contains("failed to start Python MCP bootstrap"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("pip install fastmcp httpx"), "{stderr}");
+    Ok(())
+}
 
 #[tokio::test]
 async fn mcp_server_initializes_with_tools_and_prompts() -> anyhow::Result<()> {
