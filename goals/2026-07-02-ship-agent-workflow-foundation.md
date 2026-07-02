@@ -1,7 +1,7 @@
 ---
 goal_id: "2026-07-02-ship-agent-workflow-foundation"
 title: "Ship agent workflow foundation"
-status: "in-progress"
+status: "done"
 confidence_floor: 90
 created: "2026-07-02"
 updated: "2026-07-02"
@@ -28,7 +28,7 @@ updated: "2026-07-02"
 - [x] **DoD-1** — All Phase 1 artifacts present on disk — *verify by:* `test -f GOAL.md && ls .cursor/rules/goal-*.mdc .agents/skills/mmr/*/SKILL.md`
 - [x] **DoD-2** — No Rust regression after bundling subskills in `src/cli.rs` — *verify by:* full verification loop (see T2 evidence)
 - [x] **DoD-3** — `GOAL.md` Phase 2 marked done and this goal `done` — *verify by:* `rg -n "Phase 2.*done" GOAL.md`
-- [ ] **DoD-4** — Changes committed with imperative message (user pointed at GOAL.md approving full phase) — *verify by:* `git log -1 --oneline` mentions agent workflow
+- [x] **DoD-4** — Changes committed with imperative message (user pointed at GOAL.md approving full phase) — *verify by:* `git log -1 --oneline` mentions agent workflow
 
 ## 4. Exit Conditions
 
@@ -90,7 +90,7 @@ updated: "2026-07-02"
 **Evidence**
 - 2026-07-02 — `rg -n "Phase 2.*done" GOAL.md` → line 35 `## Phase 2 — Ship foundation · **done**`; table row status `done`.
 
-### T5 · Commit · [ ]
+### T5 · Commit · [x]
 
 **Verification Contract**
 
@@ -101,3 +101,4 @@ updated: "2026-07-02"
 **Confidence:** 95 / 90 · **Depends on:** T4 · **Closes:** DoD-4
 
 **Evidence**
+- 2026-07-02 — `git log -1 --oneline` → `139ed8b Ship agent workflow foundation as rules, skills, and GOAL index.`; `git status` clean.
