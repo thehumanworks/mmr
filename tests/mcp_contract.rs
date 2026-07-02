@@ -3,7 +3,9 @@ mod common;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{TestFixture, parse_stdout_json};
@@ -54,6 +56,8 @@ fn mcp_python_bootstrap_cli_contract() -> anyhow::Result<()> {
     assert!(help_text.contains("--api-token-env"), "{help_text}");
     assert!(help_text.contains("--transport"), "{help_text}");
     assert!(help_text.contains("--run"), "{help_text}");
+    assert!(help_text.contains("--no-auto-rest"), "{help_text}");
+    assert!(help_text.contains("auto-start"), "{help_text}");
 
     let bootstrap = fixture.run_cli(&["mcp", "python-bootstrap"]);
     assert!(
@@ -169,6 +173,21 @@ fn mcp_python_bootstrap_dry_run_and_missing_dependency_contract() -> anyhow::Res
     assert_eq!(parsed["env"]["MCP_HOST"], "127.0.0.1");
     assert_eq!(parsed["env"]["MCP_PORT"], "9876");
     assert_eq!(parsed["argv"][0], "python3");
+    assert_eq!(parsed["rest_backing"]["mode"], "external");
+
+    let auto_dry_run = fixture.run_cli(&["mcp", "python-bootstrap", "--dry-run"]);
+    assert!(
+        auto_dry_run.status.success(),
+        "auto dry-run stderr: {}",
+        stderr_text(&auto_dry_run)
+    );
+    let auto = parse_stdout_json(&auto_dry_run);
+    assert_eq!(auto["rest_backing"]["mode"], "auto");
+    assert_eq!(auto["env"]["API_BASE_URL"], "<auto-started-loopback>");
+    assert_eq!(
+        auto["env"]["OPENAPI_URL"],
+        "<auto-started-loopback>/openapi.json"
+    );
 
     let missing = fixture.run_cli(&[
         "mcp",
@@ -184,6 +203,123 @@ fn mcp_python_bootstrap_dry_run_and_missing_dependency_contract() -> anyhow::Res
         "{stderr}"
     );
     assert!(stderr.contains("pip install fastmcp httpx"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn mcp_python_bootstrap_run_autostarts_rest_backing_server() -> anyhow::Result<()> {
+    let fixture = TestFixture::seeded();
+    let tmp = tempfile::tempdir()?;
+    let env_out = tmp.path().join("fake-python.env");
+    let fake_python = write_fake_python(
+        tmp.path(),
+        r#"#!/bin/sh
+env > "$MMR_FAKE_PYTHON_ENV_OUT"
+exit 0
+"#,
+    )?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "mcp",
+            "python-bootstrap",
+            "--run",
+            "--python",
+            fake_python.to_str().expect("fake python path UTF-8"),
+        ])
+        .env("HOME", &fixture.home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("MMR_CONFIG_FILE")
+        .env("MMR_FAKE_PYTHON_ENV_OUT", &env_out)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "run stderr: {}",
+        stderr_text(&output)
+    );
+    let env = fs::read_to_string(&env_out)?;
+    let api_base_url = env_value(&env, "API_BASE_URL")?;
+    let openapi_url = env_value(&env, "OPENAPI_URL")?;
+    assert!(
+        api_base_url.starts_with("http://127.0.0.1:"),
+        "{api_base_url}"
+    );
+    assert_eq!(openapi_url, format!("{api_base_url}/openapi.json"));
+    assert!(
+        stderr_text(&output).contains("mmr REST backing server listening on http://127.0.0.1:"),
+        "{}",
+        stderr_text(&output)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_rest_backing_server_serves_openapi_and_status() -> anyhow::Result<()> {
+    let fixture = TestFixture::seeded();
+    let tmp = tempfile::tempdir()?;
+    let env_out = tmp.path().join("fake-python.env");
+    let done = tmp.path().join("fake-python.done");
+    let fake_python = write_fake_python(
+        tmp.path(),
+        r#"#!/bin/sh
+env > "$MMR_FAKE_PYTHON_ENV_OUT"
+while [ ! -f "$MMR_FAKE_PYTHON_DONE" ]; do sleep 0.1; done
+exit 0
+"#,
+    )?;
+    let cwd = fixture.home.join("cwd");
+    fs::create_dir_all(&cwd)?;
+
+    let child = Command::new(env!("CARGO_BIN_EXE_mmr"))
+        .args([
+            "mcp",
+            "python-bootstrap",
+            "--run",
+            "--python",
+            fake_python.to_str().expect("fake python path UTF-8"),
+        ])
+        .env("HOME", &fixture.home)
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("MMR_CONFIG_FILE")
+        .env("MMR_FAKE_PYTHON_ENV_OUT", &env_out)
+        .env("MMR_FAKE_PYTHON_DONE", &done)
+        .current_dir(&cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let env = wait_for_file_text(&env_out, Duration::from_secs(5))?;
+    let api_base_url = env_value(&env, "API_BASE_URL")?;
+    let client = reqwest::Client::new();
+
+    let openapi: Value = client
+        .get(format!("{api_base_url}/openapi.json"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(openapi["openapi"], "3.1.0");
+    assert!(openapi["paths"]["/v1/status"].is_object(), "{openapi}");
+
+    let status: Value = client
+        .get(format!("{api_base_url}/v1/status"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(status["command"], "status", "{status}");
+    assert!(status["store"].is_object(), "{status}");
+
+    fs::write(&done, "")?;
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "run stderr: {}",
+        stderr_text(&output)
+    );
     Ok(())
 }
 
@@ -585,4 +721,37 @@ fn parse_streamable_http_body(body: &str) -> anyhow::Result<Value> {
 
 fn stderr_text(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn write_fake_python(dir: &std::path::Path, contents: &str) -> anyhow::Result<std::path::PathBuf> {
+    let path = dir.join("fake-python");
+    fs::write(&path, contents)?;
+    let mut permissions = fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions)?;
+    Ok(path)
+}
+
+fn wait_for_file_text(path: &std::path::Path, timeout: Duration) -> anyhow::Result<String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(text) = fs::read_to_string(path)
+            && !text.trim().is_empty()
+        {
+            return Ok(text);
+        }
+        if Instant::now() > deadline {
+            anyhow::bail!("timed out waiting for {}", path.display());
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn env_value(env: &str, key: &str) -> anyhow::Result<String> {
+    for line in env.lines() {
+        if let Some(value) = line.strip_prefix(&format!("{key}=")) {
+            return Ok(value.to_string());
+        }
+    }
+    anyhow::bail!("missing {key} in env:\n{env}");
 }

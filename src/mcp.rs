@@ -2,11 +2,17 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use axum::Router;
+use axum::{
+    Json, Router,
+    extract::{Path as AxumPath, Query},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::tool::ToolRouter;
@@ -26,11 +32,15 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
+use tokio::process::Command;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use crate::cli::{Cli, run_cli};
 
 const PYTHON_BOOTSTRAP_CONTENT: &str = include_str!("../scripts/mmr_rest_mcp_bootstrap.py");
+const REST_OPENAPI_CONTENT: &str = include_str!("../docs/api/openapi.json");
 
 #[derive(Args, Debug)]
 pub struct McpArgs {
@@ -73,12 +83,12 @@ impl McpTransportArg {
 
 #[derive(Args, Debug)]
 pub struct PythonBootstrapArgs {
-    /// REST API base URL exposed by the mmr API server.
-    #[arg(long, default_value = "http://127.0.0.1:8765")]
-    pub api_base_url: String,
-    /// OpenAPI document URL or local JSON file path.
-    #[arg(long, default_value = "docs/api/openapi.json")]
-    pub openapi_url: String,
+    /// External REST API base URL. Omit to auto-start a loopback mmr REST backing server for --run.
+    #[arg(long)]
+    pub api_base_url: Option<String>,
+    /// External OpenAPI document URL or local JSON file path. Omit to use the auto-started backing server for --run.
+    #[arg(long)]
+    pub openapi_url: Option<String>,
     /// Environment variable name that contains the optional REST bearer token.
     #[arg(long, default_value = "API_TOKEN")]
     pub api_token_env: String,
@@ -109,6 +119,9 @@ pub struct PythonBootstrapArgs {
     /// Launch the Python FastMCP bootstrap. Requires Python dependencies: fastmcp and httpx.
     #[arg(long)]
     pub run: bool,
+    /// Do not auto-start the internal mmr REST backing server for --run.
+    #[arg(long)]
+    pub no_auto_rest: bool,
 }
 
 #[derive(Serialize)]
@@ -127,13 +140,21 @@ struct PythonBootstrapLaunchPlan {
     script: String,
     argv: Vec<String>,
     env: BTreeMap<&'static str, String>,
+    rest_backing: PythonBootstrapRestBackingPlan,
+}
+
+#[derive(Serialize)]
+struct PythonBootstrapRestBackingPlan {
+    mode: &'static str,
+    api_base_url: String,
+    openapi_url: String,
 }
 
 pub async fn run_mcp(args: &McpArgs, pretty: bool) -> Result<String> {
     if let Some(command) = &args.command {
         return match command {
             McpCommand::PythonBootstrap(bootstrap_args) => {
-                run_python_bootstrap(bootstrap_args, pretty)
+                run_python_bootstrap(bootstrap_args, pretty).await
             }
         };
     }
@@ -149,7 +170,7 @@ pub async fn run_mcp(args: &McpArgs, pretty: bool) -> Result<String> {
     Ok(String::new())
 }
 
-fn run_python_bootstrap(args: &PythonBootstrapArgs, pretty: bool) -> Result<String> {
+async fn run_python_bootstrap(args: &PythonBootstrapArgs, pretty: bool) -> Result<String> {
     let actions = usize::from(args.print)
         + usize::from(args.write.is_some())
         + usize::from(args.dry_run)
@@ -177,7 +198,7 @@ fn run_python_bootstrap(args: &PythonBootstrapArgs, pretty: bool) -> Result<Stri
     }
 
     if args.run {
-        run_python_bootstrap_process(args)?;
+        run_python_bootstrap_process(args).await?;
         return Ok(String::new());
     }
 
@@ -189,6 +210,7 @@ fn python_bootstrap_launch_plan(
     action: &'static str,
 ) -> PythonBootstrapLaunchPlan {
     let script = python_bootstrap_script_path(args);
+    let rest_backing = python_bootstrap_rest_backing_plan(args);
     PythonBootstrapLaunchPlan {
         command: "mcp/python-bootstrap",
         action,
@@ -198,14 +220,59 @@ fn python_bootstrap_launch_plan(
             args.python.display().to_string(),
             script.display().to_string(),
         ],
-        env: python_bootstrap_env(args),
+        env: python_bootstrap_env(args, &rest_backing.api_base_url, &rest_backing.openapi_url),
+        rest_backing,
     }
 }
 
-fn python_bootstrap_env(args: &PythonBootstrapArgs) -> BTreeMap<&'static str, String> {
+fn python_bootstrap_rest_backing_plan(
+    args: &PythonBootstrapArgs,
+) -> PythonBootstrapRestBackingPlan {
+    let auto = should_auto_start_rest(args);
+    let api_base_url = if auto {
+        "<auto-started-loopback>".to_string()
+    } else {
+        external_api_base_url(args)
+    };
+    let openapi_url = if auto {
+        "<auto-started-loopback>/openapi.json".to_string()
+    } else {
+        external_openapi_url(args, &api_base_url)
+    };
+    PythonBootstrapRestBackingPlan {
+        mode: if auto { "auto" } else { "external" },
+        api_base_url,
+        openapi_url,
+    }
+}
+
+fn should_auto_start_rest(args: &PythonBootstrapArgs) -> bool {
+    (args.run || args.dry_run)
+        && !args.no_auto_rest
+        && args.api_base_url.is_none()
+        && args.openapi_url.is_none()
+}
+
+fn external_api_base_url(args: &PythonBootstrapArgs) -> String {
+    args.api_base_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:8765".to_string())
+}
+
+fn external_openapi_url(args: &PythonBootstrapArgs, api_base_url: &str) -> String {
+    args.openapi_url
+        .clone()
+        .unwrap_or_else(|| format!("{}/openapi.json", api_base_url.trim_end_matches('/')))
+}
+
+fn python_bootstrap_env(
+    args: &PythonBootstrapArgs,
+    api_base_url: &str,
+    openapi_url: &str,
+) -> BTreeMap<&'static str, String> {
     BTreeMap::from([
-        ("API_BASE_URL", args.api_base_url.clone()),
-        ("OPENAPI_URL", args.openapi_url.clone()),
+        ("API_BASE_URL", api_base_url.to_string()),
+        ("OPENAPI_URL", openapi_url.to_string()),
         ("API_TOKEN_ENV", args.api_token_env.clone()),
         ("MCP_TRANSPORT", args.transport.as_env_value().to_string()),
         ("MCP_HOST", args.host.clone()),
@@ -232,19 +299,42 @@ fn ensure_python_bootstrap_script(args: &PythonBootstrapArgs) -> Result<PathBuf>
     Ok(path)
 }
 
-fn run_python_bootstrap_process(args: &PythonBootstrapArgs) -> Result<()> {
+async fn run_python_bootstrap_process(args: &PythonBootstrapArgs) -> Result<()> {
     let script = ensure_python_bootstrap_script(args)?;
+    if should_auto_start_rest(args) {
+        let rest_backing = RestBackingServer::start().await?;
+        let api_base_url = rest_backing.api_base_url();
+        let openapi_url = format!("{api_base_url}/openapi.json");
+        eprintln!("mmr REST backing server listening on {api_base_url}");
+        let result = run_python_bootstrap_command(args, &script, &api_base_url, &openapi_url).await;
+        let shutdown = rest_backing.shutdown().await;
+        result?;
+        shutdown?;
+        return Ok(());
+    }
+
+    let api_base_url = external_api_base_url(args);
+    let openapi_url = external_openapi_url(args, &api_base_url);
+    run_python_bootstrap_command(args, &script, &api_base_url, &openapi_url).await
+}
+
+async fn run_python_bootstrap_command(
+    args: &PythonBootstrapArgs,
+    script: &PathBuf,
+    api_base_url: &str,
+    openapi_url: &str,
+) -> Result<()> {
     let mut command = Command::new(&args.python);
     command
-        .arg(&script)
+        .arg(script)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    for (key, value) in python_bootstrap_env(args) {
+    for (key, value) in python_bootstrap_env(args, api_base_url, openapi_url) {
         command.env(key, value);
     }
 
-    let status = command.status().with_context(|| {
+    let status = command.status().await.with_context(|| {
         format!(
             "failed to start Python MCP bootstrap with {}; ensure Python is installed and install \
              dependencies with `python3 -m pip install fastmcp httpx`",
@@ -258,6 +348,263 @@ fn run_python_bootstrap_process(args: &PythonBootstrapArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+struct RestBackingServer {
+    local_addr: SocketAddr,
+    shutdown: oneshot::Sender<()>,
+    task: JoinHandle<Result<()>>,
+}
+
+impl RestBackingServer {
+    async fn start() -> Result<Self> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .context("bind internal mmr REST backing server")?;
+        let local_addr = listener.local_addr()?;
+        let (shutdown, shutdown_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, rest_backing_router())
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .context("serve internal mmr REST backing server")
+        });
+        Ok(Self {
+            local_addr,
+            shutdown,
+            task,
+        })
+    }
+
+    fn api_base_url(&self) -> String {
+        format!("http://{}", self.local_addr)
+    }
+
+    async fn shutdown(self) -> Result<()> {
+        let _ = self.shutdown.send(());
+        self.task
+            .await
+            .context("join internal mmr REST backing server")??;
+        Ok(())
+    }
+}
+
+fn rest_backing_router() -> Router {
+    Router::new()
+        .route("/openapi.json", get(rest_openapi))
+        .route("/v1/status", get(rest_status))
+        .route("/v1/projects", get(rest_list_projects))
+        .route("/v1/sessions", get(rest_list_sessions))
+        .route(
+            "/v1/sessions/{session_id}/messages",
+            get(rest_read_session_messages),
+        )
+        .route("/v1/messages", get(rest_read_messages))
+        .route("/v1/recall", get(rest_recall))
+        .route("/v1/find", get(rest_find))
+        .route("/v1/context/project", get(rest_context_project))
+        .route("/v1/context/source", get(rest_context_source))
+        .route(
+            "/v1/redactions/events/{event_id}",
+            get(rest_redaction_explain),
+        )
+        .route("/v1/sync-dry-runs", post(rest_sync_dry_run))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RestQueryParams {
+    source: Option<String>,
+    project: Option<String>,
+    all: Option<bool>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    sort_by: Option<String>,
+    order: Option<String>,
+    scope: Option<String>,
+    query: Option<String>,
+    session: Option<String>,
+    role: Option<String>,
+    event_type: Option<String>,
+    ignore_case: Option<bool>,
+    context: Option<usize>,
+    n: Option<u32>,
+    include_newest: Option<bool>,
+}
+
+async fn rest_openapi() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        REST_OPENAPI_CONTENT,
+    )
+        .into_response()
+}
+
+async fn rest_status(Query(query): Query<RestQueryParams>) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.push("status".to_string());
+    push_opt(&mut args, "--project", query.project);
+    rest_cli_response(args).await
+}
+
+async fn rest_list_projects(Query(query): Query<RestQueryParams>) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.extend(["list".to_string(), "projects".to_string()]);
+    push_opt(&mut args, "--limit", query.limit);
+    push_opt(&mut args, "--offset", query.offset);
+    push_opt(&mut args, "--sort-by", query.sort_by);
+    push_opt(&mut args, "--order", query.order);
+    rest_cli_response(args).await
+}
+
+async fn rest_list_sessions(Query(query): Query<RestQueryParams>) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.extend(["list".to_string(), "sessions".to_string()]);
+    push_opt(&mut args, "--project", query.project);
+    push_flag(&mut args, "--all", query.all.unwrap_or(false));
+    push_opt(&mut args, "--limit", query.limit);
+    push_opt(&mut args, "--offset", query.offset);
+    push_opt(&mut args, "--sort-by", query.sort_by);
+    push_opt(&mut args, "--order", query.order);
+    rest_cli_response(args).await
+}
+
+async fn rest_read_session_messages(
+    AxumPath(session_id): AxumPath<String>,
+    Query(query): Query<RestQueryParams>,
+) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.extend(["read".to_string(), "session".to_string(), session_id]);
+    push_opt(&mut args, "--project", query.project);
+    push_opt(&mut args, "--limit", query.limit);
+    push_opt(&mut args, "--offset", query.offset);
+    rest_cli_response(args).await
+}
+
+async fn rest_read_messages(Query(query): Query<RestQueryParams>) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source.clone());
+    match query.scope.as_deref() {
+        Some("source") => {
+            args.extend(["read".to_string(), "source".to_string()]);
+        }
+        Some("project") => {
+            args.extend(["read".to_string(), "project".to_string()]);
+            push_opt(&mut args, "--project", query.project);
+        }
+        _ => return rest_bad_request("scope must be 'project' or 'source'"),
+    }
+    push_opt(&mut args, "--limit", query.limit);
+    push_opt(&mut args, "--offset", query.offset);
+    rest_cli_response(args).await
+}
+
+async fn rest_recall(Query(query): Query<RestQueryParams>) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.push("recall".to_string());
+    if let Some(n) = query.n {
+        args.push(n.to_string());
+    }
+    push_opt(&mut args, "--project", query.project);
+    push_flag(&mut args, "--all", query.all.unwrap_or(false));
+    push_opt(&mut args, "--limit", query.limit);
+    push_opt(&mut args, "--offset", query.offset);
+    push_flag(
+        &mut args,
+        "--include-newest",
+        query.include_newest.unwrap_or(false),
+    );
+    rest_cli_response(args).await
+}
+
+async fn rest_find(Query(query): Query<RestQueryParams>) -> Response {
+    let Some(search_query) = query.query else {
+        return rest_bad_request("query is required");
+    };
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.extend(["find".to_string(), search_query]);
+    push_opt(&mut args, "--project", query.project);
+    push_opt(&mut args, "--session", query.session);
+    push_opt(&mut args, "--role", query.role);
+    push_opt(&mut args, "--event-type", query.event_type);
+    push_flag(
+        &mut args,
+        "--ignore-case",
+        query.ignore_case.unwrap_or(false),
+    );
+    push_opt(&mut args, "--context", query.context);
+    rest_cli_response(args).await
+}
+
+async fn rest_context_project(Query(query): Query<RestQueryParams>) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.extend(["context".to_string(), "project".to_string()]);
+    push_opt(&mut args, "--project", query.project);
+    push_opt(&mut args, "--limit", query.limit);
+    rest_cli_response(args).await
+}
+
+async fn rest_context_source(Query(query): Query<RestQueryParams>) -> Response {
+    let mut args = Vec::new();
+    push_source(&mut args, query.source);
+    args.extend(["context".to_string(), "source".to_string()]);
+    push_opt(&mut args, "--limit", query.limit);
+    rest_cli_response(args).await
+}
+
+async fn rest_redaction_explain(AxumPath(event_id): AxumPath<String>) -> Response {
+    rest_cli_response(vec!["redact".to_string(), "explain".to_string(), event_id]).await
+}
+
+async fn rest_sync_dry_run(Json(body): Json<Value>) -> Response {
+    let project = body
+        .get("project")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let mut args = vec!["sync".to_string(), "--dry-run".to_string()];
+    push_opt(&mut args, "--project", project);
+    rest_cli_response(args).await
+}
+
+async fn rest_cli_response(args: Vec<String>) -> Response {
+    match run_cli_anyhow(args).await {
+        Ok(output) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            output,
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+fn rest_bad_request(message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"error": message.to_string()})),
+    )
+        .into_response()
+}
+
+async fn run_cli_anyhow(args: Vec<String>) -> Result<String> {
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push("mmr".to_string());
+    argv.extend(args);
+    let cli = Cli::try_parse_from(argv).context("parse mmr REST backing CLI arguments")?;
+    run_cli(cli).await
 }
 
 fn serialize_mcp_response<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
