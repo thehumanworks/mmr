@@ -455,7 +455,9 @@ impl MmrMcpServer {
         }
     }
 
-    /// List known mmr projects with source coverage and recency metadata.
+    /// List known projects with source coverage and recency metadata. Use to check whether
+    /// prior session history exists for a codebase before deeper retrieval, or to map which
+    /// projects have history across Claude, Codex, Cursor, Grok, and Pi.
     #[tool(name = "mmr_list_projects")]
     async fn list_projects(
         &self,
@@ -464,7 +466,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// List mmr sessions in a project, source, or all-project scope.
+    /// List sessions in a project, source, or all-project scope. Use to locate which past
+    /// session holds the work, decision, or discussion you need before reading it.
     #[tool(name = "mmr_list_sessions")]
     async fn list_sessions(
         &self,
@@ -473,7 +476,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read one mmr session by session ID.
+    /// Read one session by session ID. Use when a specific past session is known to contain
+    /// decisions, rationale, or unfinished work to continue.
     #[tool(name = "mmr_read_session")]
     async fn read_session(
         &self,
@@ -482,7 +486,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read chronological mmr project history.
+    /// Read chronological project history across sources. Use to reconstruct how work
+    /// evolved when raw detail matters more than a summary.
     #[tool(name = "mmr_read_project")]
     async fn read_project(
         &self,
@@ -491,7 +496,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read chronological mmr history for one explicit source.
+    /// Read chronological history for one explicit source (claude, codex, cursor, grok, pi).
+    /// Use when the relevant past work is known to live in a specific tool's sessions.
     #[tool(name = "mmr_read_source")]
     async fn read_source(
         &self,
@@ -500,7 +506,10 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Retrieve a previous stable session for immediate continuity.
+    /// Retrieve the previous stable session for immediate continuity. Reach for this FIRST
+    /// when resuming or continuing earlier work, when the user says "continue", "as we
+    /// discussed", or "last time", or after compaction, /clear, or a fresh session on an
+    /// ongoing task.
     #[tool(name = "mmr_recall")]
     async fn recall(
         &self,
@@ -509,7 +518,9 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Search linked normalized mmr events and learned memory.
+    /// Search normalized events and learned memory across all sessions. Use before proposing
+    /// an approach that may already have been tried, decided, or rejected, or to answer
+    /// "did we ever..." / "why did we..." questions about past work.
     #[tool(name = "mmr_find")]
     async fn find(
         &self,
@@ -527,7 +538,8 @@ impl MmrMcpServer {
         Ok(text_tool_result(output))
     }
 
-    /// Produce project-specific context across sources.
+    /// Produce scoped, ready-to-use context for a project across sources. Use to brief
+    /// yourself or another agent before starting work on a project with prior history.
     #[tool(name = "mmr_context_project")]
     async fn context_project(
         &self,
@@ -536,7 +548,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Produce source-wide context for one explicit source.
+    /// Produce source-wide context for one explicit source. Use to brief on everything a
+    /// specific tool (claude, codex, cursor, grok, pi) has worked on, across projects.
     #[tool(name = "mmr_context_source")]
     async fn context_source(
         &self,
@@ -545,7 +558,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Return project memory-assimilation prompt, runbook, output contract, and evidence.
+    /// Return the project memory-assimilation prompt, runbook, output contract, and evidence.
+    /// Use when consolidating a project's session history into durable, learned memory.
     #[tool(name = "mmr_assimilate_project")]
     async fn assimilate_project(
         &self,
@@ -554,7 +568,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Return source memory-assimilation prompt, runbook, output contract, and evidence.
+    /// Return the source memory-assimilation prompt, runbook, output contract, and evidence.
+    /// Use when consolidating one tool's session history into durable, learned memory.
     #[tool(name = "mmr_assimilate_source")]
     async fn assimilate_source(
         &self,
@@ -563,7 +578,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Summarize project history through the configured OpenAI-compatible provider.
+    /// Summarize project history through the configured OpenAI-compatible provider. Use for
+    /// a continuity brief when the raw history is too large to read directly.
     #[tool(name = "mmr_summarize_project")]
     async fn summarize_project(
         &self,
@@ -617,7 +633,8 @@ impl MmrMcpServer {
         run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
     }
 
-    /// Inspect local project, redaction, source, and sync state.
+    /// Inspect local project, redaction, source, and sync state. Use to troubleshoot mmr
+    /// setup or linking before concluding that history is missing.
     #[tool(name = "mmr_status")]
     async fn status(
         &self,
@@ -626,7 +643,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Return the bundled mmr agent skill as JSON text.
+    /// Return the bundled mmr agent skill as JSON text. Use to load full mmr usage guidance
+    /// and retrieval patterns into context before deeper history work.
     #[tool(name = "mmr_skill_load")]
     async fn skill_load(
         &self,

@@ -1,11 +1,22 @@
 ---
 name: mmr
-description: "mmr is the local tool for querying and retrieving AI coding session history across Claude, Codex, Cursor, Grok, and Pi. Use it when you need to inspect past work, pull previous sessions into context, or maintain long-term continuity. Primary entry point for all mmr-related capabilities."
+description: "Surface memory and knowledge from past AI coding sessions (Claude Code, Codex, Cursor, Grok, Pi) before acting on work that may have prior history. Trigger when: starting or resuming work on an existing project or long-running task; the user references earlier work ('continue', 'as we discussed', 'last time', 'again'); recovering context after compaction or /clear; checking what was already tried, decided, or rejected before proposing an approach; or answering questions about past sessions. Also the entry point for any mmr setup, usage, or troubleshooting question."
 ---
 
 # mmr
 
 `mmr` is the local Rust CLI for parsing and querying history from Claude Code, Codex, Cursor, Grok, and Pi.
+
+## When to Trigger
+
+The purpose of this skill is continuity: act with awareness of prior work instead of rediscovering or contradicting it. Reach for it *before* starting, not only when explicitly asked about history.
+
+- **Proactively**, before beginning or resuming work that plausibly has prior sessions: an existing project, a long-running task, a bug someone has looked at before.
+- **On continuity language** from the user: "continue", "pick up where we left off", "as we discussed", "last time", "why did we...".
+- **After context loss**: compaction, `/clear`, or a fresh session on ongoing work.
+- **Before proposing an approach** that may already have been tried, decided, or rejected.
+
+If `mmr` is not installed or a query fails, do not abandon the goal — fall back to raw provider transcripts and any memory directory, and note that retrieval was degraded. Retrieval indexes can lag the newest sessions; verify against raw transcripts when freshness matters.
 
 ## Core Use Cases
 
@@ -36,38 +47,6 @@ It provides reusable patterns and guidance beyond what the basic `mmr` commands 
 
 See: `.agents/skills/mmr/session-mining/SKILL.md`
 
-### goal-closeout
-
-**Location:** `mmr/goal-closeout`
-
-Closes goal execution: targeted tests → full verification loop → goal evidence → diff check → scoped commit. Uses `gdd_status.py` before marking goals done.
-
-See: `.agents/skills/mmr/goal-closeout/SKILL.md`
-
-### review-remediation
-
-**Location:** `mmr/review-remediation`
-
-Deep review → findings → GDD goal docs → parallel git worktrees per concern → merge to main → post-merge fixture fixes → merged-main verification.
-
-See: `.agents/skills/mmr/review-remediation/SKILL.md`
-
-### docs-first-contract-change
-
-**Location:** `mmr/docs-first-contract-change`
-
-CLI contract changes docs-first: `specs/*.md` → `src/cli.rs` → `cli_contract` + `memory_fabric_contract` tests → live smoke; preserve `next_command` continuation (e.g. retrieve `--debug`, `--full-message-history`).
-
-See: `.agents/skills/mmr/docs-first-contract-change/SKILL.md`
-
-### command-surface-removal
-
-**Location:** `mmr/command-surface-removal`
-
-Safely removes public CLI commands: no-backwards-compat goal → strip clap/tests/docs/scripts → rejection contract test → grep active surface → dead code cleanup → verification.
-
-See: `.agents/skills/mmr/command-surface-removal/SKILL.md`
-
 ## When to Use This Parent Skill
 
 Use the top-level `mmr` skill when:
@@ -79,6 +58,8 @@ Use the top-level `mmr` skill when:
 For most continuity and previous-session work, load the `session-mining` subskill directly.
 
 ## Related Local Skills
+
+These exist only in the mmr development repo; skip this section if they are not present on this machine.
 
 - `mmr-clap-colored-cli` — Developing the mmr CLI surface, contracts, and output behavior
 - `mmr-native-bundle-providers` — Maintaining native session bundle profiles across providers

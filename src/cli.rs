@@ -113,22 +113,6 @@ const BUNDLED_MMR_SKILL_FILES: &[BundledSkillFile] = &[
             "../.agents/skills/mmr/session-mining/references/session-retrieval-patterns.md"
         ),
     },
-    BundledSkillFile {
-        relative_path: "goal-closeout/SKILL.md",
-        contents: include_str!("../.agents/skills/mmr/goal-closeout/SKILL.md"),
-    },
-    BundledSkillFile {
-        relative_path: "review-remediation/SKILL.md",
-        contents: include_str!("../.agents/skills/mmr/review-remediation/SKILL.md"),
-    },
-    BundledSkillFile {
-        relative_path: "docs-first-contract-change/SKILL.md",
-        contents: include_str!("../.agents/skills/mmr/docs-first-contract-change/SKILL.md"),
-    },
-    BundledSkillFile {
-        relative_path: "command-surface-removal/SKILL.md",
-        contents: include_str!("../.agents/skills/mmr/command-surface-removal/SKILL.md"),
-    },
 ];
 
 #[derive(Parser, Debug)]

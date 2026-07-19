@@ -12,6 +12,13 @@ use std::thread;
 
 use common::{RetrieveContractFixture, TestFixture, parse_stdout_json};
 
+const DEV_SUBSKILLS: [&str; 4] = [
+    "goal-closeout",
+    "review-remediation",
+    "docs-first-contract-change",
+    "command-surface-removal",
+];
+
 fn write_file(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create parent");
@@ -28,6 +35,36 @@ fn write_executable(path: &Path, contents: &str) {
 
 fn stdout_text(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout UTF-8")
+}
+
+fn assert_dev_subskills_absent_from_text(text: &str) {
+    for subskill in DEV_SUBSKILLS {
+        assert!(
+            !text.contains(subskill),
+            "dev subskill {subskill} should not be bundled"
+        );
+    }
+}
+
+fn assert_dev_subskills_absent_from_dir(target: &Path) {
+    for subskill in DEV_SUBSKILLS {
+        assert!(
+            !target.join(subskill).exists(),
+            "dev subskill {subskill} should not be installed"
+        );
+    }
+}
+
+fn assert_dev_subskills_absent_from_install_response(json: &serde_json::Value) {
+    let files = json["files"].as_array().expect("files array");
+    for subskill in DEV_SUBSKILLS {
+        assert!(
+            !files
+                .iter()
+                .any(|file| file.as_str().is_some_and(|path| path.starts_with(subskill))),
+            "dev subskill {subskill} should not be listed in installed files"
+        );
+    }
 }
 
 fn replace_claude_projects_with_file(home: &Path) {
@@ -350,6 +387,7 @@ fn skill_load_prints_bundled_skill_for_agent_context() {
     assert!(stdout.contains("`mmr` is the local Rust CLI"));
     assert!(stdout.contains("## mmr/session-mining/SKILL.md"));
     assert!(stdout.contains("session-mining"));
+    assert_dev_subskills_absent_from_text(&stdout);
 }
 
 #[test]
@@ -372,6 +410,7 @@ fn skill_install_replaces_user_scoped_skill() {
     assert_eq!(json["scope"], "user");
     assert_eq!(json["path"], target.display().to_string());
     assert_eq!(json["replaced"], true);
+    assert_dev_subskills_absent_from_install_response(&json);
     assert!(target.join("SKILL.md").is_file());
     assert!(target.join("session-mining").join("SKILL.md").is_file());
     assert!(
@@ -381,6 +420,7 @@ fn skill_install_replaces_user_scoped_skill() {
             .join("session-retrieval-patterns.md")
             .is_file()
     );
+    assert_dev_subskills_absent_from_dir(&target);
     assert!(!target.join("stale.txt").exists());
 }
 
@@ -407,8 +447,10 @@ fn skill_install_local_replaces_project_scoped_skill() {
     assert_eq!(json["scope"], "local");
     assert_eq!(json["path"], canonical_target.display().to_string());
     assert_eq!(json["replaced"], true);
+    assert_dev_subskills_absent_from_install_response(&json);
     assert!(target.join("SKILL.md").is_file());
     assert!(target.join("session-mining").join("SKILL.md").is_file());
+    assert_dev_subskills_absent_from_dir(&target);
     assert!(!target.join("stale.txt").exists());
 }
 
