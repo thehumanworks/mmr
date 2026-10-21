@@ -190,3 +190,42 @@ consumption, request/output limits, blocked stdin, early exit, malformed output,
 inherited descriptors, direct-child reaping, descendant termination and calls
 from an existing Tokio runtime. They use explicitly selected local fixture
 commands and no provider credentials or real session histories.
+
+## Cooperative cancellation for library callers
+
+`CommandCancellation` is an explicit, clonable, one-way request shared by every
+clone. It is uncancelled by default and cannot be reset. Pass a fresh handle for
+each independently cancellable operation:
+
+```rust,no_run
+use mmr::dream::{CommandCancellation, CommandDreamRunner, DreamRequest};
+
+fn run(request: DreamRequest) -> anyhow::Result<()> {
+    let runner = CommandDreamRunner::new("local-runner", ["--json"]);
+    let cancellation = CommandCancellation::default();
+    let requester = cancellation.clone();
+    let operation = std::thread::spawn(move || {
+        runner.run_with_cancellation(&request, &cancellation)
+    });
+    requester.request_cancel();
+    let result = operation.join().expect("caller thread joined");
+    // Inspect the result, including CommandRunnerError::Cancelled.
+    result?;
+    Ok(())
+}
+```
+
+`request_cancel()` returns after recording the request, without acknowledging
+that the subprocess has stopped. `run_with_cancellation` observes the request,
+closes its pending pipe operations, performs the same bounded cleanup described
+above, and joins its worker before returning. Cleanup errors take precedence
+over `Cancelled`. A pre-cancelled handle prevents spawn. Existing
+`DreamRunner::run` callers keep their current behavior.
+
+Cancellation can race a successful result or an already-completed failure; it
+does not revoke a returned result or fence durable publication. It is in-process
+state, so process crash or SIGKILL can bypass cleanup. Escaped groups and
+non-Unix descendants retain the limitations described above. Async callers
+still need a blocking boundary and must await its completion. This API adds no
+worker, scheduler or persistent cancellation journal. See
+[`specs/runner-cancellation.md`](../specs/runner-cancellation.md) for the contract.
