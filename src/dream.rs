@@ -1,8 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Write};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,13 +7,15 @@ use serde_json::Value;
 use crate::redaction::{DeterministicPrivacyDetector, PiiCoverageStatus, scan_text_with_detector};
 use crate::store::{EventRecord, ProjectRecord, Store, content_hash};
 
+mod command;
+pub use command::{CommandDreamRunner, CommandRunnerError, CommandRunnerLimits};
+
 pub const ENV_DEFAULT_DREAM_RUNNER: &str = "MMR_DEFAULT_DREAM_RUNNER";
 pub const ENV_DREAM_COMMAND: &str = "MMR_DREAM_COMMAND";
 pub const ENV_DREAM_MOCK_FAILURE: &str = "MMR_DREAM_MOCK_FAILURE";
 pub const ENV_DREAM_MOCK_OUTPUT: &str = "MMR_DREAM_MOCK_OUTPUT";
 pub const DEFAULT_DREAM_RUNNER: &str = "mock";
 const ACTIVE_CONFIDENCE_MIN: f64 = 0.8;
-const COMMAND_RUNNER_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -204,12 +202,6 @@ pub struct MockDreamRunner {
     output: Result<String, String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct CommandDreamRunner {
-    program: String,
-    args: Vec<String>,
-}
-
 impl DreamRunnerConfig {
     pub fn resolve_runner(
         cli_runner: Option<&str>,
@@ -337,64 +329,6 @@ impl DreamRunner for MockDreamRunner {
     }
 }
 
-impl CommandDreamRunner {
-    pub fn from_env() -> Result<Self> {
-        let command = std::env::var(ENV_DREAM_COMMAND)
-            .ok()
-            .and_then(|value| non_empty(Some(&value)).map(str::to_string))
-            .ok_or_else(|| anyhow::anyhow!("{ENV_DREAM_COMMAND} is not set"))?;
-        let (program, args) = parse_command_parts(&command)?;
-        Ok(Self { program, args })
-    }
-}
-
-impl DreamRunner for CommandDreamRunner {
-    fn run(&self, request: &DreamRequest) -> Result<DreamRunnerOutput> {
-        if request.evidence_access != EvidenceAccess::SharedSafe {
-            bail!("command dream runner requires shared-safe evidence");
-        }
-        let mut child = Command::new(&self.program)
-            .args(&self.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawn dream command {}", self.display_command()))?;
-        {
-            let mut stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("dream command stdin unavailable"))?;
-            serde_json::to_writer(&mut stdin, request).context("write dream request")?;
-            stdin.write_all(b"\n").context("terminate dream request")?;
-        }
-        let status = wait_for_child(&mut child, COMMAND_RUNNER_TIMEOUT)?;
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        if let Some(mut pipe) = child.stdout.take() {
-            pipe.read_to_string(&mut stdout)
-                .context("read dream command stdout")?;
-        }
-        if let Some(mut pipe) = child.stderr.take() {
-            pipe.read_to_string(&mut stderr)
-                .context("read dream command stderr")?;
-        }
-        if !status.success() {
-            bail!("dream command failed: {}", stderr.trim());
-        }
-        parse_runner_output(&stdout, request.evidence_refs())
-    }
-}
-
-impl CommandDreamRunner {
-    fn display_command(&self) -> String {
-        std::iter::once(self.program.as_str())
-            .chain(self.args.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-}
-
 fn parse_command_parts(command: &str) -> Result<(String, Vec<String>)> {
     let parts = command
         .split_whitespace()
@@ -404,27 +338,6 @@ fn parse_command_parts(command: &str) -> Result<(String, Vec<String>)> {
         bail!("{ENV_DREAM_COMMAND} is empty");
     };
     Ok((program.clone(), args.to_vec()))
-}
-
-fn wait_for_child(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> Result<std::process::ExitStatus> {
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().context("poll dream command")? {
-            return Ok(status);
-        }
-        if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!(
-                "dream command timed out after {} seconds",
-                timeout.as_secs()
-            );
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
 }
 
 pub fn build_evidence_request(
