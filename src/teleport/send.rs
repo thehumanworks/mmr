@@ -276,27 +276,23 @@ fn execute_ssh_send(
     let remote_has_mmr = probe_remote_mmr(host)?;
 
     if remote_has_mmr {
-        match stream_apply(host, bundle_path) {
-            Ok(remote_status) => {
-                return Ok(build_ssh_send_response(
-                    pack,
-                    SendResponseContext {
-                        to: host.to_string(),
-                        remote_inbox,
-                        remote_apply: SendRemoteApplySummary {
-                            attempted: true,
-                            status: remote_status,
-                            mode: Some("stream_apply".to_string()),
-                        },
-                        next_command: None,
-                        planned_commands: None,
-                        dry_run: false,
-                        status: TeleportStatus::Ok,
-                    },
-                ));
-            }
-            Err(failure) => return Err(failure),
-        }
+        let remote_status = stream_apply(host, bundle_path)?;
+        return Ok(build_ssh_send_response(
+            pack,
+            SendResponseContext {
+                to: host.to_string(),
+                remote_inbox,
+                remote_apply: SendRemoteApplySummary {
+                    attempted: true,
+                    status: remote_status,
+                    mode: Some("stream_apply".to_string()),
+                },
+                next_command: None,
+                planned_commands: None,
+                dry_run: false,
+                status: TeleportStatus::Ok,
+            },
+        ));
     }
 
     copy_bundle_to_remote_inbox(host, bundle_path, &bundle_id, plan)?;
