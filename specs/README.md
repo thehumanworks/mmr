@@ -31,4 +31,6 @@ When implementing or reviewing behavior:
 - [Claude importer](../docs/mmr-claude-importer.md)
 - [Cursor importer](../docs/mmr-cursor-importer.md)
 - [Assimilation proposal and activation boundary](assimilation.md)
+- [Completed-session evidence fences](assimilation-evidence.md)
+- [Evidence library consumer guide](../docs/mmr-evidence-fences.md)
 - [Assimilation prompt/runbook handoff](../docs/mmr-dream-runner.md)

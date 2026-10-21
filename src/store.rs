@@ -7,7 +7,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-pub const LATEST_SCHEMA_VERSION: i64 = 2;
+pub mod evidence;
+
+pub const LATEST_SCHEMA_VERSION: i64 = 3;
 pub const DEFAULT_REDACTION_POLICY_ID: &str = "redaction-policy:v1:default";
 
 #[derive(Debug, Clone, Serialize)]
@@ -315,6 +317,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "dream_counterevidence_refs",
         sql: DREAM_COUNTEREVIDENCE_REFS_SCHEMA,
+    },
+    Migration {
+        version: 3,
+        name: "completed_evidence_fences",
+        sql: evidence::SCHEMA,
     },
 ];
 
@@ -877,6 +884,17 @@ impl Store {
         event: &NewEvent,
         fail_after_session: Option<&str>,
     ) -> Result<()> {
+        // Existing event identity is append-only. Avoid incidental source/session
+        // upserts on duplicate replay: they must not reopen completion seals.
+        let id = event.event_id();
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE id=?1)",
+            [&id],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Ok(());
+        }
         let now = now_rfc3339()?;
         let source_id = format!("source:v1:{}", hash_hex(event.source.as_bytes()));
         tx.execute(
@@ -920,7 +938,7 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(id) DO NOTHING",
             params![
-                event.event_id(),
+                id,
                 project_id,
                 session_id,
                 event.source,
@@ -1946,6 +1964,7 @@ pub fn event_id(event: &NewEvent) -> String {
 fn run_migrations(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
+         PRAGMA recursive_triggers = ON;
          CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY NOT NULL,
             name TEXT NOT NULL,
