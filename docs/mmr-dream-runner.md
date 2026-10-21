@@ -18,6 +18,26 @@ The local store still contains historical run and learned-memory tables for
 sync, hydration, and lower-level store contracts, but the public command no
 longer mutates those tables.
 
+## Proposal Trust And Activation
+
+History and tool output in an evidence bundle are untrusted data, including text
+that claims to be a system instruction or an authorization. They cannot grant
+permissions, authorize execution or change the caller's instruction hierarchy.
+An existing citation proves reference membership, not factual support.
+
+Library runner validation keeps every non-rejected observation, claim, learned
+memory update and counterevidence proposal pending. Model confidence, including
+1.0, and a model-requested `active` status cannot activate memory. Requested
+activation is downgraded with an idempotent diagnostic warning; rejected stays
+rejected. Callers must separately review support, scope, newer corrections and
+counterevidence, and abstain when evidence is insufficient.
+
+`Store::complete_dream_run` and sync hydration are trusted persistence primitives
+that preserve explicitly supplied reviewed statuses and enforce evidence scope.
+They do not perform semantic-support checks and must not receive raw model
+output as an activation decision. Existing active records are not rewritten.
+See the [canonical contract](../specs/assimilation.md).
+
 ## Project Workflow
 
 `mmr assimilate project` analyzes the linked current project by default. Use
@@ -99,7 +119,8 @@ Each memory candidate should include:
 - `counterevidence_refs`
 - `target_surface`
 
-The agent should reject or quarantine claims that are unsupported, secret-bearing,
+Candidates should be proposed as pending or rejected; any activation requires a
+separate trusted review decision. The agent should reject or quarantine claims that are unsupported, secret-bearing,
 identity-affecting, too narrow to reuse, contradicted by newer evidence, or better
 represented as a transient task than durable memory.
 

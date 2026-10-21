@@ -1478,6 +1478,12 @@ impl Store {
         self.dream_run_by_id(dream_run_id)
     }
 
+    /// Persist caller-reviewed decisions atomically, including deliberately active memory.
+    ///
+    /// This trusted storage primitive checks status schemas and project-local citation
+    /// membership, not semantic support or authorization. Validate untrusted runner
+    /// output through `crate::dream` first; model confidence/status is not an activation
+    /// decision. Active rows require a separate review by the calling application.
     pub fn complete_dream_run(
         &mut self,
         dream_run_id: &str,
@@ -1589,6 +1595,8 @@ impl Store {
         })
     }
 
+    /// Hydrate an already reviewed memory status from the trusted sync projection.
+    /// This is persistence, not model-output validation or a new activation decision.
     pub fn upsert_learned_memory_from_sync(
         &self,
         memory_id: &str,
