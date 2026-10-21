@@ -1,0 +1,4 @@
+{"sid":"synthetic-session","eid":"one","branch":"b","previous":"root","role":"assistant","at":null,"parts":[{"kind":"text","text":"before"},{"kind":"tool_call","call":"a","name":"inspect","arguments":null,"status":null},{"kind":"tool_call","call":"b","name":"inspect","arguments":{"file":"b"}}],"vendor-state":{"keep":true}}
+{"sid":"synthetic-session","eid":"two","role":"tool","parts":[{"kind":"tool_result","call":"b","result":"result-b","is_error":null}]}
+{"sid":"synthetic-session","eid":"three","role":"tool","parts":[{"kind":"tool_result","call":"a","result":null,"is_error":false}]}
+{"sid":"synthetic-session","eid":"four","role":"assistant","parts":[{"kind":"attachment","url":"https://example.invalid/synthetic.png","hash":"declared-fixture-hash","mime":"image/png"},{"kind":"future","unknown":[1,2]},{"kind":"text","text":"after"}]}

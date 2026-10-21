@@ -1,13 +1,46 @@
 use anyhow::Result;
 use clap::ValueEnum;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+/// Stable wire identifiers retain legacy strings; custom IDs are owned, never leaked/interned.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeSource {
     Codex,
     Claude,
+    Custom(String),
+}
+
+impl NativeSource {
+    pub fn from_id(id: &str) -> Result<Self> {
+        anyhow::ensure!(
+            super::registry::valid_identifier(id),
+            "source ID must be a 1–64 byte identifier"
+        );
+        Ok(match id {
+            "codex" => Self::Codex,
+            "claude" => Self::Claude,
+            other => Self::Custom(other.into()),
+        })
+    }
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Custom(id) => id,
+        }
+    }
+}
+impl Serialize for NativeSource {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for NativeSource {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let id = String::deserialize(deserializer)?;
+        Self::from_id(&id).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -94,6 +127,24 @@ pub struct CanonicalBlock {
     pub is_error: Option<Value>,
     pub attachment: Option<AttachmentRef>,
     pub relationship: Option<ToolRelationship>,
+}
+
+impl CanonicalBlock {
+    pub fn new(kind: impl Into<String>, source: Value) -> Self {
+        Self {
+            kind: kind.into(),
+            source,
+            text: None,
+            call_id: None,
+            name: None,
+            arguments: None,
+            result: None,
+            status: None,
+            is_error: None,
+            attachment: None,
+            relationship: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

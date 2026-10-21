@@ -17,14 +17,20 @@ use crate::store::content_hash;
 mod adapters;
 mod model;
 mod projection;
+mod registry;
 
-use adapters::{opaque, parse_claude_record, parse_codex_record, string};
+use adapters::opaque;
+pub use adapters::{ClaudeHistoryAdapter, CodexHistoryAdapter};
 pub use model::{
     AttachmentRef, CanonicalBlock, CanonicalEvent, CanonicalSession, ConversionCapabilities,
     ConversionFinding, ConversionResponse, InputFormat, NativeArchive, NativeSource, RawRecordRef,
     TargetFormat, ToolRelationship,
 };
 use projection::project_readable;
+pub use registry::{
+    AdapterCapabilities, AdapterDescriptor, AdapterFinding, AdapterRegistry, HistoryAdapter,
+    RecordProjection, RegisteredInput,
+};
 
 const SCHEMA_VERSION: u32 = 1;
 const PARSER_VERSION: &str = "mmr-session-v1";
@@ -98,27 +104,41 @@ pub fn convert_text(
     target: TargetFormat,
     origin: Option<&str>,
 ) -> Result<ConversionResponse> {
+    let from = match from {
+        InputFormat::Codex => RegisteredInput::Native("codex"),
+        InputFormat::Claude => RegisteredInput::Native("claude"),
+        InputFormat::Canonical => RegisteredInput::Canonical,
+    };
+    convert_with_registry(
+        input,
+        from,
+        target,
+        origin,
+        &AdapterRegistry::with_builtins(),
+    )
+}
+
+/// Convert with an explicitly supplied trusted registry. The default CLI never loads extensions.
+pub fn convert_with_registry(
+    input: &str,
+    from: RegisteredInput<'_>,
+    target: TargetFormat,
+    origin: Option<&str>,
+    registry: &AdapterRegistry,
+) -> Result<ConversionResponse> {
     ensure!(
         input.len() <= MAX_INPUT_BYTES,
         "session conversion input exceeds byte limit ({MAX_INPUT_BYTES})"
     );
     let mut supplied_response = None;
     let canonical = match from {
-        InputFormat::Codex | InputFormat::Claude => {
+        RegisteredInput::Native(source_id) => {
             let origin = origin.ok_or_else(|| {
                 anyhow::anyhow!("native session conversion requires --origin <stable-label>")
             })?;
-            parse_native(
-                input,
-                if from == InputFormat::Codex {
-                    NativeSource::Codex
-                } else {
-                    NativeSource::Claude
-                },
-                origin,
-            )?
+            parse_registered_native(input, source_id, origin, registry)?
         }
-        InputFormat::Canonical => {
+        RegisteredInput::Canonical => {
             let value: Value =
                 serde_json::from_str(input).context("parse canonical conversion input")?;
             let canonical: CanonicalSession = if value.get("canonical").is_some() {
@@ -132,9 +152,13 @@ pub fn convert_text(
                 serde_json::from_value(value).context("parse canonical session")?
             };
             ensure!(
-                canonical.schema_version == SCHEMA_VERSION
-                    && canonical.parser_version == PARSER_VERSION,
+                canonical.schema_version == SCHEMA_VERSION,
                 "unsupported canonical schema or parser version"
+            );
+            let (descriptor, _) = registry.resolve(canonical.source.as_str())?;
+            ensure!(
+                canonical.parser_version == descriptor.version,
+                "canonical adapter version does not match registered adapter"
             );
             if let Some(origin) = origin {
                 ensure!(
@@ -146,8 +170,12 @@ pub fn convert_text(
                 content_hash(&canonical.archive.text) == canonical.archive.sha256,
                 "canonical archive hash mismatch"
             );
-            let rebuilt =
-                parse_native(&canonical.archive.text, canonical.source, &canonical.origin)?;
+            let rebuilt = parse_registered_native(
+                &canonical.archive.text,
+                canonical.source.as_str(),
+                &canonical.origin,
+                registry,
+            )?;
             ensure!(
                 canonical == rebuilt,
                 "canonical projection does not match archived source"
@@ -156,18 +184,27 @@ pub fn convert_text(
         }
     };
     if let Some(response) = supplied_response {
-        let rebuilt_response = build_response(canonical.clone(), response.target)?;
+        let rebuilt_response = build_response(canonical.clone(), response.target, registry)?;
         ensure!(
             response == rebuilt_response,
             "conversion response does not match its archived source"
         );
     }
-    let response = build_response(canonical, target)?;
+    let response = build_response(canonical, target, registry)?;
     check_response_budget(&response, false)?;
     Ok(response)
 }
 
-fn build_response(canonical: CanonicalSession, target: TargetFormat) -> Result<ConversionResponse> {
+fn build_response(
+    canonical: CanonicalSession,
+    target: TargetFormat,
+    registry: &AdapterRegistry,
+) -> Result<ConversionResponse> {
+    let (descriptor, _) = registry.resolve(canonical.source.as_str())?;
+    ensure!(
+        target == TargetFormat::Canonical || descriptor.capabilities.readable_history,
+        "registered adapter does not support readable history projection"
+    );
     let mut findings = canonical.findings.clone();
     let output_jsonl = if target == TargetFormat::Canonical {
         None
@@ -180,7 +217,7 @@ fn build_response(canonical: CanonicalSession, target: TargetFormat) -> Result<C
         target,
         capabilities: ConversionCapabilities {
             native_archive: true,
-            readable_history: true,
+            readable_history: descriptor.capabilities.readable_history,
             native_resume: false,
             api_replay: false,
         },
@@ -191,6 +228,22 @@ fn build_response(canonical: CanonicalSession, target: TargetFormat) -> Result<C
 }
 
 pub fn parse_native(input: &str, source: NativeSource, origin: &str) -> Result<CanonicalSession> {
+    parse_registered_native(
+        input,
+        source.as_str(),
+        origin,
+        &AdapterRegistry::with_builtins(),
+    )
+}
+
+pub fn parse_registered_native(
+    input: &str,
+    source_id: &str,
+    origin: &str,
+    registry: &AdapterRegistry,
+) -> Result<CanonicalSession> {
+    let source = NativeSource::from_id(source_id)?;
+    let (descriptor, adapter) = registry.resolve(source_id)?;
     ensure!(
         input.len() <= MAX_INPUT_BYTES,
         "session conversion input exceeds byte limit ({MAX_INPUT_BYTES})"
@@ -201,8 +254,8 @@ pub fn parse_native(input: &str, source: NativeSource, origin: &str) -> Result<C
     );
     let mut session = CanonicalSession {
         schema_version: SCHEMA_VERSION,
-        parser_version: PARSER_VERSION.into(),
-        source,
+        parser_version: descriptor.version.clone(),
+        source: source.clone(),
         origin: origin.into(),
         archive: NativeArchive {
             sha256: content_hash(input),
@@ -211,6 +264,20 @@ pub fn parse_native(input: &str, source: NativeSource, origin: &str) -> Result<C
         events: Vec::new(),
         findings: Vec::new(),
     };
+    for category in &descriptor.capabilities.unsupported_content {
+        session.findings.push(finding(
+            None,
+            "adapter.unsupported_content",
+            "adapter_unsupported_content",
+            "opaque",
+            &format!("Registered adapter retains this category without interpretation: {category}"),
+        ));
+    }
+    let mut materialization_budget = BoundedWriter::counting();
+    serde_json::to_writer(&mut materialization_budget, &session.archive)
+        .context("archive materialization byte limit")?;
+    serde_json::to_writer(&mut materialization_budget, &session.findings)
+        .context("adapter findings byte limit")?;
     let mut offset = 0;
     let mut current_session = None;
     let mut branches: BTreeMap<Option<String>, String> = BTreeMap::new();
@@ -241,6 +308,8 @@ pub fn parse_native(input: &str, source: NativeSource, origin: &str) -> Result<C
             },
             blocks: Vec::new(),
         };
+        let first_finding = session.findings.len();
+        let mut adapter_findings = Vec::new();
         match parsed {
             Ok(value) if exceeds_source_depth(&value, 0) => {
                 event.session_id = current_session.clone();
@@ -249,76 +318,24 @@ pub fn parse_native(input: &str, source: NativeSource, origin: &str) -> Result<C
                 event.blocks.push(opaque(Value::String(line.into())));
             }
             Ok(value) => {
-                for candidate in [
-                    value.get("sessionId"),
-                    value.get("session_id"),
-                    value.get("uuid"),
-                    value.get("id"),
-                    value.get("branch_id"),
-                    value.get("parentUuid"),
-                    value.get("parent_id"),
-                    value["payload"].get("id"),
-                    value["payload"].get("branch_id"),
-                    value["payload"].get("parent_id"),
-                    value["payload"]["git"].get("branch"),
-                ] {
-                    ensure!(
-                        candidate
-                            .and_then(Value::as_str)
-                            .is_none_or(|v| v.len() <= MAX_IDENTIFIER_BYTES),
-                        "source identifier exceeds byte limit ({MAX_IDENTIFIER_BYTES})"
-                    );
-                }
-                let new_session = match source {
-                    NativeSource::Codex => string(&value, "session_id").or_else(|| {
-                        if string(&value, "type").as_deref() == Some("session_meta") {
-                            string(&value["payload"], "id")
-                        } else {
-                            None
-                        }
-                    }),
-                    NativeSource::Claude => {
-                        string(&value, "sessionId").or_else(|| string(&value, "session_id"))
-                    }
-                };
-                if new_session.is_some() {
-                    current_session = new_session;
+                let projection = adapter.project_record(&value)?;
+                validate_projection(&projection, &descriptor.capabilities)?;
+                if projection.session_id.is_some() {
+                    current_session = projection.session_id;
                 }
                 event.session_id = current_session.clone();
-                let branch = string(&value, "branch_id")
-                    .or_else(|| string(&value["payload"], "branch_id"))
-                    .or_else(|| string(&value["payload"]["git"], "branch"));
-                if let Some(branch) = branch {
+                if let Some(branch) = projection.branch_id {
                     branches.insert(current_session.clone(), branch);
                 }
                 event.branch_id = branches.get(&current_session).cloned();
-                event.source_event_id = string(&value, "uuid")
-                    .or_else(|| string(&value, "id"))
-                    .or_else(|| string(&value["payload"], "id"));
-                event.parent_id = string(&value, "parentUuid")
-                    .or_else(|| string(&value, "parent_id"))
-                    .or_else(|| string(&value["payload"], "parent_id"));
-                event.record_type = string(&value, "type");
-                event.timestamp = value.get("timestamp").cloned().or_else(|| {
-                    value
-                        .get("message")
-                        .and_then(|v| v.get("timestamp"))
-                        .cloned()
-                });
-                let content = match source {
-                    NativeSource::Codex => &value["payload"]["content"],
-                    NativeSource::Claude => &value["message"]["content"],
-                };
-                if let Some(blocks) = content.as_array() {
-                    ensure!(
-                        blocks.len() <= MAX_BLOCKS,
-                        "session conversion block limit exceeded ({MAX_BLOCKS})"
-                    );
-                }
-                match source {
-                    NativeSource::Codex => parse_codex_record(&value, &mut event),
-                    NativeSource::Claude => parse_claude_record(&value, &mut event),
-                }
+                event.source_event_id = projection.source_event_id;
+                event.parent_id = projection.parent_id;
+                event.record_type = projection.record_type;
+                event.timestamp = projection.timestamp;
+                event.role = projection.role;
+                event.source_role = projection.source_role;
+                event.blocks = projection.blocks;
+                adapter_findings = projection.findings;
             }
             Err(_) if line.trim().is_empty() => {
                 event.record_type = Some("blank".into());
@@ -341,7 +358,7 @@ pub fn parse_native(input: &str, source: NativeSource, origin: &str) -> Result<C
             .unwrap_or_else(|| content_hash(line.trim_end_matches(['\r', '\n'])));
         let identity = serde_json::to_string(&(
             origin,
-            source,
+            &source,
             &event.session_id,
             &event.branch_id,
             &event.record_type,
@@ -403,11 +420,118 @@ pub fn parse_native(input: &str, source: NativeSource, origin: &str) -> Result<C
                 }
             }
         }
+        for item in adapter_findings {
+            session.findings.push(finding(
+                Some(&event.id),
+                &item.field,
+                &item.code,
+                &item.disposition,
+                &item.message,
+            ));
+        }
+        serde_json::to_writer(&mut materialization_budget, &event)
+            .context("adapter event materialization byte limit")?;
+        serde_json::to_writer(
+            &mut materialization_budget,
+            &session.findings[first_finding..],
+        )
+        .context("adapter findings materialization byte limit")?;
         session.events.push(event);
         offset = end;
     }
     resolve_relationships(&mut session);
     Ok(session)
+}
+
+fn validate_projection(
+    projection: &RecordProjection,
+    capabilities: &AdapterCapabilities,
+) -> Result<()> {
+    for value in [
+        &projection.session_id,
+        &projection.branch_id,
+        &projection.source_event_id,
+        &projection.parent_id,
+        &projection.record_type,
+        &projection.role,
+        &projection.source_role,
+    ] {
+        ensure!(
+            value
+                .as_ref()
+                .is_none_or(|s| s.len() <= MAX_IDENTIFIER_BYTES),
+            "source identifier exceeds byte limit ({MAX_IDENTIFIER_BYTES})"
+        );
+    }
+    ensure!(
+        projection.blocks.len() <= MAX_BLOCKS,
+        "session conversion block limit exceeded ({MAX_BLOCKS})"
+    );
+    ensure!(
+        projection.findings.len() <= 64,
+        "adapter per-record finding limit exceeded"
+    );
+    for item in &projection.findings {
+        ensure!(
+            item.field.len() <= 1024
+                && item.code.len() <= 64
+                && item.disposition.len() <= 64
+                && item.message.len() <= 4096,
+            "adapter finding field limit exceeded"
+        );
+    }
+    if let Some(value) = &projection.timestamp {
+        ensure!(
+            !exceeds_source_depth(value, 0),
+            "adapter timestamp depth limit exceeded"
+        );
+    }
+    for block in &projection.blocks {
+        ensure!(
+            matches!(
+                block.kind.as_str(),
+                "text" | "tool_call" | "tool_result" | "attachment" | "opaque"
+            ),
+            "adapter returned an unknown canonical block kind; retain it as opaque"
+        );
+        ensure!(
+            block.kind == "opaque" || !capabilities.unsupported_content.contains(&block.kind),
+            "adapter interpreted a content kind declared unsupported"
+        );
+        if let Some(attachment) = &block.attachment {
+            ensure!(
+                matches!(
+                    attachment.availability.as_str(),
+                    "reference_only" | "embedded_unverified"
+                ),
+                "adapter attachment availability must be reference_only or embedded_unverified"
+            );
+        }
+        ensure!(
+            block.relationship.is_none(),
+            "adapters cannot supply engine-owned tool relationships"
+        );
+        for value in [
+            Some(&block.source),
+            block.arguments.as_ref(),
+            block.result.as_ref(),
+            block.status.as_ref(),
+            block.is_error.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            ensure!(
+                !exceeds_source_depth(value, 0),
+                "adapter block depth limit exceeded"
+            );
+        }
+    }
+    // Check returned data before cloning inherited context or serializing identity material.
+    // Work performed inside the trusted adapter callback itself is outside this budget.
+    serde_json::to_writer(&mut BoundedWriter::counting(), projection)
+        .context("adapter projection materialization byte limit")?;
+    Ok(())
 }
 
 fn exceeds_source_depth(value: &Value, depth: usize) -> bool {

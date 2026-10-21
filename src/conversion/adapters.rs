@@ -1,31 +1,116 @@
 use serde_json::Value;
 
-use super::{AttachmentRef, CanonicalBlock, CanonicalEvent};
+use anyhow::{Result, ensure};
+
+use super::{
+    AdapterCapabilities, AdapterDescriptor, AttachmentRef, CanonicalBlock, HistoryAdapter,
+    MAX_BLOCKS, MAX_IDENTIFIER_BYTES, PARSER_VERSION, RecordProjection,
+};
+
+pub struct CodexHistoryAdapter;
+pub struct ClaudeHistoryAdapter;
+
+impl HistoryAdapter for CodexHistoryAdapter {
+    fn descriptor(&self) -> AdapterDescriptor {
+        builtin_descriptor("codex")
+    }
+    fn project_record(&self, value: &Value) -> Result<RecordProjection> {
+        let mut projection = builtin_projection(value)?;
+        projection.session_id = string(value, "session_id").or_else(|| {
+            if string(value, "type").as_deref() == Some("session_meta") {
+                string(&value["payload"], "id")
+            } else {
+                None
+            }
+        });
+        check_content_count(&value["payload"]["content"])?;
+        parse_codex_record(value, &mut projection);
+        Ok(projection)
+    }
+}
+impl HistoryAdapter for ClaudeHistoryAdapter {
+    fn descriptor(&self) -> AdapterDescriptor {
+        builtin_descriptor("claude")
+    }
+    fn project_record(&self, value: &Value) -> Result<RecordProjection> {
+        let mut projection = builtin_projection(value)?;
+        projection.session_id = string(value, "sessionId").or_else(|| string(value, "session_id"));
+        check_content_count(&value["message"]["content"])?;
+        parse_claude_record(value, &mut projection);
+        Ok(projection)
+    }
+}
+fn builtin_descriptor(source_id: &str) -> AdapterDescriptor {
+    AdapterDescriptor {
+        source_id: source_id.into(),
+        version: PARSER_VERSION.into(),
+        capabilities: AdapterCapabilities::readable_only(Vec::new()),
+    }
+}
+fn check_content_count(content: &Value) -> Result<()> {
+    ensure!(
+        content
+            .as_array()
+            .is_none_or(|items| items.len() <= MAX_BLOCKS),
+        "session conversion block limit exceeded ({MAX_BLOCKS})"
+    );
+    Ok(())
+}
+fn builtin_projection(value: &Value) -> Result<RecordProjection> {
+    // Keep legacy builtin validation and mapping inside these adapters, not the engine.
+    for candidate in [
+        value.get("sessionId"),
+        value.get("session_id"),
+        value.get("uuid"),
+        value.get("id"),
+        value.get("branch_id"),
+        value.get("parentUuid"),
+        value.get("parent_id"),
+        value["payload"].get("id"),
+        value["payload"].get("branch_id"),
+        value["payload"].get("parent_id"),
+        value["payload"]["git"].get("branch"),
+    ] {
+        ensure!(
+            candidate
+                .and_then(Value::as_str)
+                .is_none_or(|v| v.len() <= MAX_IDENTIFIER_BYTES),
+            "source identifier exceeds byte limit ({MAX_IDENTIFIER_BYTES})"
+        );
+    }
+    Ok(RecordProjection {
+        branch_id: string(value, "branch_id")
+            .or_else(|| string(&value["payload"], "branch_id"))
+            .or_else(|| string(&value["payload"]["git"], "branch")),
+        source_event_id: string(value, "uuid")
+            .or_else(|| string(value, "id"))
+            .or_else(|| string(&value["payload"], "id")),
+        parent_id: string(value, "parentUuid")
+            .or_else(|| string(value, "parent_id"))
+            .or_else(|| string(&value["payload"], "parent_id")),
+        record_type: string(value, "type"),
+        timestamp: value.get("timestamp").cloned().or_else(|| {
+            value
+                .get("message")
+                .and_then(|v| v.get("timestamp"))
+                .cloned()
+        }),
+        ..RecordProjection::default()
+    })
+}
 
 pub(super) fn string(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_owned)
 }
 
 fn empty_block(kind: &str, source: Value) -> CanonicalBlock {
-    CanonicalBlock {
-        kind: kind.into(),
-        source,
-        text: None,
-        call_id: None,
-        name: None,
-        arguments: None,
-        result: None,
-        status: None,
-        is_error: None,
-        attachment: None,
-        relationship: None,
-    }
+    CanonicalBlock::new(kind, source)
 }
 pub(super) fn opaque(source: Value) -> CanonicalBlock {
     empty_block("opaque", source)
 }
 
-pub(super) fn parse_codex_record(value: &Value, event: &mut CanonicalEvent) {
+pub(super) fn parse_codex_record(value: &Value, event: &mut RecordProjection) {
     let payload = &value["payload"];
     event.source_role = string(payload, "role");
     event.role = event.source_role.clone();
@@ -54,7 +139,7 @@ pub(super) fn parse_codex_record(value: &Value, event: &mut CanonicalEvent) {
     }
 }
 
-pub(super) fn parse_claude_record(value: &Value, event: &mut CanonicalEvent) {
+pub(super) fn parse_claude_record(value: &Value, event: &mut RecordProjection) {
     if let Some(message) = value.get("message") {
         event.source_role = string(message, "role");
         event.role = event.source_role.clone();

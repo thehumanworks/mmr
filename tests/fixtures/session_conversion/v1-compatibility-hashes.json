@@ -1,0 +1,47 @@
+{
+  "baseline_commit": "9c72eeb",
+  "cases": [
+    {
+      "source": "codex",
+      "target": "canonical",
+      "origin": "compat-origin",
+      "sha256": "sha256:60bbf2e602c1f5956322d7f850bc6b54e02b0b4df362fcd92452692444c0e40e",
+      "bytes": 9948
+    },
+    {
+      "source": "codex",
+      "target": "codex-readable",
+      "origin": "compat-origin",
+      "sha256": "sha256:5505b719615e1a13c20e9c00c46bc73b003833c262e8f1a0e15cf4fb668f11ea",
+      "bytes": 19413
+    },
+    {
+      "source": "codex",
+      "target": "claude-readable",
+      "origin": "compat-origin",
+      "sha256": "sha256:2df94ffe1ea22d01fb63456d621e04f5f3e03771518912ed79b759fcdfc76587",
+      "bytes": 20109
+    },
+    {
+      "source": "claude",
+      "target": "canonical",
+      "origin": "compat-origin",
+      "sha256": "sha256:3fc163ebff239677d49c5916f036a95a8babb886b9a062ba0ebd029f6344759a",
+      "bytes": 6348
+    },
+    {
+      "source": "claude",
+      "target": "codex-readable",
+      "origin": "compat-origin",
+      "sha256": "sha256:4a5ceb4edb55d79fda8cd0e016bbe25f513368626af4db62b28c90e0afb11b7c",
+      "bytes": 12053
+    },
+    {
+      "source": "claude",
+      "target": "claude-readable",
+      "origin": "compat-origin",
+      "sha256": "sha256:b18f82cfce5b5815b28a250ae82ee2ad7d2637af7d7858801b9fd1f29e3c77ba",
+      "bytes": 11078
+    }
+  ]
+}
