@@ -2,7 +2,7 @@
 title: "Run bounded assimilation jobs with durable recovery"
 description: "Add opt-in finite queue execution using completed evidence snapshots and pending-only receipts, with truthful uncertainty after owner death."
 date: "2026-10-21"
-status: "in-progress"
+status: "done"
 confidence_floor: 90
 ---
 
@@ -30,7 +30,7 @@ caller completion attestation is distinct from imported lifecycle/model claims.
 - [x] Durable cancellation and lease/fence checks prevent stale owners committing. Proposal receipt and terminal job state commit in one transaction with current evidence validation. All output collections remain pending/rejected, with no learned-memory writes.
 - [x] One-shot/bounded drain uses existing bounded command transport and cooperative cancellation; all controller/runner work joins. Owner-crash orphan limits are explicit and tested, without exactly-once external execution claims.
 - [x] Synthetic tests cover two claimers, expiry/fencing, before-launch and during/after-execution crashes, cancellation, stale evidence, bounded resources, restart and deduplication. Independently reviewed; combined tests, all relevant benchmarks, fmt, strict Clippy and release pass.
-- [ ] Scoped commit and focused PR stacked after20; old heads remain unchanged. Goal records verification and exact remaining boundaries.
+- [x] Scoped commit and focused PR stacked after20; old heads remain unchanged. Goal records verification and exact remaining boundaries.
 
 ## Tasks
 
@@ -101,3 +101,16 @@ An abruptly killed owner can leave an external command alive until it exits: the
 real synthetic fixture demonstrates this. Fencing blocks late publication and
 recovery never automatically reexecutes unknown work. The trusted command has the
 operator's privileges; clearing environment is not a network/filesystem sandbox.
+
+### 2026-10-21 publication and manual goal closeout
+
+- Scoped implementation commit published as
+  `fc6aacb6101ae17800bec3c46cde96ac2ce039b8`, exact verified source tree
+  `e7dc3a54b3205229ac38016899efd7e70c8cfeb2`.
+- Focused PR: https://github.com/thehumanworks/mmr/pull/21, based on PR20.
+  Existing seven feature heads and main were checked unchanged before publication.
+  No merge, deployment, daemon/schedule installation or persistent credential change.
+- All seven DoD checks are now manually eligible at95 confidence. The global GDD
+  helper is unavailable; executable gates and both independent reviews supply
+  evidence. This closeout changes only this goal document; production source,
+  tests and verified release binary are unchanged.
