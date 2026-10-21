@@ -160,6 +160,8 @@ pub enum Commands {
     Assimilate(AssimilateArgs),
     /// Load or install the bundled mmr agent skill
     Skill(SkillArgs),
+    /// Convert an explicit local history file with archival recovery and loss reporting
+    Convert(crate::conversion::ConvertArgs),
     /// Import session or bundle material into this machine
     Import(ImportArgs),
     /// Ingest normalized source events into the local memory store
@@ -1070,6 +1072,9 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     if let Commands::Skill(args) = &cli.command {
         return skill_command_response(args, cli.pretty);
     }
+    if let Commands::Convert(args) = &cli.command {
+        return crate::conversion::command_response(args, cli.pretty);
+    }
     if let Commands::Import(args) = &cli.command {
         return import_command_response(args, source_filter, cli.pretty);
     }
@@ -1158,6 +1163,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::Compact(args) => {
             compact_command_response(&service, args, cli.source, source_filter, cli.pretty).await?
         }
+        Commands::Convert(_) => unreachable!("convert handled before QueryService load"),
         Commands::Import(_) => unreachable!("import handled before QueryService load"),
         Commands::Ingest(_) => unreachable!("ingest handled before QueryService load"),
         Commands::Share(_) => unreachable!("share handled before QueryService load"),
