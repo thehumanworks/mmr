@@ -8,7 +8,9 @@ use crate::redaction::{DeterministicPrivacyDetector, PiiCoverageStatus, scan_tex
 use crate::store::{EventRecord, ProjectRecord, Store, content_hash};
 
 mod command;
-pub use command::{CommandDreamRunner, CommandRunnerError, CommandRunnerLimits};
+pub use command::{
+    CommandCancellation, CommandDreamRunner, CommandRunnerError, CommandRunnerLimits,
+};
 
 pub const ENV_DEFAULT_DREAM_RUNNER: &str = "MMR_DEFAULT_DREAM_RUNNER";
 pub const ENV_DREAM_COMMAND: &str = "MMR_DREAM_COMMAND";

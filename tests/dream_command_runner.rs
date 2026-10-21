@@ -7,8 +7,8 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use mmr::dream::{
-    CommandDreamRunner, CommandRunnerError, CommandRunnerLimits, DreamEvidence, DreamRequest,
-    DreamRunner, EvidenceAccess,
+    CommandCancellation, CommandDreamRunner, CommandRunnerError, CommandRunnerLimits,
+    DreamEvidence, DreamRequest, DreamRunner, EvidenceAccess,
 };
 
 const VALID: &str = r#"{"observations":[{"kind":"pattern","claim":"Synthetic only.","confidence":0.5,"evidence_refs":["mmr://event/fixture"]}]}"#;
@@ -296,4 +296,249 @@ fn command_runner_retains_leader_pid_until_group_cleanup() {
         Some(&CommandRunnerError::Deadline)
     );
     assert_reaped(&pid_path);
+}
+
+fn wait_for_marker(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(path.exists(), "synthetic child did not reach marker");
+}
+
+fn wait_for_pid(path: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Ok(value) = fs::read_to_string(path) {
+            if let Ok(pid) = value.trim().parse() {
+                return pid;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "fixture did not record a complete PID"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[cfg(not(target_os = "redox"))]
+fn wait_for_exited_leader(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        // SAFETY: inspect this synthetic owned child without consuming status.
+        let mut information: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut information,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == 0 && information.si_signo != 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "fixture leader did not remain waitable"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn command_cancellation_prevents_spawn_and_stays_sticky() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let marker = tmp.path().join("spawned");
+    let cancellation = CommandCancellation::default();
+    let clone = cancellation.clone();
+    assert!(!cancellation.is_cancelled());
+    clone.request_cancel();
+    cancellation.request_cancel();
+    assert!(cancellation.is_cancelled() && clone.is_cancelled());
+    let runner = shell(
+        "cat >/dev/null; touch \"$1\"; printf '%s' \"$2\"",
+        &[marker.to_str().expect("marker"), VALID],
+        limits(),
+    );
+    for token in [&cancellation, &clone] {
+        let err = runner
+            .run_with_cancellation(&request(), token)
+            .expect_err("pre-cancel");
+        assert_eq!(
+            err.downcast_ref::<CommandRunnerError>(),
+            Some(&CommandRunnerError::Cancelled)
+        );
+    }
+    assert!(!marker.exists(), "pre-cancelled run spawned child");
+    assert_eq!(
+        runner
+            .run(&request())
+            .expect("marker positive control")
+            .observations
+            .len(),
+        1
+    );
+    assert!(marker.exists(), "uncancelled fixture must create marker");
+}
+
+#[test]
+fn command_cancellation_interrupts_blocked_stdin_and_reaps() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let pid = tmp.path().join("pid");
+    let runner = shell(
+        "printf '%s' \"$$\" > \"$1\"; exec sleep 30",
+        &[pid.to_str().expect("pid")],
+        limits(),
+    );
+    let cancellation = CommandCancellation::default();
+    let worker_token = cancellation.clone();
+    let mut input = request();
+    input.evidence[0].content_text = "q".repeat(2 * 1024 * 1024);
+    let handle = std::thread::spawn(move || runner.run_with_cancellation(&input, &worker_token));
+    wait_for_pid(&pid);
+    let started = Instant::now();
+    cancellation.request_cancel();
+    let err = handle
+        .join()
+        .expect("join caller")
+        .expect_err("cancelled stdin");
+    assert_eq!(
+        err.downcast_ref::<CommandRunnerError>(),
+        Some(&CommandRunnerError::Cancelled)
+    );
+    let elapsed = started.elapsed();
+    eprintln!("CANCEL_ACK_MS={:.3}", elapsed.as_secs_f64() * 1000.0);
+    assert!(elapsed < Duration::from_secs(2));
+    assert_reaped(&pid);
+}
+
+#[test]
+fn command_cancellation_drains_verbose_streams_then_joins_cleanup() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let pid = tmp.path().join("pid");
+    let ready = tmp.path().join("ready");
+    let script = r#"printf '%s' "$$" > "$1"; dd if=/dev/zero bs=1024 count=128 2>/dev/null; dd if=/dev/zero bs=1024 count=128 2>/dev/null | tr '\000' x >&2; touch "$2"; exec sleep 30"#;
+    let runner = shell(
+        script,
+        &[pid.to_str().expect("pid"), ready.to_str().expect("ready")],
+        limits(),
+    );
+    let cancellation = CommandCancellation::default();
+    let worker_token = cancellation.clone();
+    let handle =
+        std::thread::spawn(move || runner.run_with_cancellation(&request(), &worker_token));
+    wait_for_marker(&ready);
+    cancellation.request_cancel();
+    let err = handle
+        .join()
+        .expect("join caller")
+        .expect_err("cancelled streams");
+    assert_eq!(
+        err.downcast_ref::<CommandRunnerError>(),
+        Some(&CommandRunnerError::Cancelled)
+    );
+    assert!(!format!("{err:#}").contains("xxxxx"));
+    assert_reaped(&pid);
+}
+
+#[test]
+#[cfg(not(target_os = "redox"))]
+fn command_cancellation_stops_inherited_pipe_descendants() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let pid = tmp.path().join("pid");
+    let marker = tmp.path().join("descendant-completed");
+    let script = "cat >/dev/null; printf '%s' \"$$\" > \"$1\"; (sleep 1; touch \"$2\") & exit 0";
+    let runner = shell(
+        script,
+        &[pid.to_str().expect("pid"), marker.to_str().expect("marker")],
+        limits(),
+    );
+    let cancellation = CommandCancellation::default();
+    let worker_token = cancellation.clone();
+    let handle =
+        std::thread::spawn(move || runner.run_with_cancellation(&request(), &worker_token));
+    let leader = wait_for_pid(&pid);
+    wait_for_exited_leader(leader);
+    cancellation.request_cancel();
+    let err = handle
+        .join()
+        .expect("join caller")
+        .expect_err("cancelled inherited pipes");
+    assert_eq!(
+        err.downcast_ref::<CommandRunnerError>(),
+        Some(&CommandRunnerError::Cancelled)
+    );
+    assert_reaped(&pid);
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(
+        !marker.exists(),
+        "descendant survived acknowledged cancellation"
+    );
+}
+
+#[test]
+fn command_cancellation_isolated_handles_and_success_compatibility() {
+    let cancelled = CommandCancellation::default();
+    cancelled.request_cancel();
+    let unrelated = CommandCancellation::default();
+    let runner = shell(
+        &format!("cat >/dev/null; printf '%s' '{VALID}'"),
+        &[],
+        limits(),
+    );
+    assert_eq!(
+        runner
+            .run_with_cancellation(&request(), &unrelated)
+            .expect("unrelated run")
+            .observations
+            .len(),
+        1
+    );
+    assert_eq!(
+        runner
+            .run(&request())
+            .expect("legacy API")
+            .observations
+            .len(),
+        1
+    );
+    assert!(!unrelated.is_cancelled());
+}
+
+#[tokio::test]
+async fn command_cancellation_wakes_a_nested_runtime_from_another_runtime() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let pid = tmp.path().join("pid");
+    let runner = shell(
+        "printf '%s' \"$$\" > \"$1\"; exec sleep 30",
+        &[pid.to_str().expect("pid")],
+        limits(),
+    );
+    let cancellation = CommandCancellation::default();
+    let other = cancellation.clone();
+    let signal_pid = pid.clone();
+    let canceller = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("other runtime")
+            .block_on(async {
+                wait_for_pid(&signal_pid);
+                for _ in 0..16 {
+                    other.request_cancel();
+                    tokio::task::yield_now().await;
+                }
+            });
+    });
+    let err = runner
+        .run_with_cancellation(&request(), &cancellation)
+        .expect_err("cross-runtime cancel");
+    canceller.join().expect("canceller joined");
+    assert_eq!(
+        err.downcast_ref::<CommandRunnerError>(),
+        Some(&CommandRunnerError::Cancelled)
+    );
+    assert_reaped(&pid);
 }
