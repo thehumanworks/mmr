@@ -8,8 +8,9 @@ use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub mod evidence;
+pub mod jobs;
 
-pub const LATEST_SCHEMA_VERSION: i64 = 3;
+pub const LATEST_SCHEMA_VERSION: i64 = 4;
 pub const DEFAULT_REDACTION_POLICY_ID: &str = "redaction-policy:v1:default";
 
 #[derive(Debug, Clone, Serialize)]
@@ -322,6 +323,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 3,
         name: "completed_evidence_fences",
         sql: evidence::SCHEMA,
+    },
+    Migration {
+        version: 4,
+        name: "durable_assimilation_jobs",
+        sql: jobs::SCHEMA,
     },
 ];
 

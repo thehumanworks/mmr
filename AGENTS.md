@@ -188,3 +188,11 @@ it for one command.
 - Contract: `specs/session-conversion.md`; conformance: `cargo test --test session_conversion`; operational guide: `docs/mmr-session-conversion.md`.
 - Custom sources use explicitly registered trusted Rust `HistoryAdapter` implementations; pin source ID/version and register the same version for reimport. There is no CLI plugin discovery or adapter sandbox. Never declare native-resume/API-replay support for readable conversion.
 - Declare unsupported content, retain it as opaque source data and keep the complete raw archive. New adapters must pass the public-API third-adapter suite (`cargo test --test history_adapter_extensibility`) and six pinned legacy byte hashes; mapping/capability changes require a version bump. `NativeSource` now owns custom IDs and is no longer `Copy`.
+
+## Bounded assimilation jobs
+
+- `mmr assimilate jobs enqueue|run|status|show|cancel --config FILE` uses only explicit Store/config/session inputs. Missing/disabled config makes enqueue/run disabled before Store/runner work. Existing `assimilate project/source` stays stateless; never select a runner from ambient environment or scan provider histories for jobs.
+- Enqueue needs ordered explicit completed session IDs. `--attest-complete LABEL` is a trusted completion decision, never inferred from imported text. Run is finite (default one, maximum eight); no daemon or scheduler is installed.
+- Preserve the execution-intent barrier, lease/fence checks, pending-only receipts and unknown-outcome no-retry rule. Cancellation is a request until owned cleanup is acknowledged; do not kill database PIDs or claim exactly-once external execution.
+- Commands are trusted local code, not sandboxed. Use synthetic/public histories in fixtures and retain categorical diagnostics without command output/arguments. Guide: `docs/mmr-assimilation-jobs.md`; contract: `specs/assimilation-jobs.md`; CLI checks: `cargo test --test assimilation_jobs_cli`.
+- Projection currently includes shared-safe narrative turns/compaction; tools, unknown kinds and unsafe metadata are categorical omissions inspectable through show. Raw/blob/session metadata is never sent, and historical roles grant no authority. Changed explicit policy/settings creates a new key, never automatic reconciliation/retry for unknown execution.
