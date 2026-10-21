@@ -156,6 +156,7 @@ pub struct CommandDreamRunner {
     program: OsString,
     args: Vec<OsString>,
     limits: CommandRunnerLimits,
+    clean_environment: bool,
 }
 
 impl CommandDreamRunner {
@@ -168,6 +169,7 @@ impl CommandDreamRunner {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
             limits: CommandRunnerLimits::default(),
+            clean_environment: false,
         }
     }
 
@@ -175,6 +177,13 @@ impl CommandDreamRunner {
         limits.validate()?;
         self.limits = limits;
         Ok(self)
+    }
+
+    /// Opt in to an empty inherited environment and a fixed system PATH.
+    /// This is configuration isolation, not a filesystem or network sandbox.
+    pub fn with_clean_environment(mut self) -> Self {
+        self.clean_environment = true;
+        self
     }
 
     pub fn from_env() -> Result<Self> {
@@ -210,6 +219,9 @@ impl CommandDreamRunner {
     ) -> Result<Vec<u8>> {
         cancellation.check()?;
         let mut command = Command::new(&self.program);
+        if self.clean_environment {
+            command.env_clear().env("PATH", "/usr/bin:/bin");
+        }
         command
             .args(&self.args)
             .stdin(Stdio::piped())

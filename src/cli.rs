@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::agent::{ai, compact};
+use crate::assimilation_jobs::JobsAction;
 use crate::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, Reconciler, SourceAdapter, SourceDiscoveryRoot,
 };
@@ -574,6 +575,44 @@ pub enum AssimilateCommand {
     Project(AssimilateProjectArgs),
     /// Return source-wide prompt/runbook/output contract/evidence
     Source(AssimilateSourceArgs),
+    /// Inspect or run explicitly configured bounded local assimilation jobs
+    Jobs(AssimilateJobsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AssimilateJobsArgs {
+    /// Explicit bounded JSON job configuration; never inferred from environment or history
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+    #[command(subcommand)]
+    command: AssimilateJobsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AssimilateJobsCommand {
+    /// Enqueue explicitly selected completed sessions without running a command
+    Enqueue {
+        /// Ordered session selection; repeat this flag for each session
+        #[arg(long = "session", action = clap::ArgAction::Append)]
+        session_ids: Vec<String>,
+        /// Explicit trusted completion attestation; never inferred from imported text
+        #[arg(long)]
+        attest_complete: Option<String>,
+    },
+    /// Run a finite number of queued jobs, then exit
+    Run {
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=8))]
+        max_jobs: u8,
+    },
+    /// List bounded job summaries without proposal bodies
+    Status {
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u16).range(1..=100))]
+        limit: u16,
+    },
+    /// Inspect one job and its pending proposal receipt
+    Show { job_id: String },
+    /// Persist a cancellation request without claiming uncertain cleanup succeeded
+    Cancel { job_id: String },
 }
 
 #[derive(Args, Debug)]
@@ -1056,6 +1095,15 @@ impl From<BundleOutputFormatArg> for TeleportOutputFormat {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
+    if let Commands::Assimilate(AssimilateArgs {
+        command: AssimilateCommand::Jobs(args),
+    }) = &cli.command
+    {
+        if cli.source.is_some() {
+            bail!("assimilate jobs does not accept --source; use explicit config and session IDs");
+        }
+        return assimilation_jobs_response(args, cli.pretty);
+    }
     let source_filter = effective_source(cli.source);
     if let Commands::Mcp(args) = &cli.command {
         return crate::mcp::run_mcp(args, cli.pretty).await;
@@ -4660,7 +4708,36 @@ fn assimilate_response(
             let source = require_explicit_source(cli_source, "assimilate source")?;
             assimilate_source_response(args, source)
         }
+        AssimilateCommand::Jobs(_) => unreachable!("jobs handled before history/config discovery"),
     }
+}
+
+fn assimilation_jobs_response(args: &AssimilateJobsArgs, pretty: bool) -> Result<String> {
+    let action = match &args.command {
+        AssimilateJobsCommand::Enqueue {
+            session_ids,
+            attest_complete,
+        } => JobsAction::Enqueue {
+            session_ids: session_ids.clone(),
+            attest_complete: attest_complete.clone(),
+        },
+        AssimilateJobsCommand::Run { max_jobs } => JobsAction::Run {
+            max_jobs: *max_jobs,
+        },
+        AssimilateJobsCommand::Status { limit } => JobsAction::Status {
+            limit: usize::from(*limit),
+        },
+        AssimilateJobsCommand::Show { job_id } => JobsAction::Show {
+            job_id: job_id.clone(),
+        },
+        AssimilateJobsCommand::Cancel { job_id } => JobsAction::Cancel {
+            job_id: job_id.clone(),
+        },
+    };
+    serialize(
+        &crate::assimilation_jobs::execute(args.config.as_deref(), action)?,
+        pretty,
+    )
 }
 
 fn assimilate_project_response(args: &AssimilateProjectArgs) -> Result<DreamResponse> {

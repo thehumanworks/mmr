@@ -44,7 +44,10 @@ fn v2_migration_backfills_unsealed_counters_and_pages_ties_without_loss() {
         .unwrap();
     drop(old);
     let mut migrated = Store::open(&path).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 3);
+    assert_eq!(
+        migrated.schema_version().unwrap(),
+        crate::store::LATEST_SCHEMA_VERSION
+    );
     let tiny = EvidenceBudget {
         max_sessions: 1,
         ..EvidenceBudget::default()

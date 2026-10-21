@@ -53,7 +53,7 @@ impl Write for BoundedJson {
         Ok(())
     }
 }
-fn json<T: Serialize>(value: &T, limit: usize) -> Result<String> {
+pub(super) fn json<T: Serialize>(value: &T, limit: usize) -> Result<String> {
     let mut writer = BoundedJson {
         bytes: Vec::new(),
         limit,
@@ -553,45 +553,7 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let project_bytes: i64 = tx.query_row("SELECT length(CAST(project_id AS BLOB)) FROM evidence_sessions WHERE session_id=?1 AND present=1", [session_id], |r|r.get(0)).optional()?.ok_or_else(||anyhow!("evidence session is missing"))?;
-        if project_bytes > MAX_LABEL_BYTES as i64 {
-            bail!("evidence project identity exceeds byte bound");
-        }
-        let project_id: String = tx
-            .query_row(
-                "SELECT project_id FROM evidence_sessions WHERE session_id=?1 AND present=1",
-                [session_id],
-                |r| r.get(0),
-            )
-            .optional()?
-            .ok_or_else(|| anyhow!("evidence session is missing"))?;
-        // Preflight even for a repeated seal; callers cannot bypass smaller budgets.
-        let ids = [session_id.to_string()];
-        let (project, sessions) = current_sessions(&tx, &project_id, &ids, budget)?;
-        if let Some(existing) = seal(&tx, session_id)? {
-            if existing.attestation == attestation
-                && existing.digest
-                    == session_digest(&watermark(&tx)?.store_epoch, &project, &sessions[0], budget)?
-            {
-                tx.commit()?;
-                return Ok(existing);
-            }
-        }
-        let now = now_rfc3339()?;
-        tx.execute(
-            "UPDATE sessions SET ended_at=?2 WHERE id=?1",
-            params![session_id, now],
-        )?;
-        let epoch = watermark(&tx)?.store_epoch;
-        let (project, mut sessions) = current_sessions(&tx, &project_id, &ids, budget)?;
-        let current = sessions
-            .pop()
-            .ok_or_else(|| anyhow!("evidence session is missing"))?;
-        let hash = session_digest(&epoch, &project, &current, budget)?;
-        let sequence = advance(&tx)?;
-        tx.execute("UPDATE evidence_sessions SET sealed_revision=revision,seal_digest=?2,attestation=?3,sealed_at=?4,seal_seq=?5,changed_seq=?5 WHERE session_id=?1",params![session_id,hash,attestation,now,sequence])?;
-        let completed =
-            seal(&tx, session_id)?.ok_or_else(|| anyhow!("completion seal was not stored"))?;
+        let completed = attest_completion_on_tx(&tx, session_id, attestation, budget)?;
         tx.commit()?;
         Ok(completed)
     }
@@ -678,7 +640,7 @@ impl Store {
     pub fn commit_snapshot_proposals(
         &mut self,
         snapshot_id: &str,
-        mut output: DreamRunnerOutput,
+        output: DreamRunnerOutput,
         budget: EvidenceBudget,
     ) -> Result<ProposalReceipt> {
         budget.validate()?;
@@ -687,24 +649,8 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // Validate BEFORE duplicate lookup: stale evidence cannot get fresh success
-        // by replaying an otherwise identical old receipt.
-        let current = validate_snapshot_on_tx(&tx, snapshot_id, budget)?;
-        let refs = current
-            .events
-            .iter()
-            .map(|e| format!("mmr://event/{}", e.id))
-            .collect::<BTreeSet<_>>();
-        validate_output(&mut output, &refs)
-            .map_err(|_| anyhow!("invalid snapshot proposal schema or evidence reference"))?;
-        let body = json(&output, MAX_PROPOSAL_BYTES)?;
-        let hash = content_hash(&body);
-        let id = format!(
-            "evidence-receipt:v1:{}",
-            content_hash(&format!("{snapshot_id}:{hash}")).trim_start_matches("sha256:")
-        );
-        tx.execute("INSERT INTO evidence_proposal_receipts(id,snapshot_id,output_hash,proposal_json,created_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(snapshot_id,output_hash) DO NOTHING",params![id,snapshot_id,hash,body,now_rfc3339()?])?;
-        let result = receipt(&tx, &id)?;
+        let result =
+            commit_proposals_on_tx(&tx, snapshot_id, output, budget, None, MAX_PROPOSAL_BYTES)?;
         tx.commit()?;
         Ok(result)
     }
@@ -715,6 +661,108 @@ impl Store {
         receipt(&self.conn, id)
     }
 }
+/// Caller holds one immediate transaction, including any scope/batch checks.
+pub(super) fn attest_completion_on_tx(
+    tx: &Transaction<'_>,
+    session_id: &str,
+    attestation: &str,
+    budget: EvidenceBudget,
+) -> Result<CompletionSeal> {
+    budget.validate()?;
+    label(session_id)?;
+    label(attestation)?;
+    let project_bytes: i64 = tx.query_row("SELECT length(CAST(project_id AS BLOB)) FROM evidence_sessions WHERE session_id=?1 AND present=1", [session_id], |r|r.get(0)).optional()?.ok_or_else(||anyhow!("evidence session is missing"))?;
+    if project_bytes > MAX_LABEL_BYTES as i64 {
+        bail!("evidence project identity exceeds byte bound");
+    }
+    let project_id: String = tx
+        .query_row(
+            "SELECT project_id FROM evidence_sessions WHERE session_id=?1 AND present=1",
+            [session_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("evidence session is missing"))?;
+    // Preflight even for a repeated seal; callers cannot bypass smaller budgets.
+    let ids = [session_id.to_string()];
+    let (project, sessions) = current_sessions(tx, &project_id, &ids, budget)?;
+    if let Some(existing) = seal(tx, session_id)? {
+        if existing.attestation == attestation
+            && existing.digest
+                == session_digest(&watermark(tx)?.store_epoch, &project, &sessions[0], budget)?
+        {
+            return Ok(existing);
+        }
+    }
+    let now = now_rfc3339()?;
+    tx.execute(
+        "UPDATE sessions SET ended_at=?2 WHERE id=?1",
+        params![session_id, now],
+    )?;
+    let epoch = watermark(tx)?.store_epoch;
+    let (project, mut sessions) = current_sessions(tx, &project_id, &ids, budget)?;
+    let current = sessions
+        .pop()
+        .ok_or_else(|| anyhow!("evidence session is missing"))?;
+    let hash = session_digest(&epoch, &project, &current, budget)?;
+    let sequence = advance(tx)?;
+    tx.execute("UPDATE evidence_sessions SET sealed_revision=revision,seal_digest=?2,attestation=?3,sealed_at=?4,seal_seq=?5,changed_seq=?5 WHERE session_id=?1",params![session_id,hash,attestation,now,sequence])?;
+    let completed =
+        seal(tx, session_id)?.ok_or_else(|| anyhow!("completion seal was not stored"))?;
+
+    Ok(completed)
+}
+
+pub(super) fn preflight_completion_sessions(
+    tx: &Transaction<'_>,
+    project: &str,
+    ids: &[String],
+    budget: EvidenceBudget,
+) -> Result<()> {
+    current_sessions(tx, project, ids, budget).map(|_| ())
+}
+
+/// Dedicated receipt integration for a caller already holding the evidence/job fence.
+/// Restricted citations are selected by the trusted shared-safe projection worker.
+pub(super) fn commit_proposals_on_tx(
+    tx: &Transaction<'_>,
+    snapshot_id: &str,
+    mut output: DreamRunnerOutput,
+    budget: EvidenceBudget,
+    restricted_refs: Option<&BTreeSet<String>>,
+    max_output_bytes: usize,
+) -> Result<ProposalReceipt> {
+    if max_output_bytes == 0 || max_output_bytes > MAX_PROPOSAL_BYTES {
+        bail!("invalid proposal byte bound");
+    }
+    json(&output, max_output_bytes)?;
+    // Validate BEFORE duplicate lookup: stale evidence cannot get fresh success
+    // by replaying an otherwise identical old receipt.
+    let current = validate_snapshot_on_tx(tx, snapshot_id, budget)?;
+    let refs = current
+        .events
+        .iter()
+        .map(|e| format!("mmr://event/{}", e.id))
+        .collect::<BTreeSet<_>>();
+    let refs = match restricted_refs {
+        Some(restricted) if restricted.is_subset(&refs) => restricted,
+        Some(_) => bail!("proposal citations are outside current snapshot"),
+        None => &refs,
+    };
+    validate_output(&mut output, refs)
+        .map_err(|_| anyhow!("invalid snapshot proposal schema or evidence reference"))?;
+    let body = json(&output, max_output_bytes)?;
+    let hash = content_hash(&body);
+    let id = format!(
+        "evidence-receipt:v1:{}",
+        content_hash(&format!("{snapshot_id}:{hash}")).trim_start_matches("sha256:")
+    );
+    tx.execute("INSERT INTO evidence_proposal_receipts(id,snapshot_id,output_hash,proposal_json,created_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(snapshot_id,output_hash) DO NOTHING",params![id,snapshot_id,hash,body,now_rfc3339()?])?;
+    let result = receipt(tx, &id)?;
+
+    Ok(result)
+}
+
 fn revocation(conn: &Connection, id: &str) -> Result<Option<EvidenceRevocation>> {
     let oversized: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM evidence_revocations WHERE event_id=?1 AND (length(CAST(project_id AS BLOB))>1024 OR length(CAST(reason AS BLOB))>1024))", [id], |r|r.get(0))?;
     if oversized {

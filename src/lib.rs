@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod assimilation_jobs;
 pub mod capture;
 pub mod cli;
 pub mod config;
