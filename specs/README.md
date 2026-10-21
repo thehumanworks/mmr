@@ -13,6 +13,8 @@ When implementing or reviewing behavior:
 
 - [Command taxonomy](../docs/mmr-command-taxonomy.md)
 - [Recall and read session behavior](messages.md)
+- [Canonical session conversion](session-conversion.md)
+- [Session conversion user guide](../docs/mmr-session-conversion.md)
 - [Session sharing and remote reads](session-sharing.md)
 - [Session sharing user guide](../docs/mmr-session-sharing.md)
 - [Session sharing validation](../docs/mmr-session-sharing-validation.md)

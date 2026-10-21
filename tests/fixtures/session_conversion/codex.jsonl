@@ -1,0 +1,7 @@
+{"type":"session_meta","timestamp":"2026-10-21T00:00:00+02:00","payload":{"id":"session-a","cwd":"/synthetic/project","branch_id":"branch-a","future_metadata":{"retain":true}}}
+{"type":"response_item","timestamp":"2026-10-21T00:00:01Z","payload":{"type":"function_call","id":"msg-a","call_id":"parallel-a","name":"inspect","arguments":"{\"file\":\"a\"}","future_call":42}}
+{"type":"response_item","timestamp":"2026-10-21T00:00:01Z","payload":{"type":"function_call","id":"msg-b","call_id":"parallel-b","name":"inspect","arguments":"{\"file\":\"b\"}"}}
+{"type":"response_item","timestamp":"2026-10-21T00:00:02Z","payload":{"type":"function_call_output","call_id":"parallel-b","output":"result-b"}}
+{"type":"response_item","timestamp":"2026-10-21T00:00:02Z","payload":{"type":"function_call_output","call_id":"parallel-a","output":"result-a"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"First"},{"type":"image","url":"attachment://sha256/fixture","sha256":"fixture-hash","mime_type":"image/png"},{"type":"future_block","opaque":{"keep":[1,2]}},{"type":"output_text","text":"Last"}]},"future_record":{"keep":true}}
+{"type":"response_item","payload":{"type":"function_call","call_id":"pending","name":"inspect","arguments":"{}"}}
