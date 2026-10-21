@@ -1,8 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Write};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,13 +7,15 @@ use serde_json::Value;
 use crate::redaction::{DeterministicPrivacyDetector, PiiCoverageStatus, scan_text_with_detector};
 use crate::store::{EventRecord, ProjectRecord, Store, content_hash};
 
+mod command;
+pub use command::{CommandDreamRunner, CommandRunnerError, CommandRunnerLimits};
+
 pub const ENV_DEFAULT_DREAM_RUNNER: &str = "MMR_DEFAULT_DREAM_RUNNER";
 pub const ENV_DREAM_COMMAND: &str = "MMR_DREAM_COMMAND";
 pub const ENV_DREAM_MOCK_FAILURE: &str = "MMR_DREAM_MOCK_FAILURE";
 pub const ENV_DREAM_MOCK_OUTPUT: &str = "MMR_DREAM_MOCK_OUTPUT";
 pub const DEFAULT_DREAM_RUNNER: &str = "mock";
-const ACTIVE_CONFIDENCE_MIN: f64 = 0.8;
-const COMMAND_RUNNER_TIMEOUT: Duration = Duration::from_secs(60);
+const MODEL_ACTIVATION_WARNING: &str = "Model-requested activation was kept pending; activation requires a separate trusted review decision.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -162,6 +160,7 @@ pub struct DreamUsage {
     pub cost_usd: Option<f64>,
 }
 
+/// Schema- and citation-checked proposals, not verified facts or activation decisions.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ValidatedDreamOutput {
     pub learned_memory: Vec<ValidatedLearnedMemory>,
@@ -202,12 +201,6 @@ pub trait DreamRunner {
 #[derive(Debug, Clone)]
 pub struct MockDreamRunner {
     output: Result<String, String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CommandDreamRunner {
-    program: String,
-    args: Vec<String>,
 }
 
 impl DreamRunnerConfig {
@@ -337,64 +330,6 @@ impl DreamRunner for MockDreamRunner {
     }
 }
 
-impl CommandDreamRunner {
-    pub fn from_env() -> Result<Self> {
-        let command = std::env::var(ENV_DREAM_COMMAND)
-            .ok()
-            .and_then(|value| non_empty(Some(&value)).map(str::to_string))
-            .ok_or_else(|| anyhow::anyhow!("{ENV_DREAM_COMMAND} is not set"))?;
-        let (program, args) = parse_command_parts(&command)?;
-        Ok(Self { program, args })
-    }
-}
-
-impl DreamRunner for CommandDreamRunner {
-    fn run(&self, request: &DreamRequest) -> Result<DreamRunnerOutput> {
-        if request.evidence_access != EvidenceAccess::SharedSafe {
-            bail!("command dream runner requires shared-safe evidence");
-        }
-        let mut child = Command::new(&self.program)
-            .args(&self.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("spawn dream command {}", self.display_command()))?;
-        {
-            let mut stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("dream command stdin unavailable"))?;
-            serde_json::to_writer(&mut stdin, request).context("write dream request")?;
-            stdin.write_all(b"\n").context("terminate dream request")?;
-        }
-        let status = wait_for_child(&mut child, COMMAND_RUNNER_TIMEOUT)?;
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        if let Some(mut pipe) = child.stdout.take() {
-            pipe.read_to_string(&mut stdout)
-                .context("read dream command stdout")?;
-        }
-        if let Some(mut pipe) = child.stderr.take() {
-            pipe.read_to_string(&mut stderr)
-                .context("read dream command stderr")?;
-        }
-        if !status.success() {
-            bail!("dream command failed: {}", stderr.trim());
-        }
-        parse_runner_output(&stdout, request.evidence_refs())
-    }
-}
-
-impl CommandDreamRunner {
-    fn display_command(&self) -> String {
-        std::iter::once(self.program.as_str())
-            .chain(self.args.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-}
-
 fn parse_command_parts(command: &str) -> Result<(String, Vec<String>)> {
     let parts = command
         .split_whitespace()
@@ -404,27 +339,6 @@ fn parse_command_parts(command: &str) -> Result<(String, Vec<String>)> {
         bail!("{ENV_DREAM_COMMAND} is empty");
     };
     Ok((program.clone(), args.to_vec()))
-}
-
-fn wait_for_child(
-    child: &mut std::process::Child,
-    timeout: Duration,
-) -> Result<std::process::ExitStatus> {
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait().context("poll dream command")? {
-            return Ok(status);
-        }
-        if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!(
-                "dream command timed out after {} seconds",
-                timeout.as_secs()
-            );
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
 }
 
 pub fn build_evidence_request(
@@ -549,8 +463,9 @@ pub fn validate_dream_output(
             evidence_refs: observation.evidence_refs.clone(),
             counterevidence_refs: observation.counterevidence_refs.clone(),
             status: match observation.status {
-                DreamObservationStatus::Active => ValidatedLearnedMemoryStatus::Active,
-                DreamObservationStatus::Pending => ValidatedLearnedMemoryStatus::Pending,
+                DreamObservationStatus::Active | DreamObservationStatus::Pending => {
+                    ValidatedLearnedMemoryStatus::Pending
+                }
                 DreamObservationStatus::Rejected => ValidatedLearnedMemoryStatus::Rejected,
             },
         })
@@ -575,6 +490,8 @@ pub fn run_and_validate_dream(
     validate_dream_output(&request.evidence_refs(), output)
 }
 
+/// Validate untrusted model proposals without making an activation decision.
+/// Citation membership and confidence do not establish support or authority.
 pub fn validate_output(
     output: &mut DreamRunnerOutput,
     valid_evidence_refs: &BTreeSet<String>,
@@ -582,6 +499,7 @@ pub fn validate_output(
     if output.observations.is_empty() {
         bail!("dream output must include at least one observation");
     }
+    let mut requested_activation = false;
     for observation in output
         .observations
         .iter_mut()
@@ -590,13 +508,22 @@ pub fn validate_output(
         .chain(output.counterevidence.iter_mut())
     {
         validate_observation(observation, valid_evidence_refs)?;
+        requested_activation |= observation.status == DreamObservationStatus::Active;
         if observation.status != DreamObservationStatus::Rejected {
-            observation.status = if observation.confidence >= ACTIVE_CONFIDENCE_MIN {
-                DreamObservationStatus::Active
-            } else {
-                DreamObservationStatus::Pending
-            };
+            observation.status = DreamObservationStatus::Pending;
         }
+    }
+    if requested_activation
+        && !output
+            .diagnostics
+            .warnings
+            .iter()
+            .any(|warning| warning == MODEL_ACTIVATION_WARNING)
+    {
+        output
+            .diagnostics
+            .warnings
+            .push(MODEL_ACTIVATION_WARNING.to_string());
     }
     Ok(())
 }
@@ -796,7 +723,7 @@ mod tests {
         assert_eq!(output.observations.len(), 1);
         assert_eq!(
             output.observations[0].status,
-            DreamObservationStatus::Active
+            DreamObservationStatus::Pending
         );
     }
 
@@ -814,6 +741,65 @@ mod tests {
             .run(&request)
             .expect_err("hallucinated evidence ref should fail");
         assert!(err.to_string().contains("missing evidence"));
+    }
+
+    #[test]
+    fn model_activation_is_pending_for_all_proposal_collections_and_idempotent() {
+        let (_tmp, _store, _project, request) = seeded_request();
+        let evidence_ref = &request.evidence[0].evidence_ref;
+        for requested_status in ["active", "pending", "rejected"] {
+            let proposal = serde_json::json!({
+                "kind": "claim",
+                "claim": "Unrelated unsupported claim using a valid citation.",
+                "confidence": 0.99,
+                "status": requested_status,
+                "evidence_refs": [evidence_ref],
+                "counterevidence_refs": [evidence_ref]
+            });
+            let mut output: DreamRunnerOutput = serde_json::from_value(serde_json::json!({
+                "observations": [proposal.clone()],
+                "claims": [proposal.clone()],
+                "learned_memory_updates": [proposal.clone()],
+                "counterevidence": [proposal]
+            }))
+            .expect("proposal output");
+            validate_output(&mut output, &request.evidence_refs()).expect("validate proposals");
+            let expected = if requested_status == "rejected" {
+                DreamObservationStatus::Rejected
+            } else {
+                DreamObservationStatus::Pending
+            };
+            for item in output
+                .observations
+                .iter()
+                .chain(&output.claims)
+                .chain(&output.learned_memory_updates)
+                .chain(&output.counterevidence)
+            {
+                assert_eq!(item.status, expected, "requested {requested_status}");
+                assert_eq!(item.counterevidence_refs, vec![evidence_ref.clone()]);
+            }
+            assert_eq!(
+                output.diagnostics.warnings.len(),
+                usize::from(requested_status == "active")
+            );
+            let once = output.clone();
+            validate_output(&mut output, &request.evidence_refs()).expect("validate again");
+            assert_eq!(
+                output, once,
+                "repeat validation preserves proposals and diagnostics"
+            );
+            let validated = validate_dream_output(&request.evidence_refs(), output)
+                .expect("final proposal validation");
+            assert_eq!(
+                validated.learned_memory[0].status,
+                if requested_status == "rejected" {
+                    ValidatedLearnedMemoryStatus::Rejected
+                } else {
+                    ValidatedLearnedMemoryStatus::Pending
+                }
+            );
+        }
     }
 
     #[test]
