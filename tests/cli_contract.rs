@@ -4961,7 +4961,7 @@ fn peer_pack_response_from_bundle(fixture: &TestFixture, bundle_path: &Path, res
 }
 
 #[test]
-fn import_session_from_remote_read_only_reads_without_applying() {
+fn import_session_from_remote_defaults_to_read_only() {
     let fixture = TestFixture::seeded();
     let (_share_json, bundle_path) = share_codex_bundle_to_file(&fixture);
     let response_path = fixture.home.join("peer-import-read-only-response.json");
@@ -4997,7 +4997,6 @@ cat "$MMR_FAKE_PEER_RESPONSE"
             "sess-codex-1",
             "--project",
             "/Users/test/codex-proj",
-            "--read-only",
         ],
         &[
             ("PATH", path.as_str()),
@@ -5145,4 +5144,82 @@ fn teleport_provider_profile_dispatch_unknown_provider() {
         Err(err) => assert!(err.message.contains("unsupported teleport provider")),
         Ok(_) => panic!("unknown provider should be rejected"),
     }
+}
+
+#[test]
+fn import_session_rejects_invalid_peer_bundles_before_cache_writes() {
+    let fixture = TestFixture::seeded();
+    let (_, bundle_path) = share_codex_bundle_to_file(&fixture);
+    let response_path = fixture.home.join("invalid-peer-response.json");
+    peer_pack_response_from_bundle(&fixture, &bundle_path, &response_path);
+    let original: serde_json::Value =
+        serde_json::from_slice(&fs::read(&response_path).unwrap()).unwrap();
+    let fake_bin = fixture.home.join("fake-bin-invalid-peer");
+    write_executable(
+        &fake_bin.join("ssh"),
+        "#!/bin/sh\ncat > /dev/null\ncat \"$MMR_FAKE_PEER_RESPONSE\"\n",
+    );
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    for (kind, expected) in [
+        ("outer-id", "peer bundle_id does not match manifest"),
+        ("manifest-id", "bundle_id does not match content-addressed"),
+        ("hash", "artifact hash mismatch"),
+    ] {
+        let mut response = original.clone();
+        match kind {
+            "outer-id" => response["bundle_id"] = serde_json::json!("../../outside"),
+            "manifest-id" => {
+                response["bundle"]["manifest"]["bundle_id"] = serde_json::json!("../../outside")
+            }
+            _ => {
+                let key = response["bundle"]["files"]
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .clone();
+                response["bundle"]["files"][&key] = serde_json::json!("corrupted");
+            }
+        }
+        fs::write(&response_path, response.to_string()).unwrap();
+        let output = fixture.run_cli_with_env(
+            &[
+                "import",
+                "session",
+                "--from",
+                "fixture-peer",
+                "--session",
+                "sess-codex-1",
+            ],
+            &[
+                ("PATH", &path),
+                ("MMR_FAKE_PEER_RESPONSE", response_path.to_str().unwrap()),
+            ],
+        );
+        assert_cli_failure(&output, 3, Some("import/session"));
+        assert!(
+            parse_stdout_json(&output)["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected)
+        );
+        assert!(!fixture.home.join(".mmr/teleport/cache").exists());
+        assert!(!fixture.home.join(".mmr/outside").exists());
+    }
+}
+
+#[test]
+fn import_session_force_without_apply_is_usage_error_before_peer_access() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["import", "session", "--from", "unused-peer", "--force"]);
+    assert_cli_failure(&output, 2, Some("import/session"));
+    assert_eq!(
+        parse_stdout_json(&output)["message"],
+        "--force requires --apply"
+    );
 }

@@ -1,68 +1,69 @@
 ---
 name: mmr
-description: "Surface memory and knowledge from past AI coding sessions (Claude Code, Codex, Cursor, Grok, Pi) before acting on work that may have prior history. Trigger when: starting or resuming work on an existing project or long-running task; the user references earlier work ('continue', 'as we discussed', 'last time', 'again'); recovering context after compaction or /clear; checking what was already tried, decided, or rejected before proposing an approach; or answering questions about past sessions. Also the entry point for any mmr setup, usage, or troubleshooting question."
+description: "Read and search local AI coding-session history (Claude, Codex, Cursor, Grok, Pi), recover project context, or carry a selected session between machines as a file. Use for mmr setup, usage, and troubleshooting."
 ---
 
 # mmr
 
-`mmr` is the local Rust CLI for parsing and querying history from Claude Code, Codex, Cursor, Grok, and Pi.
+`mmr` is the local Rust CLI for retrieving the history needed for a task.
+Check `mmr <command> --help` for the installed version's contract. stdout is JSON
+unless a command explicitly requests another format. Check the exit status:
+structured failures can also emit JSON on stdout; diagnostics use stderr.
 
-## When to Trigger
+## Read Local Context
 
-The purpose of this skill is continuity: act with awareness of prior work instead of rediscovering or contradicting it. Reach for it *before* starting, not only when explicitly asked about history.
+```bash
+mmr list sessions --project /path/to/project
+mmr read session <session-id>
+mmr recall --project /path/to/project
+```
 
-- **Proactively**, before beginning or resuming work that plausibly has prior sessions: an existing project, a long-running task, a bug someone has looked at before.
-- **On continuity language** from the user: "continue", "pick up where we left off", "as we discussed", "last time", "why did we...".
-- **After context loss**: compaction, `/clear`, or a fresh session on ongoing work.
-- **Before proposing an approach** that may already have been tried, decided, or rejected.
+`recall` selects the previous stable session, holding back the newest by default.
+`list sessions` and `read project` infer the current project when no scope is
+given; pass `--project` when the scope matters. Omit `--source` for all providers unless `MMR_DEFAULT_SOURCE` sets a default,
+or use `--source claude|codex|cursor|grok|pi`; `all` is not a source value.
 
-If `mmr` is not installed or a query fails, do not abandon the goal — fall back to raw provider transcripts and any memory directory, and note that retrieval was degraded. Retrieval indexes can lag the newest sessions; verify against raw transcripts when freshness matters.
+For existing indexed text search, use `mmr find "query"`. It needs a linked local
+store: `mmr init` in the project creates one and ingests available source history.
+Reading raw sessions does not require that setup. Do not run ingestion merely
+to read a known session. If access to history is restricted, report the missing
+context instead of reading protected provider files as a fallback.
 
-## Core Use Cases
+## Carry Context As A File
 
-- Discover and list projects and sessions (`mmr list projects`, `mmr list sessions`)
-- Retrieve the previous stable session (`mmr recall`, `mmr recall N`)
-- Read raw history (`mmr read session`, `mmr read project`, `mmr read source --source <source>`)
-- Generate summaries (`mmr summarize project|session|source`)
-- Prepare assimilation handoffs (`mmr assimilate project|source`)
-- Load or install this skill from the CLI (`mmr skill load`, `mmr skill install`, `mmr skill install --local`)
+```bash
+# Source machine: choose the session, then export to an inbox directory.
+mmr --source codex share session <session-id> --to file:///absolute/path/to/inbox
+# Copy the directory reported as inbox_path to the destination machine.
+mmr import bundle /copied/entry
+mmr import bundle /copied/entry -O md | jq -r .text
+```
 
-## Subskills
+The entry contains `bundle.mmr` (JSON, not ZIP), `bundle.sha256`, and `ready`.
+Default import verifies and reads messages, caching under `~/.mmr/teleport/cache`
+without installing native histories. Preserve source project provenance. No
+SSH, server, central account, or Claude/Codex conversion is needed to read it.
+Native artifacts may contain private conversation text and paths; transfer only
+when intended by the user.
 
-This parent organizes specialized mmr workflows.
+To deliberately restore a provider-native session, pass `--apply --project
+/local/project`. `--force` requires `--apply`. Older builds applied imports by
+default; scripts that need restoration must add `--apply`. Explicit
+`--read-only` remains supported. The same read-only default applies to
+`import session --from <ssh-target>`; SSH is an optional transport.
 
-### session-mining (Recommended for Continuity Work)
+## Additional Capabilities
 
-**Location:** `mmr/session-mining`
+- `mmr context project` prepares project context; `mmr assimilate project`
+  returns a prompt and evidence for the calling agent without launching one.
+- `mmr summarize` and `mmr compact` send selected text to configured external
+  model services. Use only when that processing is intended.
+- `mmr mcp --transport stdio` exposes the existing CLI-backed tools to a client.
+- `mmr sync` currently uses a file-backed remote simulation, not hosted GitHub,
+  S3 or R2. File handoffs do not require sync.
+- `mmr skill load` prints this bundle; `mmr skill install [--local]` replaces its
+  installed copy.
 
-This is the main subskill for **long-term session continuity**.
-
-Use `session-mining` when you need to:
-- Deliberately retrieve prior sessions (via `mmr recall` or explicit `mmr read session <id>`)
-- Analyze them for decisions, architecture, open tasks, and rationale
-- Survive context **compaction** or full **clearing** by pulling relevant history back into the current context
-- Produce structured reminders or continuity briefs with `mmr summarize`
-
-It provides reusable patterns and guidance beyond what the basic `mmr` commands or `mmr summarize` deliver on their own.
-
-See: `.agents/skills/mmr/session-mining/SKILL.md`
-
-## When to Use This Parent Skill
-
-Use the top-level `mmr` skill when:
-- You have a general question about mmr commands, flags, or behavior
-- You're not sure which specific capability or subskill applies
-- You're setting up, initializing, or troubleshooting mmr itself
-- You need to bootstrap this skill into a user or project skill directory
-
-For most continuity and previous-session work, load the `session-mining` subskill directly.
-
-## Related Local Skills
-
-These exist only in the mmr development repo; skip this section if they are not present on this machine.
-
-- `mmr-clap-colored-cli` — Developing the mmr CLI surface, contracts, and output behavior
-- `mmr-native-bundle-providers` — Maintaining native session bundle profiles across providers
-- `goal-driven-development` — Authoring and executing `goals/*.md` delivery contracts (`gdd_status.py`)
-
-Prefer the most specific subskill for the task at hand; fall back to this parent when unsure.
+For deeper continuity extraction, read `session-mining/SKILL.md`. In the mmr
+source repository, follow `AGENTS.md` and the focused MCP, native-bundle and CLI
+skills; verify with fixture-only contract tests and the full Rust checks.

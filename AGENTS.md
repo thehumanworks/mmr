@@ -47,7 +47,7 @@ commit unsafe.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and stateless summarization helpers.
 - `.cursor/rules/`: persistent repo rules for workflow, contract, ingestion, and tests.
 - `.agents/skills/mmr-clap-colored-cli/`: local reusable CLI workflow references.
-- `.agents/skills/mmr-teleport-providers/`: provider-profile native teleport layouts and verification notes.
+- `.agents/skills/mmr-native-bundle-providers/`: provider-profile native teleport layouts and verification notes.
 - `.agents/skills/mmr/`: parent skill for the local `mmr` history tool. Use for general mmr questions or when unsure which mmr capability applies.
 - `.agents/skills/mmr/session-mining/`: (subskill) retrieve previous sessions via `mmr recall` and `mmr read session`, analyze them, and produce continuity context. Critical for surviving context compaction and clearing. Use when you need to remind an agent (or yourself) of prior work.
 - `.agents/skills/mmr/goal-closeout/`: (subskill) targeted tests → full verification loop → `gdd_status.py` evidence → scoped commit when appropriate → mark goal done.
@@ -111,11 +111,11 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Sync and hydration prerequisites
 
-- `mmr link` must run from the project directory first; it creates the local store/link and performs hydration, import, search rebuild, and sync. `mmr sync` expects that link to exist.
+- `mmr init` creates or repairs the local project link/store and ingests history; `--link-only` skips ingestion. `mmr sync` requires that link.
 - Remote sync/hydration needs a GitHub identity from `MMR_GITHUB_USER`, `GITHUB_USER`, or the OS user fallback, plus remote auth that is not explicitly disabled by `MMR_FAKE_REMOTE_AUTH=0|false|fail|failed`.
-- The current fake GitHub remote is file-backed. Use `MMR_FAKE_REMOTE_DIR` when tests or cross-machine workflows need a shared remote root; otherwise the default remote root is under the mmr data directory.
+- The current fake GitHub remote is file-backed. Use `MMR_FAKE_REMOTE_DIR` when tests need a shared simulated remote root; otherwise the default remote root is under the mmr data directory.
 - Sync uploads only redacted projections. Unsafe event types, deterministic secret findings, or degraded PII coverage should block upload rather than silently strip data.
-- Use `mmr status --pretty`, `mmr link --pretty`, `mmr sync --dry-run --pretty`, `mmr redact scan`, and `mmr redact explain <event-id>` to verify hydration/sync state and diagnose blockers before changing behavior.
+- Use `mmr status --pretty`, `mmr init --pretty`, `mmr sync --dry-run --pretty`, `mmr redact scan`, and `mmr redact explain <event-id>` to verify hydration/sync state and diagnose blockers before changing behavior.
 
 ## CLI default env vars
 
@@ -166,6 +166,10 @@ it for one command.
 - No project commit history exists yet; use imperative, concise commit messages (e.g., `add cli source filtering tests`).
 - In PRs, include: scope summary, contract changes, commands run, and relevant test/lint/build outputs.
 - Avoid mixing refactors with behavior changes unless the PR clearly separates them.
+- For user-visible changes, include a small runnable example demonstrating the
+  value when applicable: document the command and expected output, use isolated
+  synthetic data, and run it before delivery. Reuse existing setup; explain in
+  the PR when an example would not help.
 
 ## Learned User Preferences
 
@@ -179,3 +183,18 @@ it for one command.
 - On macOS/BSD, TCP sockets accepted from a non-blocking `teleport serve` listener inherit non-blocking mode; set accepted streams to blocking before large bundle writes to avoid EAGAIN.
 - `mmr teleport read` response includes a `messages` array with the same shape as `mmr read session`; re-reading a cached bundle returns the same messages with `status: "skipped"`.
 - When invoking the mmr CLI from scripts (e.g. Python subprocess), pass `--project` and the project value as two separate arguments so the CLI receives the value correctly; avoid a single argument like `--project="value"` which can pass the quotes literally and break matching.
+
+## Focused portability and maintenance
+
+- Start agent usage with `list sessions`, `read session`, and `recall`; `find`
+  uses the existing linked search store. Do not add a replacement search surface.
+- Portable handoff: `share session <id> --to file:///absolute/inbox`, copy the
+  returned entry directory, then `import bundle /copied/entry`. Bundles are JSON
+  with native artifacts/hashes. Default import reads/caches; `--apply` explicitly
+  restores native files, and `--force` requires it. `import session` has the same
+  default. Scripts relying on the former implicit apply must add `--apply`.
+- File-backed FakeGithubRemote is a simulation. File portability needs no hosted
+  service, credentials, SSH, or mandatory provider conversion.
+- Verify with `cargo test --test portable_bundle_contract`, existing import/share
+  contracts, and the full verification loop. Use synthetic temporary homes and
+  projects; never use protected runtime histories as fixtures.

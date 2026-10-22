@@ -41,7 +41,7 @@ use crate::teleport::{
     ApplyOptions, PackOptions, ReadOptions, ReceiveOptions, SendOptions, SendTransport, ServeError,
     ServeOptions, TeleportBundleFile, TeleportFailure, TeleportFidelity, TeleportOutputFormat,
     TeleportStatus, apply_bundle, pack_session, read_bundle, receive_bundle, send_session,
-    serve_session, write_bundle,
+    serve_session, verify_artifact_hashes, write_bundle,
 };
 use crate::types::{
     ApiMessage, ApiMessageOrigin, ApiMessagesResponse, ApiPeerResult, ApiProject,
@@ -923,13 +923,13 @@ pub struct ImportSessionArgs {
     /// Project name or path
     #[arg(long)]
     project: Option<String>,
-    /// Read/cache the bundle without applying native provider files
+    /// Read/cache without applying native provider files (default)
     #[arg(long)]
     read_only: bool,
-    /// Apply native provider files after pulling; default when --read-only is absent
+    /// Explicitly restore native provider files after pulling
     #[arg(long)]
     apply: bool,
-    /// Replace existing native files when applying
+    /// Replace existing native files (requires --apply)
     #[arg(long)]
     force: bool,
 }
@@ -945,16 +945,16 @@ pub struct ImportBundleArgs {
     /// Bundle path, inbox directory, stdin marker '-', or HTTP locator
     #[arg(long)]
     to: Option<String>,
-    /// Read/cache the bundle without applying native provider files
+    /// Read/cache without applying native provider files (default)
     #[arg(long)]
     read_only: bool,
-    /// Apply native provider files; default when --read-only is absent
+    /// Explicitly restore native provider files
     #[arg(long)]
     apply: bool,
     /// Target project path override for apply
     #[arg(long)]
     project: Option<String>,
-    /// Replace existing native files when applying
+    /// Replace existing native files (requires --apply)
     #[arg(long)]
     force: bool,
     /// Output format for --read-only
@@ -2747,12 +2747,16 @@ fn share_command_response(
 }
 
 fn import_bundle_response(args: &ImportBundleArgs, pretty: bool) -> Result<String> {
-    let read_only = import_read_only_mode(args.read_only, args.apply).map_err(|failure| {
-        anyhow::Error::new(
-            CliFailure::from_teleport(rebrand_teleport_failure(failure, "import/bundle"), pretty)
+    let read_only =
+        import_read_only_mode(args.read_only, args.apply, args.force).map_err(|failure| {
+            anyhow::Error::new(
+                CliFailure::from_teleport(
+                    rebrand_teleport_failure(failure, "import/bundle"),
+                    pretty,
+                )
                 .expect("serialize import mode failure"),
-        )
-    })?;
+            )
+        })?;
     let locator = match resolve_import_bundle_locator(args.locator.clone(), args.to.clone()) {
         Ok(locator) => locator,
         Err(failure) => {
@@ -2947,6 +2951,7 @@ fn resolve_session_selector(
 fn import_read_only_mode(
     read_only: bool,
     apply: bool,
+    force: bool,
 ) -> std::result::Result<bool, TeleportFailure> {
     if read_only && apply {
         return Err(TeleportFailure::usage(
@@ -2954,7 +2959,13 @@ fn import_read_only_mode(
             "pass either --read-only or --apply, not both",
         ));
     }
-    Ok(read_only)
+    if force && !apply {
+        return Err(TeleportFailure::usage(
+            "import/bundle",
+            "--force requires --apply",
+        ));
+    }
+    Ok(!apply)
 }
 
 fn resolve_import_bundle_locator(
@@ -3158,12 +3169,8 @@ fn import_session_response(
             "pass either --session or --latest, not both",
         ));
     }
-    if pull.read_only && pull.apply {
-        return Err(TeleportFailure::usage(
-            "import/session",
-            "pass either --read-only or --apply, not both",
-        ));
-    }
+    let read_only = import_read_only_mode(pull.read_only, pull.apply, pull.force)
+        .map_err(|failure| rebrand_teleport_failure(failure, "import/session"))?;
     let project_input = project_identity_input(pull.project.as_deref()).map_err(|error| {
         TeleportFailure::usage(
             "import/session",
@@ -3184,6 +3191,14 @@ fn import_session_response(
     )
     .map_err(|error| peer_error_to_teleport_failure("import/session", error, pretty))?;
 
+    verify_artifact_hashes(&remote.bundle)
+        .map_err(|error| TeleportFailure::runtime("import/session", error.to_string()))?;
+    if remote.bundle_id != remote.bundle.manifest.bundle_id {
+        return Err(TeleportFailure::runtime(
+            "import/session",
+            "peer bundle_id does not match manifest",
+        ));
+    }
     let bundle_id = remote.bundle_id.clone();
     let bundle_path = teleport_pull_cache_path(&bundle_id).map_err(|error| {
         TeleportFailure::runtime(
@@ -3194,7 +3209,7 @@ fn import_session_response(
     write_bundle(&bundle_path, &remote.bundle)
         .map_err(|error| TeleportFailure::runtime("import/session", error.to_string()))?;
 
-    let (read, apply, status) = if pull.read_only {
+    let (read, apply, status) = if read_only {
         let read = read_bundle(ReadOptions {
             locator: bundle_path.display().to_string(),
             dry_run: false,
@@ -3260,7 +3275,7 @@ fn import_session_response(
         bundle_id,
         bundle_path: bundle_path.display().to_string(),
         remote_mmr_version: remote.remote_mmr_version,
-        read_only: pull.read_only,
+        read_only,
         read,
         apply,
     })
