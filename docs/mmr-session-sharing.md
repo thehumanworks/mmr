@@ -5,6 +5,36 @@ copy it, then read it on the destination. Native restoration is optional.
 
 ## Portable Files Without SSH
 
+Run the self-contained [portable example](../examples/portable_read_only.py)
+from the repository root (Python 3 and a Rust build toolchain):
+
+```bash
+cargo build --locked
+python3 examples/portable_read_only.py
+```
+
+It creates two temporary homes and projects, exports a synthetic Codex session,
+copies the complete inbox entry, then runs `mmr import bundle` without `--apply`.
+The destination has a colliding native session with different text; the example
+checks that both homes' provider files stay byte-identical. Each CLI child gets
+an isolated HOME and a minimal environment, with no inherited credentials or
+provider paths. Only its temporary directories are removed afterward.
+
+Expected output:
+
+```text
+Copied a JSON bundle and verified its hashes; no SSH or server needed.
+user: Keep the retry limit at three.
+assistant: Noted for the next session.
+Source and destination native histories unchanged (including a colliding session).
+Bundle cached for reading; no native apply requested.
+Temporary homes removed.
+```
+
+To use an already built binary, append its path:
+`python3 examples/portable_read_only.py ./target/release/mmr`.
+
+
 ```bash
 mmr --source codex share session <session-id> --to file:///absolute/path/to/inbox
 # Copy the directory reported as inbox_path to the destination machine.

@@ -166,6 +166,10 @@ it for one command.
 - No project commit history exists yet; use imperative, concise commit messages (e.g., `add cli source filtering tests`).
 - In PRs, include: scope summary, contract changes, commands run, and relevant test/lint/build outputs.
 - Avoid mixing refactors with behavior changes unless the PR clearly separates them.
+- For user-visible changes, include a small runnable example demonstrating the
+  value when applicable: document the command and expected output, use isolated
+  synthetic data, and run it before delivery. Reuse existing setup; explain in
+  the PR when an example would not help.
 
 ## Learned User Preferences
 
