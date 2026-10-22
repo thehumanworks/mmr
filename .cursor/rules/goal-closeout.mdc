@@ -27,13 +27,12 @@ Fix failures with concrete command output before continuing.
 
 ## 3. Goal evidence update
 
-```bash
-GDD_SKILL="$HOME/.agents/skills/goal-driven-development"
-python "$GDD_SKILL/scripts/gdd_status.py" goals/<slug>.md
-```
-
 - Tick Tasks and DoD only with Evidence (date + command + outcome) and confidence ≥ floor.
-- Append Decisions/Learnings when non-obvious; confirm `gdd_status.py` reports done-eligible.
+- Review the evidence checklist in `.agents/skills/mmr/goal-closeout/SKILL.md`
+  before marking done. That skill includes a runnable verification example using
+  the existing synthetic fixtures. No global goal checker is required.
+- Append Decisions/Learnings when non-obvious; report unavailable checks and
+  unresolved work explicitly. Required product checks must pass.
 
 ## 4. Git (only when user asked or goal requires it)
 

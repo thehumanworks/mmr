@@ -11,7 +11,7 @@
 **Status vocabulary:** `draft` | `ready` | `in-progress` | `done` | `exited`  
 Do not use frontmatter `blocked`. Prerequisites are ordering in this file, task **Depends on**, or exit conditions.
 
-**Skills & rules:** `.agents/skills/mmr/` · `.cursor/rules/goal-driven-development.mdc` · `.cursor/rules/goal-closeout.mdc` · `~/.agents/skills/goal-driven-development/`
+**Skills & rules:** `.agents/skills/mmr/` · `.cursor/rules/goal-driven-development.mdc` · `.cursor/rules/goal-closeout.mdc` · [local closeout checklist](.agents/skills/mmr/goal-closeout/SKILL.md)
 
 ---
 

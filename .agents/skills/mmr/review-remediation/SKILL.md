@@ -46,14 +46,9 @@ Convert each final finding into one `goals/<date>-<slug>.md` GDD contract:
 - Ordered tasks with verification contracts
 - Exact source files and tests referenced
 
-Validate structure:
-
-```bash
-GDD_SKILL="$HOME/.agents/skills/goal-driven-development"
-for f in goals/<batch>-*.md; do
-  python "$GDD_SKILL/scripts/gdd_status.py" --author "$f" >/tmp/gdd-check.json || exit 1
-done
-```
+Review each goal against `AGENTS.md`: required frontmatter, outcome, scope,
+validation plan and definition of done. At completion, use the evidence checklist
+in `../goal-closeout/SKILL.md`; a checked box alone is not verification.
 
 Record recommended execution order (test-gate stability first, then security/data, then contract/perf).
 
