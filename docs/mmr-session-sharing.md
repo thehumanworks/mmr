@@ -1,11 +1,39 @@
 # mmr session sharing
 
-`mmr` treats trusted SSH targets as ordinary command locations. There is no
-host registry, discovery daemon, or stored peer configuration: pass a target your
-machine can already reach (`mini`, `user@host`, `user@host:22`, or
-`ssh://user@host:22`) and the command succeeds or fails on that connection.
+The simplest handoff is a file: export one selected session on the source,
+copy it, then read it on the destination. Native restoration is optional.
 
-## Remote Reads
+## Portable Files Without SSH
+
+```bash
+mmr --source codex share session <session-id> --to file:///absolute/path/to/inbox
+# Copy the directory reported as inbox_path to the destination machine.
+mmr import bundle /copied/entry
+mmr import bundle /copied/entry -O md | jq -r .text
+```
+
+Use `--source claude` or `--source pi` for those providers. `share session` uses
+existing collectors; no provider conversion is needed to read the result in a
+different agent. Each entry contains JSON `bundle.mmr`, `bundle.sha256`, and a
+`ready` marker published after the partial write. Copy the whole entry to keep
+the sidecar check. A standalone `.mmr` file also works, with internal artifact
+hash validation. This is not a ZIP archive.
+
+Default imports verify and print messages and may cache the bundle under
+`~/.mmr/teleport/cache`. They do not write `.codex`, `.claude` or `.pi` histories,
+or ingest events into local search. Messages keep their source project names.
+`--project` remaps only native restoration with `--apply`; reading from a
+new project directory does not rewrite provenance.
+
+No SSH access, server, cloud account or shared store is required. The current
+`sync`/FakeGithubRemote implementation is file-backed simulation, not a hosted
+GitHub/S3/R2 service. A central store can be considered separately if needed.
+
+## Optional SSH Reads
+
+`mmr` accepts trusted SSH targets per command. There is no host registry or
+background discovery: pass an already reachable target (`mini`, `user@host`,
+`user@host:22`, or `ssh://user@host:22`).
 
 Use `--remote <ssh-target>` on read/query commands when you want another machine
 to contribute history with the same shape as a local response.
@@ -83,12 +111,16 @@ mmr import bundle --to - --apply
 
 Modes:
 
-- `--read-only` verifies and prints the bundle's messages without applying
-  native provider files.
-- `--apply` is the explicit apply spelling. Applying is also the default when
-  `--read-only` is absent.
-- `--force` allows replacing an existing native provider file when applying.
+- No mode flag, or `--read-only`, verifies and prints the bundle's messages
+  without applying native provider files.
+- `--apply` explicitly restores native provider files.
+- `--force` allows replacement during apply and requires `--apply`.
 - `--read-only` and `--apply` together are a usage error.
+
+**Migration:** older builds applied imports when `--read-only` was absent.
+Add `--apply` to scripts that intentionally restore native files. Existing
+`--read-only` commands and explicit `--apply` streams keep their behavior.
+A bare `--force` is now a usage error. Stdin still requires `--apply`.
 
 `import session --from <remote>` asks the remote peer to pack one selected
 session and then reads or applies the bundle locally. The remote does not need to

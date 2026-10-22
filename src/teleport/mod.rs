@@ -16,6 +16,7 @@ mod send;
 mod ssh;
 
 pub use apply::{ApplyOptions, apply_bundle};
+pub(crate) use bundle::verify_artifact_hashes;
 pub use bundle::{
     BundleLocatorError, METADATA_PATH, TeleportBundleFile, load_bundle, load_bundle_from_locator,
     write_bundle,

@@ -113,10 +113,10 @@ Behavior:
 
 - asks the remote peer to package one selected native provider session.
 - caches the received bundle locally.
-- with `--read-only`, verifies and prints the bundle messages without applying
-  native provider files.
-- without `--read-only`, applies the bundle locally; `--apply` is accepted as an
-  explicit statement of that mode.
+- by default (or with `--read-only`), verifies and prints the bundle messages
+  without applying native provider files.
+- `--apply` explicitly restores native files. `--force` requires `--apply`.
+- verifies artifact hashes and the returned bundle identity before caching.
 - `--read-only` and `--apply` together are a usage error.
 - stale remote peer protocols fail with structured peer failure JSON.
 
@@ -139,11 +139,12 @@ Locators:
 
 Behavior:
 
-- `--read-only` verifies and prints metadata/messages.
-- no `--read-only` means apply mode; `--apply` is the explicit spelling.
+- the default and `--read-only` verify and print metadata/messages using the
+  existing read/cache response. Native provider files remain untouched.
+- `--apply` is required for native restoration, including stdin streams.
 - apply mode writes native provider files and skips normalized event ingestion
   unless the implementation opts into a safe importer for that provider.
-- `--force` permits replacing existing native files.
+- `--force` permits replacing existing native files only with `--apply`.
 - missing or conflicting locators fail with usage JSON.
 
 Output command value: `import/bundle`.
@@ -196,3 +197,24 @@ mmr read project --remote mini --project /Users/mish/projects/mmr --limit 3
 mmr import session --from mini --session latest --project /Users/mish/projects/mmr --read-only
 mmr share session latest --project /Users/mish/projects/mmr --to mini --dry-run
 ```
+
+## Portable File Workflow And Migration
+
+`share session --to file:///absolute/inbox` uses the existing provider collector
+and publishes an inbox entry with `bundle.mmr`, `bundle.sha256` and `ready` after
+writing `bundle.mmr.partial`. Copy the entry directory to another machine and
+run `mmr import bundle /copied/entry`. The entry must be ready and its sidecar
+checksum valid. A standalone `bundle.mmr` can also be copied/read; it validates
+internal artifact hashes but has no external sidecar check. `.mmr` is JSON, not
+ZIP. The format retains provider-native artifacts and normalized read output;
+no native Claude/Codex conversion is required to read it.
+
+Imports may cache under `~/.mmr/teleport/cache`, but default imports do not
+install provider files or ingest local search events. Messages retain source
+project provenance; `--project` remaps only explicit native apply. No SSH,
+server, account or cloud storage is required for this workflow.
+
+Migration: older builds applied imports when no mode was specified. Add
+`--apply` to scripts that intentionally restore native sessions. Existing
+`--read-only` scripts and explicit `--apply` streams keep their behavior. A bare
+`--force` is now a usage error, so it cannot silently imply native restoration.

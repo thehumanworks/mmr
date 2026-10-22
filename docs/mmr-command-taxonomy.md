@@ -11,11 +11,13 @@
   ingestion and receive suggested `mmr --source <source> ingest events`
   commands.
 - `mmr status` reports store, project, privacy, sync, and provider readiness.
-- `mmr sync` reconciles redacted project memory with the configured remote.
+- `mmr sync` reconciles redacted project memory with the configured file-backed
+  remote simulation; it is not a hosted GitHub sync service.
 - `mmr ingest events` ingests provider history into normalized local events.
 - `mmr import session` pulls one selected native provider session bundle from an
-  explicit SSH peer.
-- `mmr import bundle` reads or applies an existing session bundle locator.
+  explicit SSH peer; it reads by default and restores native files with `--apply`.
+- `mmr import bundle` reads an existing bundle by default; `--apply` explicitly
+  restores native files. `--force` requires `--apply`.
 - `mmr share session` shares one selected native provider session from the
   source machine.
 - `mmr note` adds a human-authored project event.
