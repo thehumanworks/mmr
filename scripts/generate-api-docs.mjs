@@ -1731,6 +1731,35 @@ when a client needs a listener; its bind address and mount path remain configura
 mmr mcp --transport stdio
 mmr mcp --transport http --bind 127.0.0.1:8765 --path /mcp
 \`\`\`
+
+## Runnable synthetic stdio example
+
+From the repository root, with Python 3 and a Rust build toolchain:
+
+\`\`\`bash
+cargo build --locked
+python3 examples/standalone_stdio.py
+\`\`\`
+
+The [example](../../examples/standalone_stdio.py) creates a temporary HOME and
+Codex session, starts the real MCP subprocess with a minimal environment and
+unusable REST settings, then initializes, lists tools and reads the session.
+It checks JSON-only protocol output, unchanged native files and clean EOF
+shutdown. It opens no network sockets and reads no existing user history.
+
+Expected output:
+
+\`\`\`text
+Stdio initialized with unusable REST settings; no REST server needed.
+Listed 19 MCP tools.
+user: Keep the retry limit at three.
+assistant: Noted for the next session.
+Protocol stdout was JSON only; native histories unchanged; clean EOF shutdown.
+Temporary home removed.
+\`\`\`
+
+For an already built binary, append its path:
+\`python3 examples/standalone_stdio.py ./target/release/mmr\`.
 `;
 
 fs.writeFileSync(readmePath, readme);
