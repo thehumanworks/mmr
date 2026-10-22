@@ -36,12 +36,12 @@ existing find → read → context workflow easier to discover and try safely.
   verify unchanged moved bodies and existing search/retrieval/CLI/MCP contracts.
 - [x] DoD-3 — README/agent workflow and runnable synthetic example agree;
   run the documented invocation and check messages plus unchanged native files.
-- [ ] DoD-4 — Full tests, four benchmarks, format, strict Clippy, release build,
+- [x] DoD-4 — Full tests, four benchmarks, format, strict Clippy, release build,
   docs/diff checks and independent review pass; publish a focused PR.
 
 ## Tasks
 
-### T1 · Extract and demonstrate retrieval · [ ]
+### T1 · Extract and demonstrate retrieval · [x]
 
 Inspect baseline, isolate the responsibility, document entry points and workflow,
 run the example and verification, obtain independent review and publish.
@@ -66,30 +66,40 @@ run the example and verification, obtain independent review and publish.
   search semantics. Only their two command handlers are visible to CLI routing;
   the matcher and retrieval response/ranking types remain private.
 
-- 2026-10-23 — Combined main and extracted branch each passed `cargo fmt --check`,
+- 2026-10-22 — Combined main and extracted branch each passed `cargo fmt --check`,
   `cargo test --locked` (360 passed), all four ignored benchmarks, strict
   all-target/all-feature Clippy, and release build using a cleared environment
   and synthetic HOME. Cargo 1.97.1. Logs: `../evidence/combined-main-*.log` and
   `../evidence/retrieval-*.log` (workspace evidence, not repository files).
-- 2026-10-23 — Nine focused retrieval memory contracts passed. Existing CLI
+- 2026-10-22 — Nine focused retrieval memory contracts passed. Existing CLI
   tests cover pinned continuation, scope, pagination, source filters and errors;
   MCP tests cover stdio and HTTP. No new algorithm or redundant tests added.
-- 2026-10-23 — Exact comparison of moved bodies against main passed after
+- 2026-10-22 — Exact comparison of moved bodies against main passed after
   normalizing the two visibility declarations and final blank line. `cli.rs`
   moves from 8,146 to 6,780 lines; the new module is 1,388 lines. This is isolation,
   not a claim of algorithmic simplification: matching, private response types,
   ranking and continuation are together behind two parent-visible handlers and
   nine explicit parent imports. Clap parsing/routing remains in the parent.
-- 2026-10-23 — New workflow example passed with expected output and byte-for-byte
+- 2026-10-22 — New workflow example passed with expected output and byte-for-byte
   native-history preservation. Both earlier stdio and portability examples passed
   on combined main. API docs regeneration produced no diff; `git diff --check`
   passed. Initial body comparison differed only in rustfmt's trailing blank line.
-- 2026-10-23 — Independent read-only reviewer approved with no blocking findings,
+- 2026-10-22 — Independent read-only reviewer approved with no blocking findings,
   separately compared parent/moved bodies and ran the new example successfully.
-- 2026-10-23 — `git fetch origin` confirms main still at the base above. Prior
+- 2026-10-22 — `git fetch origin` confirms main still at the base above. Prior
   branches preserved; no local integration merge or new behavior needed.
-- 2026-10-23 — The required global `~/.agents/skills/goal-driven-development/`
+- 2026-10-22 — The required global `~/.agents/skills/goal-driven-development/`
   skill and `scripts/gdd_status.py` are still absent (also recorded by prior
   goals). Manual evidence/structure review passed. Keep this goal in-progress
   because the closeout skill requires the missing checker before `status: done`.
   This administrative gate does not prevent verified commit/PR publication.
+
+- 2026-10-22 — Published draft PR https://github.com/thehumanworks/mmr/pull/24
+  from `codex/cli-retrieval-module`. Explicit readiness authorization remains
+  pending; no denied action retried and no merge attempted. All three examples
+  also passed after the extraction, using the documented build/default path for
+  the new example and the release binary for the prior two.
+- 2026-10-22 — GitHub reports zero check-runs/status contexts at implementation
+  commit `203da3d978ee3c56480812d3f7e7dcf4e200ebc7`; empty combined status is
+  `pending`, not a passed hosted CI result. Only this evidence document changed
+  after the full verification; publication details are recorded by a docs commit.
