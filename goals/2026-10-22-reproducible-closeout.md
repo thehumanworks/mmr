@@ -2,7 +2,8 @@
 title: "Make agent closeout reproducible from the checkout"
 description: "Replace an absent global checker with local verification and evidence guidance."
 date: "2026-10-22"
-status: "in-progress"
+status: "done"
+updated: "2026-10-22"
 confidence_floor: 90
 ---
 
@@ -29,7 +30,7 @@ Base independently on main; preserve pending PR24 and its branch.
   existing retrieve/native-ID bridge and bounded local context.
 - [x] Run the documented verification recipe, including the synthetic example;
   full tests, benchmarks, formatting, Clippy and release build pass.
-- [ ] Independent review approves; publish a separate draft PR without ready or
+- [x] Independent review approves; publish a separate draft PR without ready or
   merge actions. Record exact checks, commit and any remaining limitations.
 
 ## Evidence
@@ -73,3 +74,10 @@ Base independently on main; preserve pending PR24 and its branch.
   root-index/goal documentation changed after the full check. Confidence 98/90.
 - 2026-10-22 — PR24 branch still at
   `3d70c14f730a5b9e3548ae4a175470d66d5398f8`; no updates or ready/merge actions.
+
+- 2026-10-22 — Published draft PR https://github.com/thehumanworks/mmr/pull/25
+  at implementation commit `ca4467aa437c764d6a97c71ad6dc7a41541df92b`.
+  Reviewed this goal against the new local evidence checklist: all required
+  work/checks passed, confidence 98/90, no implementation blocker remains.
+  This final goal-only commit records publication and done status. Ready and
+  merge remain outside authorization; neither was attempted.
