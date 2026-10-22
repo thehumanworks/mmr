@@ -40,7 +40,46 @@ mmr read session <session-id>
 mmr recall --project /path/to/project
 ```
 
-For indexed text search, run `mmr init` in the project, then `mmr find "query"`.
+To recover a decision when you do not know its session, run these in the project:
+
+```bash
+mmr init                             # create/update the local indexed store
+mmr find "retry"                     # inspect matching lines and citations
+mmr retrieve "retry" --max-sessions 1 # select a readable native session
+mmr --source <source> read session <source_session_id> --project <project_name>
+mmr context project --limit 20        # collect bounded raw context for an agent
+```
+
+Use `source`, `source_session_id`, and `project_name` from `retrieve`'s
+`selected_sessions` for `read`; `find`'s `session_id` is an internal store ID.
+If you already know the native session ID, go straight to `read` without `init`.
+`context project` returns session metadata and a bounded message array locally;
+it does not call a model.
+
+Try the whole workflow on synthetic history (Python 3, standard library only):
+
+```bash
+cargo build --locked
+python3 examples/find_read_context.py
+# Or: python3 examples/find_read_context.py /absolute/path/to/mmr
+```
+
+Expected output:
+
+```text
+find: Keep the retry limit at three.
+retrieve: codex/example-session
+read user: Keep the retry limit at three.
+read assistant: Noted for the next session.
+context: 1 session, 2 messages
+Native histories unchanged; only the temporary local store was initialized.
+Temporary home removed.
+```
+
+The example creates an isolated temporary HOME/project, clears inherited provider
+configuration, and verifies native files remain byte-for-byte unchanged. The
+current file-backed sync simulation used by `init` stays inside that HOME.
+
 For a local MCP client, use `mmr mcp --transport stdio`.
 
 Carry one session to another machine without SSH:
