@@ -1,14 +1,12 @@
 #[allow(dead_code)]
 mod common;
 
+use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-};
-use std::thread::{self, JoinHandle};
+use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{TestFixture, parse_stdout_json};
@@ -76,7 +74,7 @@ fn mcp_python_bootstrap_subcommand_is_removed() -> anyhow::Result<()> {
     );
     let stdio_text = String::from_utf8_lossy(&stdio_help.stdout);
     assert!(
-        stdio_text.contains("local loopback REST backing endpoint"),
+        stdio_text.contains("without a REST server or listener"),
         "{stdio_text}"
     );
     Ok(())
@@ -267,90 +265,119 @@ async fn mcp_read_source_requires_explicit_source() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn mcp_stdio_autostarts_rest_backing_when_missing() -> anyhow::Result<()> {
+#[test]
+fn mcp_stdio_ignores_rest_settings_and_occupied_ports() -> anyhow::Result<()> {
     let fixture = TestFixture::seeded();
-    let (mut mcp, mut stderr) =
-        StdioMcp::spawn_with_env(&fixture, &[("MMR_MCP_REST_BACKING_BIND", "127.0.0.1:0")])?;
-    let startup = read_stderr_line(&mut stderr)?;
-    assert!(
-        startup.contains("mmr REST backing server listening on http://127.0.0.1:"),
-        "startup stderr: {startup}"
-    );
-    let api_base_url = first_http_url(&startup)?;
-
-    let client = reqwest::Client::new();
-    let openapi: Value = client
-        .get(format!("{api_base_url}/openapi.json"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    assert_eq!(openapi["openapi"], "3.1.0");
-
-    let status: Value = client
-        .get(format!("{api_base_url}/v1/status"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    assert_eq!(status["command"], "status", "{status}");
-
-    let response = mcp.send_request(
-        json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {}
-        }),
-        2,
-    )?;
-    assert!(
-        response["result"]["tools"].as_array().is_some(),
-        "{response}"
-    );
+    seed_find_fixture(&fixture)?;
+    // Keep the old default port occupied where available. An existing listener
+    // already satisfies that condition; never connect to it or inspect it.
+    let _default_port = match TcpListener::bind("127.0.0.1:8765") {
+        Ok(listener) => Some(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => None,
+        Err(error) => return Err(error.into()),
+    };
+    let occupied = TcpListener::bind("127.0.0.1:0")?;
+    occupied.set_nonblocking(true)?;
+    let address = occupied.local_addr()?.to_string();
+    let url = format!("http://{address}");
+    for bind in [address.as_str(), "not-a-socket-address"] {
+        let (mut mcp, mut stderr) = StdioMcp::spawn_with_env(
+            &fixture,
+            &[
+                ("MMR_MCP_REST_BACKING_BIND", bind),
+                ("MMR_MCP_REST_BACKING_BASE_URL", &url),
+            ],
+        )?;
+        assert_stdio_query_contract(&fixture, &mut mcp)?;
+        mcp.finish()?;
+        let mut diagnostics = String::new();
+        stderr.read_to_string(&mut diagnostics)?;
+        assert!(diagnostics.is_empty(), "{diagnostics}");
+        assert_eq!(
+            occupied.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "stdio must not probe the configured REST endpoint"
+        );
+    }
     Ok(())
 }
 
-#[tokio::test]
-async fn mcp_stdio_reuses_existing_rest_backing() -> anyhow::Result<()> {
+#[test]
+fn mcp_stdio_does_not_bind_a_rest_listener() -> anyhow::Result<()> {
     let fixture = TestFixture::seeded();
-    let mock = start_mock_rest_status_server()?;
-    let base_url = mock.base_url.clone();
-    let (mut mcp, mut stderr) = StdioMcp::spawn_with_env(
+    seed_find_fixture(&fixture)?;
+    let reserved = TcpListener::bind("127.0.0.1:0")?;
+    let address = reserved.local_addr()?;
+    drop(reserved);
+    let (mut mcp, _) = StdioMcp::spawn_with_env(
         &fixture,
         &[
-            ("MMR_MCP_REST_BACKING_BIND", "127.0.0.1:0"),
-            ("MMR_MCP_REST_BACKING_BASE_URL", &base_url),
+            ("MMR_MCP_REST_BACKING_BIND", &address.to_string()),
+            ("MMR_MCP_REST_BACKING_BASE_URL", "not-a-url"),
         ],
     )?;
-    let startup = read_stderr_line(&mut stderr)?;
-    assert!(
-        startup.contains(&format!(
-            "mmr REST backing server already available at {base_url}"
-        )),
-        "startup stderr: {startup}"
-    );
-    assert!(
-        mock.requests.load(Ordering::SeqCst) >= 1,
-        "mock status endpoint was not probed"
-    );
+    // A live stdio process must leave even a valid configured port available.
+    let _still_available = TcpListener::bind(address)?;
+    assert_stdio_query_contract(&fixture, &mut mcp)?;
+    mcp.finish()?;
+    Ok(())
+}
 
+fn seed_find_fixture(fixture: &TestFixture) -> anyhow::Result<()> {
+    let project = fixture.home.join("cwd");
+    fs::create_dir_all(&project)?;
+    let rows = [
+        json!({"type":"session_meta", "timestamp":"2026-10-22T00:00:00Z",
+            "payload":{"id":"mcp-fixture", "cwd":fs::canonicalize(&project)?}}),
+        json!({"type":"event_msg", "timestamp":"2026-10-22T00:00:01Z",
+            "payload":{"type":"user_message", "message":"socketmarker fixture"}}),
+    ];
+    fs::write(
+        fixture.home.join(".codex/sessions/mcp-fixture.jsonl"),
+        rows.iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )?;
+    let init = fixture.run_cli(&["init"]);
+    assert!(init.status.success(), "{}", stderr_text(&init));
+    Ok(())
+}
+
+fn assert_stdio_query_contract(fixture: &TestFixture, mcp: &mut StdioMcp) -> anyhow::Result<()> {
     let response = mcp.send_request(
-        json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {}
-        }),
+        json!({"jsonrpc":"2.0", "id":2,
+        "method":"tools/list", "params":{}}),
         2,
     )?;
-    assert!(
-        response["result"]["tools"].as_array().is_some(),
-        "{response}"
-    );
+    let tools = response["result"]["tools"].as_array().expect("tools");
+    assert_eq!(tools.len(), EXPECTED_TOOLS.len());
+    for expected in EXPECTED_TOOLS {
+        assert!(tools.iter().any(|tool| tool["name"] == *expected));
+    }
+    for (id, tool, arguments, cli_args) in [
+        (
+            3,
+            "mmr_read_session",
+            json!({"source":"claude", "session_id":"sess-claude-1"}),
+            vec!["--source", "claude", "read", "session", "sess-claude-1"],
+        ),
+        (
+            4,
+            "mmr_find",
+            json!({"source":"codex", "query":"socketmarker"}),
+            vec!["--source", "codex", "find", "socketmarker"],
+        ),
+    ] {
+        let cli = fixture.run_cli(&cli_args);
+        assert!(cli.status.success(), "{}", stderr_text(&cli));
+        let response = mcp.call_tool(id, tool, arguments)?;
+        let actual: Value = serde_json::from_str(&tool_text(&response))?;
+        assert_eq!(actual, parse_stdout_json(&cli));
+        if tool == "mmr_find" {
+            assert!(!actual["results"].as_array().unwrap().is_empty());
+        }
+    }
     Ok(())
 }
 
@@ -380,17 +407,37 @@ async fn mcp_stdio_subprocess_protocol_smoke() -> anyhow::Result<()> {
 #[tokio::test]
 async fn mcp_http_streamable_smoke() -> anyhow::Result<()> {
     let fixture = TestFixture::seeded();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["mcp", "--transport", "http", "--bind", "127.0.0.1:0"])
-        .env("HOME", &fixture.home)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let stderr = child.stderr.take().expect("stderr pipe");
-    let mut stderr = BufReader::new(stderr);
-    let mut startup = String::new();
-    stderr.read_line(&mut startup)?;
+    seed_find_fixture(&fixture)?;
+    let mut child = HttpChild(
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .args([
+                "mcp",
+                "--transport",
+                "http",
+                "--bind",
+                "127.0.0.1:0",
+                "--path",
+                "/custom/mcp",
+            ])
+            .env("HOME", &fixture.home)
+            .env_remove("MMR_CONFIG_FILE")
+            .env_remove("XDG_CONFIG_HOME")
+            .current_dir(fixture.home.join("cwd"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?,
+    );
+    let stderr = child.0.stderr.take().expect("stderr pipe");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut startup = String::new();
+        let result = BufReader::new(stderr)
+            .read_line(&mut startup)
+            .map(|_| startup);
+        let _ = sender.send(result);
+    });
+    let startup = receiver.recv_timeout(Duration::from_secs(5))??;
     assert!(
         startup.contains("http://") && startup.contains("/mcp"),
         "startup stderr: {startup}"
@@ -401,7 +448,9 @@ async fn mcp_http_streamable_smoke() -> anyhow::Result<()> {
         .expect("startup url")
         .to_string();
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
     let response = client
         .post(&url)
         .header("Content-Type", "application/json")
@@ -430,15 +479,64 @@ async fn mcp_http_streamable_smoke() -> anyhow::Result<()> {
         "{parsed}"
     );
 
-    let _ = child.kill();
-    let _ = child.wait();
+    for (id, method, params) in [
+        (2, "tools/list", json!({})),
+        (
+            3,
+            "tools/call",
+            json!({"name":"mmr_read_session", "arguments":{
+            "source":"claude", "session_id":"sess-claude-1"}}),
+        ),
+        (
+            4,
+            "tools/call",
+            json!({"name":"mmr_find", "arguments":{
+            "source":"codex", "query":"socketmarker"}}),
+        ),
+    ] {
+        let response = client
+            .post(&url)
+            .header("Accept", "application/json, text/event-stream")
+            .json(&json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}))
+            .send()
+            .await?
+            .error_for_status()?;
+        let parsed = parse_streamable_http_body(&response.text().await?)?;
+        assert!(parsed.get("error").is_none(), "{parsed}");
+        if id == 2 {
+            assert_eq!(
+                parsed["result"]["tools"].as_array().unwrap().len(),
+                EXPECTED_TOOLS.len()
+            );
+        } else {
+            let args = if id == 3 {
+                vec!["--source", "claude", "read", "session", "sess-claude-1"]
+            } else {
+                vec!["--source", "codex", "find", "socketmarker"]
+            };
+            let cli = fixture.run_cli(&args);
+            assert!(cli.status.success(), "{}", stderr_text(&cli));
+            let actual: Value = serde_json::from_str(&tool_text(&parsed))?;
+            assert_eq!(actual, parse_stdout_json(&cli));
+        }
+    }
+
     Ok(())
+}
+
+struct HttpChild(Child);
+
+impl Drop for HttpChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 struct StdioMcp {
     child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdin: Option<ChildStdin>,
+    stdout: Receiver<anyhow::Result<Value>>,
 }
 
 impl StdioMcp {
@@ -451,11 +549,16 @@ impl StdioMcp {
         fixture: &TestFixture,
         envs: &[(&str, &str)],
     ) -> anyhow::Result<(Self, BufReader<ChildStderr>)> {
+        fs::create_dir_all(fixture.home.join("cwd"))?;
         let mut command = Command::new(env!("CARGO_BIN_EXE_mmr"));
         command
             .args(["mcp", "--transport", "stdio"])
             .env("HOME", &fixture.home)
-            .env("MMR_MCP_REST_BACKING_BIND", "127.0.0.1:0")
+            .env_remove("MMR_MCP_REST_BACKING_BIND")
+            .env_remove("MMR_MCP_REST_BACKING_BASE_URL")
+            .env_remove("MMR_CONFIG_FILE")
+            .env_remove("XDG_CONFIG_HOME")
+            .current_dir(fixture.home.join("cwd"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -465,11 +568,23 @@ impl StdioMcp {
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("stdin pipe");
         let stdout = BufReader::new(child.stdout.take().expect("stdout pipe"));
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for line in stdout.lines() {
+                let parsed = line.map_err(anyhow::Error::from).and_then(|line| {
+                    serde_json::from_str(&line)
+                        .map_err(|error| anyhow::anyhow!("non-JSON stdout line: {line:?}: {error}"))
+                });
+                if sender.send(parsed).is_err() {
+                    break;
+                }
+            }
+        });
         let stderr = BufReader::new(child.stderr.take().expect("stderr pipe"));
         let mut mcp = Self {
             child,
-            stdin,
-            stdout,
+            stdin: Some(stdin),
+            stdout: receiver,
         };
         mcp.initialize()?;
         Ok((mcp, stderr))
@@ -520,14 +635,22 @@ impl StdioMcp {
     }
 
     fn send_request(&mut self, request: Value, expected_id: i64) -> anyhow::Result<Value> {
-        writeln!(self.stdin, "{}", serde_json::to_string(&request)?)?;
-        self.stdin.flush()?;
+        writeln!(
+            self.stdin.as_mut().expect("open stdin"),
+            "{}",
+            serde_json::to_string(&request)?
+        )?;
+        self.stdin.as_mut().expect("open stdin").flush()?;
         self.read_response(expected_id)
     }
 
     fn send_notification(&mut self, notification: Value) -> anyhow::Result<()> {
-        writeln!(self.stdin, "{}", serde_json::to_string(&notification)?)?;
-        self.stdin.flush()?;
+        writeln!(
+            self.stdin.as_mut().expect("open stdin"),
+            "{}",
+            serde_json::to_string(&notification)?
+        )?;
+        self.stdin.as_mut().expect("open stdin").flush()?;
         Ok(())
     }
 
@@ -537,17 +660,36 @@ impl StdioMcp {
             if Instant::now() > deadline {
                 anyhow::bail!("timed out waiting for JSON-RPC response id {expected_id}");
             }
-            let mut line = String::new();
-            let read = self.stdout.read_line(&mut line)?;
-            if read == 0 {
-                anyhow::bail!("MCP subprocess closed stdout");
-            }
-            let parsed: Value = serde_json::from_str(line.trim_end())
-                .map_err(|error| anyhow::anyhow!("non-JSON stdout line: {line:?}: {error}"))?;
+            let parsed = self
+                .stdout
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))??;
             if parsed["id"] == expected_id {
                 return Ok(parsed);
             }
         }
+    }
+    fn finish(mut self) -> anyhow::Result<()> {
+        drop(self.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                assert!(status.success(), "stdio exit: {status}");
+                break;
+            }
+            anyhow::ensure!(Instant::now() < deadline, "stdio did not exit after EOF");
+            thread::sleep(Duration::from_millis(10));
+        }
+        // Drain through EOF so trailing diagnostics on stdout cannot escape QA.
+        loop {
+            match self.stdout.recv_timeout(Duration::from_secs(5)) {
+                Ok(value) => {
+                    value?;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -582,80 +724,6 @@ fn parse_streamable_http_body(body: &str) -> anyhow::Result<Value> {
         }
     }
     anyhow::bail!("streamable HTTP body did not contain JSON result: {body}");
-}
-
-fn read_stderr_line(stderr: &mut BufReader<ChildStderr>) -> anyhow::Result<String> {
-    let mut line = String::new();
-    stderr.read_line(&mut line)?;
-    if line.trim().is_empty() {
-        anyhow::bail!("stderr closed before startup line");
-    }
-    Ok(line)
-}
-
-fn first_http_url(line: &str) -> anyhow::Result<String> {
-    line.split_whitespace()
-        .find(|part| part.starts_with("http://"))
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("no http URL in line: {line}"))
-}
-
-struct MockRestServer {
-    base_url: String,
-    requests: Arc<AtomicUsize>,
-    stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl Drop for MockRestServer {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-fn start_mock_rest_status_server() -> anyhow::Result<MockRestServer> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    listener.set_nonblocking(true)?;
-    let base_url = format!("http://{}", listener.local_addr()?);
-    let requests = Arc::new(AtomicUsize::new(0));
-    let stop = Arc::new(AtomicBool::new(false));
-    let thread_requests = Arc::clone(&requests);
-    let thread_stop = Arc::clone(&stop);
-    let handle = thread::spawn(move || {
-        while !thread_stop.load(Ordering::SeqCst) {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    thread_requests.fetch_add(1, Ordering::SeqCst);
-                    let mut buffer = [0_u8; 1024];
-                    let _ = stream.read(&mut buffer);
-                    let request = String::from_utf8_lossy(&buffer);
-                    let (status, body) = if request.starts_with("GET /v1/status ") {
-                        ("HTTP/1.1 200 OK", r#"{"command":"status","store":{}}"#)
-                    } else {
-                        ("HTTP/1.1 404 Not Found", r#"{"error":"not found"}"#)
-                    };
-                    let response = format!(
-                        "{status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                    let _ = stream.write_all(response.as_bytes());
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    Ok(MockRestServer {
-        base_url,
-        requests,
-        stop,
-        handle: Some(handle),
-    })
 }
 
 fn stderr_text(output: &std::process::Output) -> String {
