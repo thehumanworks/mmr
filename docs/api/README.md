@@ -17,9 +17,11 @@ node scripts/generate-api-docs.mjs
 ## MCP server
 
 `mmr mcp --transport stdio` and `mmr mcp --transport http` run the native Rust
-MCP server. The stdio command is the default setup path for MCP clients: it
-checks the local loopback REST backing endpoint and starts one when none is
-already available, so users do not need to start a separate REST API process.
+MCP server. Stdio is the simplest setup for a local MCP client: it calls the
+same Rust command handlers directly, without starting or probing a REST server.
+It does not reserve a TCP port. The former `MMR_MCP_REST_BACKING_BIND` and
+`MMR_MCP_REST_BACKING_BASE_URL` settings are ignored. Use explicit HTTP transport
+when a client needs a listener; its bind address and mount path remain configurable.
 
 ```sh
 mmr mcp --transport stdio
