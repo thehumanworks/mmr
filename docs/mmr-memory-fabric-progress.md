@@ -13,8 +13,9 @@
 ## Current Architecture Decisions
 
 - Local SQLite/libSQL-shaped storage is canonical for active work.
-- GitHub `github:<authenticated-user>/mmr-store` is the first remote/export
-  adapter, not the hot database.
+- The remote/export adapter is a local file-backed simulation with a
+  `github:<user>/mmr-store` descriptor. The label does not establish GitHub
+  authentication or hosted sync; local SQLite remains the working database.
 - `list projects`, `list sessions`, `read session`, `read project`, and `read source` remain raw retrieval
   surfaces.
 - `summarize` is the stateless summary surface; compatibility aliases are

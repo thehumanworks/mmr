@@ -4,6 +4,12 @@ Status: accepted for NHL-268
 Date: 2026-05-24
 Linear project: `mmr Memory Fabric MVP`
 
+Implementation note (2026-10-22): `src/sync.rs` currently provides only a
+file-backed GitHub-layout simulation. References below to GitHub credentials,
+network sync and live smoke tests describe intended hosted behavior, not an
+available transport. For current commands, including `context` and `retrieve`,
+see [the command taxonomy](mmr-command-taxonomy.md).
+
 This document locks the product, storage, CLI, and verification contract for the
 lean mmr Memory Fabric MVP. Downstream implementation tickets should treat it as
 the source of truth unless a later ADR or spec explicitly supersedes it.

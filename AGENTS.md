@@ -53,7 +53,7 @@ commit unsafe.
 - `.agents/skills/mmr-native-bundle-providers/`: provider-profile native teleport layouts and verification notes.
 - `.agents/skills/mmr/`: parent skill for the local `mmr` history tool. Use for general mmr questions or when unsure which mmr capability applies.
 - `.agents/skills/mmr/session-mining/`: (subskill) retrieve previous sessions via `mmr recall` and `mmr read session`, analyze them, and produce continuity context. Critical for surviving context compaction and clearing. Use when you need to remind an agent (or yourself) of prior work.
-- `.agents/skills/mmr/goal-closeout/`: (subskill) targeted tests → full verification loop → `gdd_status.py` evidence → scoped commit when appropriate → mark goal done.
+- `.agents/skills/mmr/goal-closeout/`: (subskill) targeted tests → full verification loop → local evidence checklist → scoped commit when appropriate → mark goal done. Includes a runnable synthetic verification example; no global checker is required.
 - `.agents/skills/mmr/review-remediation/`: (subskill) deep review findings → goal docs → parallel git worktrees → merge → post-merge verification on `main`.
 - `.agents/skills/mmr/docs-first-contract-change/`: (subskill) specs-first CLI contract changes with continuation/pagination regression coverage.
 - `.agents/skills/mmr/command-surface-removal/`: (subskill) remove public CLI commands with rejection contract tests and active-surface grep hygiene.
@@ -115,9 +115,16 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 ## Sync and hydration prerequisites
 
 - `mmr init` creates or repairs the local project link/store and ingests history; `--link-only` skips ingestion. `mmr sync` requires that link.
-- Remote sync/hydration needs a GitHub identity from `MMR_GITHUB_USER`, `GITHUB_USER`, or the OS user fallback, plus remote auth that is not explicitly disabled by `MMR_FAKE_REMOTE_AUTH=0|false|fail|failed`.
-- The current fake GitHub remote is file-backed. Use `MMR_FAKE_REMOTE_DIR` when tests need a shared simulated remote root; otherwise the default remote root is under the mmr data directory.
-- Sync uploads only redacted projections. Unsafe event types, deterministic secret findings, or degraded PII coverage should block upload rather than silently strip data.
+- Sync/hydration uses a file-backed GitHub simulation; no GitHub credential or
+  network authentication is performed. `MMR_GITHUB_USER`, `GITHUB_USER`, `USER`,
+  then `USERNAME` supply a descriptor label; the final fallback is the literal
+  `authenticated-user`, not a verified account. `MMR_FAKE_REMOTE_AUTH=0|false|fail|failed`
+  simulates an authentication failure.
+- Use `MMR_FAKE_REMOTE_DIR` when tests need a shared simulated remote root;
+  otherwise it lives under the mmr data directory. This is not hosted sync.
+- Sync writes only redacted projections to that simulated remote. Unsafe event
+  types, deterministic secret findings, or degraded PII coverage block sync
+  rather than silently stripping data.
 - Use `mmr status --pretty`, `mmr init --pretty`, `mmr sync --dry-run --pretty`, `mmr redact scan`, and `mmr redact explain <event-id>` to verify hydration/sync state and diagnose blockers before changing behavior.
 
 ## CLI default env vars

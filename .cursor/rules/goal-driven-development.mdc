@@ -5,7 +5,9 @@ alwaysApply: true
 
 # Goal Driven Development
 
-Follow the **goal-driven-development** skill (`~/.agents/skills/goal-driven-development/SKILL.md`) for full Author/Execute procedure, templates, and `gdd_status.py` usage.
+Follow `AGENTS.md` for the repository-local goal structure and approval model.
+Use `.agents/skills/mmr/goal-closeout/SKILL.md` for verification and evidence review.
+These instructions work from the checkout without a global skill installation.
 
 ## Deliver goal docs
 

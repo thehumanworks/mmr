@@ -84,7 +84,7 @@ cargo fmt && cargo test && cargo test --test cli_benchmark -- --ignored --nocapt
 cargo clippy --all-targets --all-features -- -D warnings && cargo build --release
 ```
 
-Close with `goal-closeout` (`gdd_status.py` DONE gate).
+Close with the verification and evidence checklist in `../goal-closeout/SKILL.md`.
 
 ## Anti-Patterns
 

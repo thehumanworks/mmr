@@ -28,6 +28,13 @@
   includes explicitly named SSH peers.
 - `mmr find` searches normalized events and learned memory. JSON is the default;
   `--format line` emits tab-delimited `citation`, `line`, `source`, `snippet`.
+- `mmr retrieve "query" --max-sessions 1` ranks readable sessions for a match.
+  For phrase → session → context, run `init`, then `find` for lines/citations,
+  then `retrieve`. Pass its `selected_sessions` fields `source`,
+  `source_session_id`, and `project_name` to
+  `mmr --source <source> read session <source_session_id> --project <project_name>`;
+  `find`'s `session_id` is an internal store ID. A known native session can be
+  read without `init`.
 - `mmr recall` retrieves the previous stable session in scope. `mmr recall 2`
   reads two sessions back; age 0 remains held back unless `--include-newest` is
   passed. `--remote <ssh-target>` also queries explicitly named SSH peers.
@@ -38,6 +45,7 @@
 - `mmr read source --source <source>` reads all history for one harness across
   projects. `--remote <ssh-target>` includes peer history for that source.
 - `mmr context project` returns project-specific context across sources.
+  `--limit 20` bounds the returned raw messages; it does not call a model.
   `--remote <ssh-target>` includes explicitly named SSH peers.
 - `mmr context source --source <source>` returns harness-specific context across
   projects. `--remote <ssh-target>` includes peer context.
