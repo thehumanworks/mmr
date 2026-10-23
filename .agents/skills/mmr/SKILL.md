@@ -66,6 +66,16 @@ default; scripts that need restoration must add `--apply`. Explicit
 
 - `mmr context project` prepares project context; `mmr assimilate project`
   returns a prompt and evidence for the calling agent without launching one.
+  During assimilation, prefer scoped deterministic checks for recurring lessons
+  over longer instructions. Keep the supporting lesson/citations, or a short
+  judgement lesson with a reason when automation is unsuitable. Use
+  `assimilate project --review proposal.json` (or `source` with the same evidence
+  window) to validate proposed observations. Codification needs two distinct
+  supporting refs, one evidenced project-ID scope, target, expected behaviour
+  and validation text; it stays `proposed`. Review never runs code or attests
+  verification/installation. Identify duplicate/obsolete instructions for review
+  without deleting evidence. See `docs/mmr-dream-runner.md` in the checkout and
+  run `python3 examples/dream_codification.py` after building to try it safely.
 - `mmr summarize` and `mmr compact` send selected text to configured external
   model services. Use only when that processing is intended.
 - `mmr mcp --transport stdio` exposes the existing CLI-backed tools to a client.

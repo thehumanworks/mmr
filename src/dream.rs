@@ -11,6 +11,9 @@ use serde_json::Value;
 use crate::redaction::{DeterministicPrivacyDetector, PiiCoverageStatus, scan_text_with_detector};
 use crate::store::{EventRecord, ProjectRecord, Store, content_hash};
 
+mod review;
+pub use review::{CodificationProposal, MAX_REVIEW_BYTES, review_output};
+
 pub const ENV_DEFAULT_DREAM_RUNNER: &str = "MMR_DEFAULT_DREAM_RUNNER";
 pub const ENV_DREAM_COMMAND: &str = "MMR_DREAM_COMMAND";
 pub const ENV_DREAM_MOCK_FAILURE: &str = "MMR_DREAM_MOCK_FAILURE";
@@ -136,6 +139,8 @@ pub struct DreamObservation {
     pub open_loops: Vec<String>,
     #[serde(default)]
     pub status: DreamObservationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codification: Option<CodificationProposal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
