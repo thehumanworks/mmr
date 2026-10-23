@@ -2,7 +2,8 @@
 title: "Exercise codification-first assimilation with a fresh agent"
 description: "Evaluate lesson selection and an authored check on synthetic history, beyond JSON validation."
 date: "2026-10-23"
-status: "in-progress"
+status: "done"
+updated: "2026-10-23"
 confidence_floor: 90
 ---
 
@@ -23,7 +24,7 @@ or a model benchmark. No live histories, network, secret use, new runner or tool
   failing/passing fixtures; source evidence and native files remain unchanged.
 - [x] Evaluate codification bias and conflicting/contextual evidence handling.
   Fix only a concrete flaw if found; otherwise record concise reproducible evidence.
-- [ ] Applicable checks and independent review pass; update draft PR26 without
+- [x] Applicable checks and independent review pass; update draft PR26 without
   readiness/merge changes, preserving exact head and verification limitations.
 
 # Evidence
@@ -71,6 +72,13 @@ or a model benchmark. No live histories, network, secret use, new runner or tool
 - 2026-10-23 — Refreshed remote refs before publication: main remains
   `2d19dc1fe8bc75c565a6b50b2d74fb2dc024cd67`, draft26 head remains
   `d632acb275e58b3005563fb182083c314324a042`; no concurrent changes to overwrite.
+- 2026-10-23 — Pushed example/evidence commit
+  `7df9c264c4ac28abc51decc026be797daaed8af9` to existing
+  https://github.com/thehumanworks/mmr/pull/26. GitHub confirmed matching head,
+  draft=true and merged=false. PR description updated with the exercise and its
+  limitations. Confidence 95%; no product flaw requiring runtime changes and no
+  remaining blocker. This closing goal update is documentation-only; final
+  remote head/check availability is reported separately after publication.
 
 # Exit conditions
 
