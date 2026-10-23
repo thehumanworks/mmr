@@ -2,7 +2,8 @@
 title: "Bias dreaming toward reviewed codification proposals"
 description: "Reuse assimilation evidence and validation to propose bounded checks without executing them."
 date: "2026-10-23"
-status: "in-progress"
+status: "done"
+updated: "2026-10-23"
 confidence_floor: 90
 ---
 
@@ -28,7 +29,7 @@ instruction recommendations remain review output, not deletion.
 - [x] Synthetic regression tests cover accepted proposals/judgement, missing and
   omitted evidence, duplicate refs, invalid targets/scope/state, bounds and no
   writes. Example shows proposed check plus judgement lesson and preserved history.
-- [ ] Baseline/full format, tests, benchmarks, strict Clippy, release build,
+- [x] Baseline/full format, tests, benchmarks, strict Clippy, release build,
   docs/example checks and independent review pass. Publish a focused draft PR;
   no merge or readiness changes.
 
@@ -79,3 +80,9 @@ instruction recommendations remain review output, not deletion.
   `2d19dc1fe8bc75c565a6b50b2d74fb2dc024cd67`; no other open PRs. Prior branches and
   merged work preserved. Review is CLI-only; existing MCP/HTTP handoffs receive
   guidance but no file-reading review argument or new tool.
+
+- 2026-10-23 — Published draft PR https://github.com/thehumanworks/mmr/pull/26
+  at implementation commit `f00e1e85b9bcd6ab7a0de61a74986903be79a4df`.
+  Local closeout evidence review passed; all required checks/work are complete.
+  This final goal-only commit records publication and done status. No readiness
+  or merge action was attempted; no implementation blockers remain.
