@@ -164,7 +164,9 @@ no instruction or lesson is removed.
 
 `state` must be `proposed`; claiming `verified` or `installed` is rejected.
 Observation `status: active` describes confidence in the lesson, never test or
-installation status. Validation text is inert: review confirms structure and
+installation status. For `kind: superseded`, that is confidence in the assessment
+that an old instruction is superseded, not a direction to activate that instruction.
+Validation text is inert: review confirms structure and
 evidence membership, not semantic truth, test success or safe code. Only a
 separately reviewed implementation and actual check results can establish those.
 Review fails nonzero without returning a partially accepted plan and never
@@ -189,6 +191,9 @@ Temporary home removed.
 ```
 
 The proposal in this example is authored by the fixture, not by a live model.
+For an independent agent's choices from conflicting synthetic history and a
+runnable fail/pass check, see the [agent exercise](mmr-dream-agent-exercise.md).
+It records developer verification; product codification remains `proposed`.
 The new file-review option is CLI-only; existing MCP/HTTP handoff tools receive
 the updated guidance but do not expose file-reading review arguments.
 
