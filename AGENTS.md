@@ -33,6 +33,9 @@ commit unsafe.
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
+- `src/cli/retrieval.rs`: private find/retrieve matching, response types, session
+  ranking and continuation; only `find_output` and `retrieve_output` are exposed
+  to the parent. Keep argument parsing and shared CLI helpers in `src/cli.rs`.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
 - `src/teleport/`: provider-profile native bundle pack/apply/resume/export (`provider.rs`, `providers/{codex,claude,cursor,grok,pi}.rs`); artifact paths are provider-qualified (`native/<provider>/…`); legacy flat `transcript.native.jsonl` bundles still verify on read.

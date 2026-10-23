@@ -29,6 +29,16 @@ Reading raw sessions does not require that setup. Do not run ingestion merely
 to read a known session. If access to history is restricted, report the missing
 context instead of reading protected provider files as a fallback.
 
+When starting from a phrase, use `find "phrase"` for lines/citations, then
+`retrieve "phrase" --max-sessions 1` for readable session selection. Pass its
+`selected_sessions` fields `source`, `source_session_id`, and `project_name` to
+`mmr --source <source> read session <source_session_id> --project <project_name>`.
+Do not pass `find`'s internal store `session_id` to `read session`.
+Use `mmr context project --limit 20` for bounded raw messages and session metadata
+without model calls. In the source checkout, run `python3
+examples/find_read_context.py` after `cargo build --locked` to try this flow with
+an isolated synthetic HOME and verify native histories remain unchanged.
+
 ## Carry Context As A File
 
 ```bash
