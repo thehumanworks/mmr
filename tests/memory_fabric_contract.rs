@@ -1285,7 +1285,8 @@ fn cli_help_contract_is_lean_and_actionable() {
     assert!(dream_help_text.contains("prompt"));
     assert!(dream_help_text.contains("runbook"));
     assert!(!dream_help_text.contains("--dry-run"));
-    assert!(!dream_help_text.contains("--review"));
+    assert!(dream_help_text.contains("--review"));
+    assert!(dream_help_text.contains("never execute or install"));
     assert!(!dream_help_text.contains("MMR_DREAM_COMMAND"));
 }
 

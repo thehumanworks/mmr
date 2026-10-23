@@ -919,11 +919,13 @@ const schemas = {
     objective: { type: "string" },
     instructions: arrayOf({ type: "string" }),
   }),
-  DreamOutputContract: fixed(["format", "required_sections", "memory_candidate_fields", "refusal_conditions"], {
+  DreamOutputContract: fixed(["format", "required_sections", "memory_candidate_fields", "refusal_conditions", "codification_fields", "review_format"], {
     format: { type: "string" },
     required_sections: arrayOf({ type: "string" }),
     memory_candidate_fields: arrayOf({ type: "string" }),
     refusal_conditions: arrayOf({ type: "string" }),
+    codification_fields: arrayOf({ type: "string" }),
+    review_format: { type: "string" },
   }),
   AssimilationRequest: {
     ...fixed(["scope"], {

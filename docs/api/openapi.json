@@ -6074,7 +6074,9 @@
           "format",
           "required_sections",
           "memory_candidate_fields",
-          "refusal_conditions"
+          "refusal_conditions",
+          "codification_fields",
+          "review_format"
         ],
         "properties": {
           "format": {
@@ -6097,6 +6099,15 @@
             "items": {
               "type": "string"
             }
+          },
+          "codification_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "review_format": {
+            "type": "string"
           }
         }
       },
