@@ -730,34 +730,6 @@ fn read_project_replaces_export_project_history() {
 }
 
 #[test]
-fn read_source_requires_explicit_source_and_reads_across_projects() {
-    let fixture = TestFixture::seeded();
-    let missing_source = fixture.run_cli(&["read", "source"]);
-    assert!(!missing_source.status.success());
-    assert!(
-        String::from_utf8_lossy(&missing_source.stderr).contains("requires --source"),
-        "stderr={}",
-        String::from_utf8_lossy(&missing_source.stderr)
-    );
-
-    let output = fixture.run_cli(&["--source", "grok", "read", "source"]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 3);
-    assert!(
-        json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|message| message["source"] == "grok")
-    );
-}
-
-#[test]
 fn recall_replaces_prev_for_previous_stable_session() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);
@@ -3405,22 +3377,6 @@ fn compact_session_markdown_outputs_compacted_text_only() {
     assert!(input.contains("hello from claude"));
 }
 
-#[test]
-fn compact_source_requires_explicit_source() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_raw(&["compact", "source"]);
-
-    assert!(
-        !output.status.success(),
-        "compact source without --source should be rejected"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("`mmr compact source` requires --source"),
-        "stderr should explain missing source: {stderr}"
-    );
-}
-
 const CODEX_PROJECT_TRANSCRIPT: &str = "
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:00:01] user: hello from codex
@@ -3435,24 +3391,6 @@ const CODEX_PROJECT_TRANSCRIPT: &str = "
 - [2025-01-02T00:05:00] assistant: short codex answer
 ";
 
-const CODEX_SOURCE_TRANSCRIPT: &str = "
-## Session sess-codex-1 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:00:01] user: hello from codex
-
-## Session sess-codex-2 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:00:30] user: start longer codex thread
-- [2025-01-02T00:01:00] assistant: first long codex answer
-- [2025-01-02T00:02:00] user: follow-up question
-- [2025-01-02T00:03:00] assistant: second long codex answer
-
-## Session sess-codex-1 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:05:00] assistant: short codex answer
-
-## Session sess-codex-recent-1 (codex, /Users/test/codex-recent)
-- [2025-01-03T00:00:01] user: brand new project question
-- [2025-01-03T00:01:00] assistant: recent project answer
-";
-
 const CODEX_SESSION_TRANSCRIPT: &str = "
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:00:01] user: hello from codex
@@ -3465,7 +3403,7 @@ fn summarize_and_compact_send_each_scope_transcript() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let scopes: [(&[&str], &str); 3] = [
+    let scopes: [(&[&str], &str); 2] = [
         (
             &["project", "--project", "/Users/test/codex-proj"],
             CODEX_PROJECT_TRANSCRIPT,
@@ -3479,16 +3417,12 @@ fn summarize_and_compact_send_each_scope_transcript() {
             ],
             CODEX_SESSION_TRANSCRIPT,
         ),
-        (&["source"], CODEX_SOURCE_TRANSCRIPT),
     ];
 
     for (scope, transcript) in scopes {
         let mut args = vec!["--source", "codex", "summarize"];
         args.extend_from_slice(scope);
         args.extend(["--limit", "50"]);
-        if scope[0] == "source" {
-            args.truncate(args.len() - 2);
-        }
         let (base_url, captured, handle) = start_mock_chat_completions_server(
             r#"{"id":"scope","model":"test-model","choices":[{"message":{"role":"assistant","content":"summary"}}]}"#,
         );
@@ -3576,40 +3510,6 @@ fn context_project_returns_sessions_newest_first_and_newest_message_window() {
     assert_eq!(json["total_sessions"], 2);
     assert_eq!(json["total_messages"], 6);
     assert!(json.get("peer_results").is_none());
-}
-
-#[test]
-fn context_source_requires_source_and_spans_projects() {
-    let fixture = TestFixture::seeded();
-    let missing = fixture.run_cli_with_env(&["context", "source"], &[("MMR_DEFAULT_SOURCE", "")]);
-    assert!(!missing.status.success());
-    assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("`mmr context source` requires --source"),
-        "stderr={}",
-        String::from_utf8_lossy(&missing.stderr)
-    );
-
-    let output = fixture.run_cli(&["--source", "codex", "context", "source", "--limit", "2"]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["command"], "context/source");
-    assert_eq!(json["scope"], "source");
-    assert_eq!(json["source"], "codex");
-    assert!(json["project"].is_null());
-    assert_eq!(
-        rows(&json["sessions"], &["/session_id"]),
-        ["sess-codex-recent-1", "sess-codex-1", "sess-codex-2"]
-    );
-    assert_eq!(
-        rows(&json["messages"], &["/timestamp", "/role"]),
-        ["2025-01-03T00:00:01|user", "2025-01-03T00:01:00|assistant"]
-    );
-    assert_eq!(json["total_sessions"], 3);
-    assert_eq!(json["total_messages"], 8);
 }
 
 #[test]
@@ -5066,16 +4966,12 @@ fn remote_flag_is_rejected_on_every_command() {
         &["list", "sessions"],
         &["read", "project"],
         &["read", "session", "sess-codex-1"],
-        &["--source", "codex", "read", "source"],
         &["context", "project"],
-        &["--source", "codex", "context", "source"],
         &["recall"],
         &["summarize", "project"],
         &["summarize", "session", "sess-codex-1"],
-        &["--source", "codex", "summarize", "source"],
         &["compact", "project"],
         &["compact", "session", "sess-codex-1"],
-        &["--source", "codex", "compact", "source"],
     ];
     for command in commands {
         let mut args = command.to_vec();
@@ -5087,5 +4983,20 @@ fn remote_flag_is_rejected_on_every_command() {
             stderr.contains("unexpected argument '--remote'"),
             "args={args:?} stderr={stderr}"
         );
+    }
+}
+
+#[test]
+fn source_scoped_subcommands_are_rejected() {
+    let fixture = TestFixture::seeded();
+    for command in ["read", "context", "summarize", "compact"] {
+        let output = fixture.run_cli(&["--source", "codex", command, "source"]);
+        assert_eq!(output.status.code(), Some(2), "{command} source");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand 'source'"),
+            "{command} source stderr={stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{command} source stdout");
     }
 }

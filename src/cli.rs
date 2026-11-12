@@ -287,8 +287,6 @@ pub enum ReadCommand {
     Session(ReadSessionArgs),
     /// Read project-scoped history across all sources
     Project(ReadProjectArgs),
-    /// Read source-scoped history across all projects for one harness
-    Source(ReadSourceArgs),
 }
 
 #[derive(Args, Debug)]
@@ -332,22 +330,6 @@ pub struct ReadProjectArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct ReadSourceArgs {
-    /// Output format
-    #[arg(long, value_enum, default_value = "json")]
-    format: ReadFormatArg,
-    /// Output directory for --format tree
-    #[arg(long)]
-    output_dir: Option<PathBuf>,
-    /// Maximum number of messages to return for JSON output
-    #[arg(long)]
-    limit: Option<usize>,
-    /// Number of sorted messages to skip for JSON output
-    #[arg(long, default_value_t = 0)]
-    offset: usize,
-}
-
-#[derive(Args, Debug)]
 pub struct ContextArgs {
     #[command(subcommand)]
     command: ContextCommand,
@@ -357,8 +339,6 @@ pub struct ContextArgs {
 pub enum ContextCommand {
     /// Produce project-specific context across all sources
     Project(ContextProjectArgs),
-    /// Produce harness-specific context across all projects
-    Source(ContextSourceArgs),
 }
 
 #[derive(Args, Debug)]
@@ -372,13 +352,6 @@ pub struct ContextProjectArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct ContextSourceArgs {
-    /// Maximum number of recent messages to include
-    #[arg(long, default_value_t = 200)]
-    limit: usize,
-}
-
-#[derive(Args, Debug)]
 pub struct SummarizeArgs {
     #[command(subcommand)]
     command: SummarizeCommand,
@@ -388,8 +361,6 @@ pub struct SummarizeArgs {
 pub enum SummarizeCommand {
     /// Run a stateless summary over project-scoped history
     Project(SummarizeProjectArgs),
-    /// Run a stateless summary over all history from one harness/source
-    Source(SummarizeSourceArgs),
     /// Run a stateless summary over one explicit session
     Session(SummarizeSessionArgs),
 }
@@ -405,12 +376,6 @@ pub struct SummarizeProjectArgs {
     /// Number of newest-ranked messages to skip before applying `--limit`
     #[arg(long, default_value_t = 0)]
     offset: usize,
-    #[command(flatten)]
-    runner: SummaryRunnerArgs,
-}
-
-#[derive(Args, Debug)]
-pub struct SummarizeSourceArgs {
     #[command(flatten)]
     runner: SummaryRunnerArgs,
 }
@@ -442,8 +407,6 @@ pub struct CompactArgs {
 pub enum CompactCommand {
     /// Compact project-scoped history with Morph Compact
     Project(CompactProjectArgs),
-    /// Compact all history from one harness/source with Morph Compact
-    Source(CompactSourceArgs),
     /// Compact one explicit session with Morph Compact
     Session(CompactSessionArgs),
 }
@@ -453,12 +416,6 @@ pub struct CompactProjectArgs {
     /// Project name or path (omit to use current directory)
     #[arg(long, short = 'p')]
     project: Option<String>,
-    #[command(flatten)]
-    runner: CompactRunnerArgs,
-}
-
-#[derive(Args, Debug)]
-pub struct CompactSourceArgs {
     #[command(flatten)]
     runner: CompactRunnerArgs,
 }
@@ -1031,18 +988,18 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             recall_response(&load_service()?, args, cli.source, source_filter, pretty)
         }
         Commands::Read(args) => {
-            read_command_response(&load_service()?, args, cli.source, source_filter, pretty)
+            read_command_response(&load_service()?, args, source_filter, pretty)
         }
         Commands::Context(args) => {
-            context_command_response(&load_service()?, args, cli.source, source_filter, pretty)
+            context_command_response(&load_service()?, args, source_filter, pretty)
         }
         Commands::Summarize(args) => {
             let service = load_service()?;
-            summarize_command_response(&service, args, cli.source, source_filter, pretty).await
+            summarize_command_response(&service, args, source_filter, pretty).await
         }
         Commands::Compact(args) => {
             let service = load_service()?;
-            compact_command_response(&service, args, cli.source, source_filter, pretty).await
+            compact_command_response(&service, args, source_filter, pretty).await
         }
     }
 }
@@ -1079,17 +1036,12 @@ fn list_command_response(
 fn read_command_response(
     service: &QueryService,
     args: ReadArgs,
-    cli_source: Option<SourceFilter>,
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
     match args.command {
         ReadCommand::Session(args) => read_session_response(service, args, source_filter, pretty),
         ReadCommand::Project(args) => read_project_response(service, args, source_filter, pretty),
-        ReadCommand::Source(args) => {
-            let source = require_explicit_source(cli_source, "read source")?;
-            read_source_response(service, args, source, pretty)
-        }
     }
 }
 
@@ -1150,28 +1102,6 @@ fn read_project_response(
     serialize(&response, pretty)
 }
 
-fn read_source_response(
-    service: &QueryService,
-    args: ReadSourceArgs,
-    source: SourceFilter,
-    pretty: bool,
-) -> Result<String> {
-    if args.format == ReadFormatArg::Tree {
-        let store = Store::open_default()?;
-        let events = store.events_for_source(source.as_str(), None, None)?;
-        let response = export_tree_events_response(events, args.output_dir, "source")?;
-        return serialize(&response, pretty);
-    }
-
-    let response = service.messages(
-        &[],
-        None,
-        Some(source),
-        MessageQueryOptions::new(args.limit, args.offset, oldest_first()),
-    )?;
-    serialize(&response, pretty)
-}
-
 fn read_cwd_project_messages(
     service: &QueryService,
     source_filter: Option<SourceFilter>,
@@ -1228,7 +1158,6 @@ enum MessageScope<'a> {
         session_id: &'a str,
         project: Option<&'a str>,
     },
-    Source(SourceFilter),
 }
 
 impl MessageScope<'_> {
@@ -1247,7 +1176,6 @@ impl MessageScope<'_> {
                 session_id,
                 project,
             } => service.messages(&[session_id.to_string()], project, source_filter, unpaged)?,
-            Self::Source(source) => service.messages(&[], None, Some(source), unpaged)?,
         };
         Ok(response.messages)
     }
@@ -1327,40 +1255,21 @@ struct ContextResponse {
     messages: Vec<ApiMessage>,
 }
 
+/// `context project`: every session in the project, newest first, and the
+/// first `limit` messages, oldest first.
 fn context_command_response(
     service: &QueryService,
     args: ContextArgs,
-    cli_source: Option<SourceFilter>,
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
-    let response = match args.command {
-        ContextCommand::Project(args) => {
-            let project = args
-                .project
-                .or_else(|| effective_project_scope(None, false));
-            local_context(service, "project", project, source_filter, args.limit)?
-        }
-        ContextCommand::Source(args) => {
-            let source = require_explicit_source(cli_source, "context source")?;
-            local_context(service, "source", None, Some(source), args.limit)?
-        }
-    };
-    serialize(&response, pretty)
-}
-
-/// `context`: every session in scope, newest first, and the first `limit` messages,
-/// oldest first. `scope` is `project` or `source`.
-fn local_context(
-    service: &QueryService,
-    scope: &str,
-    project: Option<String>,
-    source: Option<SourceFilter>,
-    limit: usize,
-) -> Result<ContextResponse> {
+    let ContextCommand::Project(args) = args.command;
+    let project = args
+        .project
+        .or_else(|| effective_project_scope(None, false));
     let sessions = service.sessions(
         project.as_deref(),
-        source,
+        source_filter,
         None,
         0,
         SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
@@ -1368,25 +1277,25 @@ fn local_context(
     let messages = service.messages(
         &[],
         project.as_deref(),
-        source,
-        MessageQueryOptions::new(Some(limit), 0, oldest_first()),
+        source_filter,
+        MessageQueryOptions::new(Some(args.limit), 0, oldest_first()),
     )?;
-    Ok(ContextResponse {
-        command: format!("context/{scope}"),
-        scope: scope.to_string(),
-        source: source.map(SourceFilter::as_str).map(str::to_string),
+    let response = ContextResponse {
+        command: "context/project".to_string(),
+        scope: "project".to_string(),
+        source: source_filter.map(SourceFilter::as_str).map(str::to_string),
         project,
         total_sessions: sessions.total_sessions,
         total_messages: messages.total_messages,
         sessions: sessions.sessions,
         messages: messages.messages,
-    })
+    };
+    serialize(&response, pretty)
 }
 
 async fn summarize_command_response(
     service: &QueryService,
     args: SummarizeArgs,
-    cli_source: Option<SourceFilter>,
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
@@ -1423,12 +1332,6 @@ async fn summarize_command_response(
             let messages = newest_page(messages, args.limit, args.offset);
             summarize_transcript(&args.runner, &messages, pretty).await
         }
-        SummarizeCommand::Source(args) => {
-            let source = require_explicit_source(cli_source, "summarize source")?;
-            let scope = MessageScope::Source(source);
-            let messages = scope.local_messages(service, Some(source))?;
-            summarize_transcript(&args.runner, &messages, pretty).await
-        }
     }
 }
 
@@ -1448,7 +1351,6 @@ async fn summarize_transcript(
 async fn compact_command_response(
     service: &QueryService,
     args: CompactArgs,
-    cli_source: Option<SourceFilter>,
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
@@ -1466,11 +1368,6 @@ async fn compact_command_response(
                 project: args.project.as_deref(),
             };
             (scope.local_messages(service, source_filter)?, args.runner)
-        }
-        CompactCommand::Source(args) => {
-            let source = require_explicit_source(cli_source, "compact source")?;
-            let scope = MessageScope::Source(source);
-            (scope.local_messages(service, Some(source))?, args.runner)
         }
     };
     let formatted = format_messages_as_transcript_input(&messages);

@@ -30,10 +30,10 @@ It proves, from a clean non-Git temp directory, that:
   and prints status JSON.
 - `mmr note` adds safe and unsafe human-authored events.
 - `mmr list projects`, `mmr list sessions`, `mmr read project`,
-  `mmr read session`, and `mmr read source` retrieve raw transcript history.
+  and `mmr read session` retrieve raw transcript history.
 - `mmr find` finds stored evidence with stable `mmr://event/...`
   citations.
-- `mmr summarize project`, `mmr summarize source`, and `mmr summarize session`
+- `mmr summarize project` and `mmr summarize session`
   use the stateless continuity runner through a mock OpenAI-compatible Chat
   Completions endpoint.
 - `mmr redact scan` and `mmr sync --dry-run` block fake secrets from both

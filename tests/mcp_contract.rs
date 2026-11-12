@@ -19,19 +19,15 @@ const EXPECTED_TOOLS: &[&str] = &[
     "mmr_list_sessions",
     "mmr_read_session",
     "mmr_read_project",
-    "mmr_read_source",
     "mmr_recall",
     "mmr_find",
     "mmr_context_project",
-    "mmr_context_source",
     "mmr_assimilate_project",
     "mmr_assimilate_source",
     "mmr_summarize_project",
     "mmr_summarize_session",
-    "mmr_summarize_source",
     "mmr_compact_project",
     "mmr_compact_session",
-    "mmr_compact_source",
     "mmr_status",
     "mmr_skill_load",
 ];
@@ -242,26 +238,6 @@ async fn mcp_read_session_matches_cli_fixture() -> anyhow::Result<()> {
     let mcp_json: Value = serde_json::from_str(tool_text(&response).as_str())?;
     assert_eq!(mcp_json["messages"], cli_json["messages"]);
     assert_eq!(mcp_json["total_messages"], cli_json["total_messages"]);
-    Ok(())
-}
-
-#[tokio::test]
-async fn mcp_read_source_requires_explicit_source() -> anyhow::Result<()> {
-    let fixture = TestFixture::seeded();
-    let mut mcp = StdioMcp::spawn(&fixture)?;
-    let response = mcp.send_request(
-        json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "mmr_read_source",
-                "arguments": {}
-            }
-        }),
-        2,
-    )?;
-    assert_eq!(response["error"]["code"], -32602, "{response}");
     Ok(())
 }
 

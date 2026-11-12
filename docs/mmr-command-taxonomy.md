@@ -39,16 +39,11 @@
 - `mmr read session <session-id>` reads one explicit session.
 - `mmr read project` reads project-scoped history across sources, defaulting to
   cwd. Use `--format tree --output-dir <dir>` for an on-disk event tree.
-- `mmr read source --source <source>` reads all history for one harness across
-  projects.
 - `mmr context project` returns project-specific context across sources.
   `--limit 20` bounds the returned raw messages; it does not call a model.
-- `mmr context source --source <source>` returns harness-specific context across
-  projects.
-- `mmr summarize project`, `mmr summarize source --source <source>`, and
-  `mmr summarize session <session-id>` run stateless summaries.
-- `mmr compact project`, `mmr compact source --source <source>`, and
-  `mmr compact session <session-id>` send selected transcript history to Morph
+- `mmr summarize project` and `mmr summarize session <session-id>` run
+  stateless summaries.
+- `mmr compact project` and `mmr compact session <session-id>` send selected transcript history to Morph
   Compact. This removes low-relevance lines without paraphrasing surviving
   content. Set `MORPHLLM_API_KEY`; optionally set `MORPHLLM_BASE_URL` and
   `MMR_COMPACT_MODEL`, or pass `--model`.
@@ -70,7 +65,8 @@
 | `mmr sessions` | `mmr list sessions` |
 | `mmr messages --session <id>` | `mmr read session <id>` |
 | `mmr messages` | `mmr read project` |
-| `mmr messages --all --source <source>` | `mmr read source --source <source>` |
+| `mmr messages --all --source <source>` | none; read by project or session |
+| `mmr read source`, `context source`, `summarize source`, `compact source` | none; read by project or session |
 | `mmr prev [N]` | `mmr recall [N]` |
 | `mmr export` | `mmr read project` |
 | `mmr export --format tree` | `mmr read project --format tree` |

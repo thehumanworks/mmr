@@ -30,14 +30,14 @@ raw history -> retrieval/find/summarize -> assimilate prompt/runbook -> agent-le
 ## Goals
 
 - Preserve useful raw transcript retrieval through `list projects`, `list sessions`, `read session`,
-  `read project`, and `read source`.
+  and `read project`.
 - Add a canonical local SQLite/libSQL-shaped store for normalized memory events.
 - Make first-run setup one command: `mmr init`.
 - Make repeat reconciliation one command: `mmr sync`.
 - Make state inspection one command: `mmr status`.
 - Add human-authored observations with `mmr note`.
 - Add exact and structured discovery with `mmr find`.
-- Use `mmr summarize project`, `mmr summarize source`, and
+- Use `mmr summarize project` and
   `mmr summarize session` for stateless continuity briefs.
 - Add `mmr assimilate project` as the public prompt/runbook handoff for agent-led
   assimilation.

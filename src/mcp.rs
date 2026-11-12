@@ -152,16 +152,6 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read chronological history for one explicit source (claude, codex, cursor, grok, pi).
-    /// Use when the relevant past work is known to live in a specific tool's sessions.
-    #[tool(name = "mmr_read_source")]
-    async fn read_source(
-        &self,
-        Parameters(args): Parameters<ReadSourceToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
     /// Retrieve the previous stable session for immediate continuity. Reach for this FIRST
     /// when resuming or continuing earlier work, when the user says "continue", "as we
     /// discussed", or "last time", or after compaction, /clear, or a fresh session on an
@@ -200,16 +190,6 @@ impl MmrMcpServer {
     async fn context_project(
         &self,
         Parameters(args): Parameters<ContextProjectToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
-    /// Produce source-wide context for one explicit source. Use to brief on everything a
-    /// specific tool (claude, codex, cursor, grok, pi) has worked on, across projects.
-    #[tool(name = "mmr_context_source")]
-    async fn context_source(
-        &self,
-        Parameters(args): Parameters<ContextSourceToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         run_cli_tool(args.into_cli_args()).await
     }
@@ -253,15 +233,6 @@ impl MmrMcpServer {
         run_summary_tool(args.output_format.clone(), args.into_cli_args()).await
     }
 
-    /// Summarize one explicit source through the configured OpenAI-compatible provider.
-    #[tool(name = "mmr_summarize_source")]
-    async fn summarize_source(
-        &self,
-        Parameters(args): Parameters<SummarizeSourceToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_summary_tool(args.output_format.clone(), args.into_cli_args()).await
-    }
-
     /// Compact project history with Morph Compact.
     #[tool(name = "mmr_compact_project")]
     async fn compact_project(
@@ -276,15 +247,6 @@ impl MmrMcpServer {
     async fn compact_session(
         &self,
         Parameters(args): Parameters<CompactSessionToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
-    }
-
-    /// Compact one explicit source with Morph Compact.
-    #[tool(name = "mmr_compact_source")]
-    async fn compact_source(
-        &self,
-        Parameters(args): Parameters<CompactSourceToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
     }
@@ -519,24 +481,6 @@ impl ReadProjectToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct ReadSourceToolArgs {
-    source: String,
-    limit: Option<usize>,
-    offset: Option<usize>,
-}
-
-impl ReadSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["read".to_string(), "source".to_string()]);
-        push_opt(&mut args, "--limit", self.limit);
-        push_opt(&mut args, "--offset", self.offset);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct RecallToolArgs {
     n: Option<u32>,
     source: Option<String>,
@@ -605,22 +549,6 @@ impl ContextProjectToolArgs {
         push_source(&mut args, self.source);
         args.extend(["context".to_string(), "project".to_string()]);
         push_opt(&mut args, "--project", self.project);
-        push_opt(&mut args, "--limit", self.limit);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ContextSourceToolArgs {
-    source: String,
-    limit: Option<usize>,
-}
-
-impl ContextSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["context".to_string(), "source".to_string()]);
         push_opt(&mut args, "--limit", self.limit);
         args
     }
@@ -724,24 +652,6 @@ impl SummarizeSessionToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct SummarizeSourceToolArgs {
-    source: String,
-    instructions: Option<String>,
-    model: Option<String>,
-    output_format: Option<String>,
-}
-
-impl SummarizeSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["summarize".to_string(), "source".to_string()]);
-        push_summary_runner(&mut args, self.instructions, self.model, self.output_format);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct CompactProjectToolArgs {
     source: Option<String>,
     project: Option<String>,
@@ -800,39 +710,6 @@ impl CompactSessionToolArgs {
             self.session_id,
         ]);
         push_opt(&mut args, "--project", self.project);
-        push_compact_runner(
-            &mut args,
-            CompactRunnerToolArgs {
-                query: self.query,
-                compression_ratio: self.compression_ratio,
-                preserve_recent: self.preserve_recent,
-                no_line_ranges: self.no_line_ranges,
-                no_markers: self.no_markers,
-                model: self.model,
-                output_format: self.output_format,
-            },
-        );
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CompactSourceToolArgs {
-    source: String,
-    query: Option<String>,
-    compression_ratio: Option<f32>,
-    preserve_recent: Option<u32>,
-    no_line_ranges: Option<bool>,
-    no_markers: Option<bool>,
-    model: Option<String>,
-    output_format: Option<String>,
-}
-
-impl CompactSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["compact".to_string(), "source".to_string()]);
         push_compact_runner(
             &mut args,
             CompactRunnerToolArgs {

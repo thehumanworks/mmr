@@ -16,7 +16,7 @@
 - The remote/export adapter is a local file-backed simulation with a
   `github:<user>/mmr-store` descriptor. The label does not establish GitHub
   authentication or hosted sync; local SQLite remains the working database.
-- `list projects`, `list sessions`, `read session`, `read project`, and `read source` remain raw retrieval
+- `list projects`, `list sessions`, `read session` and `read project` remain raw retrieval
   surfaces.
 - `summarize` is the stateless summary surface; compatibility aliases are
   removed in the breaking command taxonomy.

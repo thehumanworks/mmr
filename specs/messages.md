@@ -53,7 +53,7 @@ selected session includes `age`, `session_id`, `source`, `project_name`,
 timestamps, `message_count`, and an `equivalent_command` of
 `mmr read session <id>`.
 
-Plain `read project`, `read source`, and `read session` responses omit
+Plain `read project` and `read session` responses omit
 `session_selection`.
 
 ## Pagination Stability
@@ -77,5 +77,5 @@ stderr hint explaining how to narrow the lookup.
 `--project <path>`. JSON output supports `--limit` and `--offset`; tree output is
 available through `--format tree --output-dir <dir>`.
 
-`mmr --source <source> read source` reads all history for one harness across all
-projects. The source must be explicit on the global `--source` flag.
+There is no source-wide read. History is read by project or by session; the
+global `--source` flag only narrows a project or session read to one harness.

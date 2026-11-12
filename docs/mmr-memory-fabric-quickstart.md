@@ -110,7 +110,6 @@ Default `find` output remains JSON on stdout. Use `--pretty` for indented JSON.
 
 ```bash
 mmr summarize project --project "$(pwd)"
-mmr --source codex summarize source
 mmr summarize session <session-id> --project "$(pwd)"
 ```
 
@@ -131,7 +130,6 @@ Compact to delete low-relevance lines while preserving surviving lines verbatim.
 
 ```bash
 mmr compact project --project "$(pwd)" --query "current task"
-mmr --source codex compact source --query "what matters next" -O md
 mmr compact session <session-id> --project "$(pwd)" --compression-ratio 0.4
 ```
 
@@ -194,12 +192,11 @@ mmr list sessions --pretty
 mmr recall --pretty
 mmr read project --pretty
 mmr read session <session-id> --pretty
-mmr --source codex read source --pretty
 ```
 
 `list sessions`, `recall`, and `read project` default to the current project
 when cwd auto-discovery succeeds. Use `--all` for cross-project session listing
-or recall, and use `read source` for source-wide raw reads across projects.
+or recall.
 
 ## Agent Skill
 
