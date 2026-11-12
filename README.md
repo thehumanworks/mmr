@@ -25,6 +25,29 @@ Requirements:
   `rusqlite`.
 - Normal platform TLS/build prerequisites for Rust networking crates.
 
+## Install With Nix
+
+The repository is a Nix flake with a package, an overlay, a home-manager
+module and a NixOS module:
+
+```bash
+nix run github:thehumanworks/mmr -- --help
+nix profile add github:thehumanworks/mmr
+```
+
+```nix
+# home-manager
+imports = [ inputs.mmr.homeModules.default ];
+programs.mmr.enable = true;
+
+# NixOS
+imports = [ inputs.mmr.nixosModules.default ];
+programs.mmr.enable = true;
+```
+
+Both modules can also run the HTTP MCP server (`services.mmr-mcp`). See
+[docs/mmr-nix.md](docs/mmr-nix.md) for every option.
+
 Verify the install:
 
 ```bash
