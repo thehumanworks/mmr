@@ -25,6 +25,41 @@ Requirements:
   `rusqlite`.
 - Normal platform TLS/build prerequisites for Rust networking crates.
 
+## Download A Prebuilt Binary
+
+The [Build workflow](.github/workflows/build.yml) builds `mmr` for four
+targets on every push to `main`, every pull request and every `v*` tag:
+
+| Platform                   | Archive                                |
+| -------------------------- | -------------------------------------- |
+| Linux x86_64 (glibc 2.35+) | `mmr-x86_64-unknown-linux-gnu.tar.gz`  |
+| Linux arm64 (glibc 2.35+)  | `mmr-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Intel (11+)          | `mmr-x86_64-apple-darwin.tar.gz`       |
+| macOS Apple silicon (11+)  | `mmr-aarch64-apple-darwin.tar.gz`      |
+
+Each archive holds the `mmr` binary and this README, next to a `.sha256`
+checksum file. A `v*` tag attaches the archives and a combined `SHA256SUMS` to
+its [GitHub release](https://github.com/thehumanworks/mmr/releases). Builds of
+`main` and of pull requests are workflow artifacts on the
+[Actions run page](https://github.com/thehumanworks/mmr/actions/workflows/build.yml)
+(GitHub sign-in required).
+
+Install the latest release:
+
+```bash
+target=aarch64-apple-darwin   # pick your archive from the table
+base=https://github.com/thehumanworks/mmr/releases/latest/download
+curl -fsSLO "$base/mmr-$target.tar.gz"
+curl -fsSLO "$base/mmr-$target.tar.gz.sha256"
+shasum -a 256 -c "mmr-$target.tar.gz.sha256"
+tar -xzf "mmr-$target.tar.gz" mmr
+mkdir -p ~/.local/bin && mv mmr ~/.local/bin/
+```
+
+The macOS binaries are not notarized. `curl` downloads run as-is; if you
+download with a browser, clear the quarantine flag first with
+`xattr -d com.apple.quarantine mmr`.
+
 ## Install With Nix
 
 The repository is a Nix flake with a package, an overlay, a home-manager
