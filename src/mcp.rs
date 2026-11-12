@@ -121,8 +121,9 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// List sessions in a project, source, or all-project scope. Use to locate which past
-    /// session holds the work, decision, or discussion you need before reading it.
+    /// List a project's sessions, newest first, across every harness. Use to see what past
+    /// sessions exist before reading one; pass a session's session_id and source to
+    /// mmr_read_session.
     #[tool(name = "mmr_list_sessions")]
     async fn list_sessions(
         &self,
@@ -131,8 +132,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read one session by session ID. Use when a specific past session is known to contain
-    /// decisions, rationale, or unfinished work to continue.
+    /// Read one session's messages by session_id. Use after mmr_find, mmr_list_sessions or
+    /// mmr_recall points at a session; pass its source too when you have it.
     #[tool(name = "mmr_read_session")]
     async fn read_session(
         &self,
@@ -141,8 +142,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read chronological project history across sources. Use to reconstruct how work
-    /// evolved when raw detail matters more than a summary.
+    /// Read a project's raw message history across every harness, in time order. Use to
+    /// reconstruct how work evolved when raw detail matters more than a summary.
     #[tool(name = "mmr_read_project")]
     async fn read_project(
         &self,
@@ -163,10 +164,11 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Find text in this project's history from every harness (case-insensitive; no setup).
-    /// Use before proposing an approach that may already have been tried, decided, or
-    /// rejected, or to answer "did we ever..." / "why did we..." questions. Each match has a
-    /// session_id and source to pass to mmr_read_session. Set all=true for every project.
+    /// Find text in this project's history from every harness, newest first
+    /// (case-insensitive; no setup). Use before proposing an approach that may already have
+    /// been tried, decided or rejected, or to answer "did we ever..." or "why did we..."
+    /// questions. Each match has a session_id and source to pass to mmr_read_session. Set
+    /// all=true to search every project.
     #[tool(name = "mmr_find")]
     async fn find(
         &self,
@@ -175,8 +177,9 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Produce scoped, ready-to-use context for a project across sources. Use to brief
-    /// yourself or another agent before starting work on a project with prior history.
+    /// Return a project's session list plus its newest messages across every harness, in one
+    /// call and without a model. Use to brief yourself before starting work on a project with
+    /// prior history.
     #[tool(name = "mmr_context_project")]
     async fn context_project(
         &self,
@@ -204,7 +207,8 @@ impl MmrMcpServer {
         run_summary_tool(args.output_format.clone(), args.into_cli_args()).await
     }
 
-    /// Compact project history with Morph Compact.
+    /// Compact project history with Morph Compact (needs MORPHLLM_API_KEY). It drops
+    /// low-relevance lines and keeps the rest verbatim; use query to focus it.
     #[tool(name = "mmr_compact_project")]
     async fn compact_project(
         &self,
@@ -213,7 +217,8 @@ impl MmrMcpServer {
         run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
     }
 
-    /// Compact one explicit session with Morph Compact.
+    /// Compact one session with Morph Compact (needs MORPHLLM_API_KEY). It drops
+    /// low-relevance lines and keeps the rest verbatim; use query to focus it.
     #[tool(name = "mmr_compact_session")]
     async fn compact_session(
         &self,
@@ -319,8 +324,12 @@ impl ServerHandler for MmrMcpServer {
         )
         .with_server_info(Implementation::new("mmr", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "mmr exposes local AI coding session history. Tools return JSON text that matches \
-             the mmr CLI contract; prompts describe reusable history-retrieval workflows.",
+            "mmr reads this machine's earlier agent sessions from Claude Code, Codex, Cursor, \
+             Grok and Pi, scoped to a project. To continue earlier work, call mmr_recall. To \
+             check whether something was tried or decided, call mmr_find, then mmr_read_session \
+             with a match's session_id and source. To brief yourself on a project, call \
+             mmr_context_project. Omitting project uses the project of the directory the \
+             server runs in. Tools return JSON text that matches the mmr CLI.",
         )
     }
 }
@@ -336,10 +345,15 @@ struct EmptyToolArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ListProjectsToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Maximum projects to return (default 10).
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Sort by timestamp (default) or message-count.
     sort_by: Option<String>,
+    /// Sort order: desc (default) or asc.
     order: Option<String>,
 }
 
@@ -358,13 +372,20 @@ impl ListProjectsToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ListSessionsToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Use every project instead of one.
     #[serde(default)]
     all: bool,
+    /// Maximum sessions to return (default 20).
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Sort by timestamp (default) or message-count.
     sort_by: Option<String>,
+    /// Sort order: desc (default) or asc.
     order: Option<String>,
 }
 
@@ -385,10 +406,16 @@ impl ListSessionsToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ReadSessionToolArgs {
+    /// Session id, from a mmr_find match, mmr_list_sessions or mmr_recall.
+    #[serde(alias = "session")]
     session_id: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name to narrow the lookup, as in a result's project_name.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
 }
 
@@ -406,9 +433,13 @@ impl ReadSessionToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ReadProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
 }
 
@@ -426,12 +457,18 @@ impl ReadProjectToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct RecallToolArgs {
+    /// How many sessions back: 1 (default) is the previous stable session.
     n: Option<u32>,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Use every project instead of one.
     #[serde(default)]
     all: bool,
+    /// Maximum messages to return (default 50).
     limit: Option<usize>,
+    /// Allow the newest session, which may be the caller's own live session.
     #[serde(default)]
     include_newest: bool,
 }
@@ -454,13 +491,21 @@ impl RecallToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct FindToolArgs {
+    /// Text to find in message content; case-insensitive.
     query: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Use every project instead of one.
     #[serde(default)]
     all: bool,
+    /// Only search this session id.
+    #[serde(alias = "session_id")]
     session: Option<String>,
+    /// Maximum matches to return (default 20).
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
 }
 
@@ -480,8 +525,11 @@ impl FindToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ContextProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Maximum newest messages to include (default 100).
     limit: Option<usize>,
 }
 
@@ -498,12 +546,19 @@ impl ContextProjectToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SummarizeProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Replace the output-format and rules part of the summary instructions.
     instructions: Option<String>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -522,13 +577,22 @@ impl SummarizeProjectToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SummarizeSessionToolArgs {
+    /// Session id, from a mmr_find match, mmr_list_sessions or mmr_recall.
+    #[serde(alias = "session")]
     session_id: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name to narrow the lookup, as in a result's project_name.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Replace the output-format and rules part of the summary instructions.
     instructions: Option<String>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -551,14 +615,23 @@ impl SummarizeSessionToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CompactProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Focus query for relevance-based pruning.
     query: Option<String>,
+    /// Fraction of input to keep, for example 0.3 (aggressive) or 0.7 (light).
     compression_ratio: Option<f32>,
+    /// Keep the last N messages uncompressed.
     preserve_recent: Option<u32>,
+    /// Omit compacted_line_ranges from the result.
     no_line_ranges: Option<bool>,
+    /// Omit "(filtered N lines)" markers from the compacted text.
     no_markers: Option<bool>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -586,15 +659,26 @@ impl CompactProjectToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CompactSessionToolArgs {
+    /// Session id, from a mmr_find match, mmr_list_sessions or mmr_recall.
+    #[serde(alias = "session")]
     session_id: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name to narrow the lookup, as in a result's project_name.
     project: Option<String>,
+    /// Focus query for relevance-based pruning.
     query: Option<String>,
+    /// Fraction of input to keep, for example 0.3 (aggressive) or 0.7 (light).
     compression_ratio: Option<f32>,
+    /// Keep the last N messages uncompressed.
     preserve_recent: Option<u32>,
+    /// Omit compacted_line_ranges from the result.
     no_line_ranges: Option<bool>,
+    /// Omit "(filtered N lines)" markers from the compacted text.
     no_markers: Option<bool>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -625,12 +709,19 @@ impl CompactSessionToolArgs {
 }
 
 struct CompactRunnerToolArgs {
+    /// Focus query for relevance-based pruning.
     query: Option<String>,
+    /// Fraction of input to keep, for example 0.3 (aggressive) or 0.7 (light).
     compression_ratio: Option<f32>,
+    /// Keep the last N messages uncompressed.
     preserve_recent: Option<u32>,
+    /// Omit compacted_line_ranges from the result.
     no_line_ranges: Option<bool>,
+    /// Omit "(filtered N lines)" markers from the compacted text.
     no_markers: Option<bool>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 

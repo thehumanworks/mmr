@@ -325,6 +325,18 @@ fn assert_stdio_query_contract(fixture: &TestFixture, mcp: &mut StdioMcp) -> any
     for expected in EXPECTED_TOOLS {
         assert!(tools.iter().any(|tool| tool["name"] == *expected));
     }
+    for tool in tools {
+        let properties = tool["inputSchema"]["properties"].as_object();
+        for (name, schema) in properties.into_iter().flatten() {
+            assert!(
+                schema["description"]
+                    .as_str()
+                    .is_some_and(|text| !text.is_empty()),
+                "{} parameter {name} has no description",
+                tool["name"]
+            );
+        }
+    }
     for (id, tool, arguments, cli_args) in [
         (
             3,
@@ -337,6 +349,12 @@ fn assert_stdio_query_contract(fixture: &TestFixture, mcp: &mut StdioMcp) -> any
             "mmr_find",
             json!({"source":"codex", "query":"socketmarker"}),
             vec!["--source", "codex", "find", "socketmarker"],
+        ),
+        (
+            5,
+            "mmr_read_session",
+            json!({"source":"claude", "session":"sess-claude-1"}),
+            vec!["--source", "claude", "read", "session", "sess-claude-1"],
         ),
     ] {
         let cli = fixture.run_cli(&cli_args);

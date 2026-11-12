@@ -12,6 +12,25 @@ mmr mcp --transport stdio
 mmr mcp --transport http --bind 127.0.0.1:8765 --path /mcp
 ```
 
+## Tools
+
+Every tool runs the matching CLI command and returns its JSON as text. Omitting
+`project` uses the project of the directory the server runs in. `source`
+narrows a tool to one harness.
+
+| Tool | Use it to |
+| --- | --- |
+| `mmr_recall` | Continue earlier work: read the previous stable session. |
+| `mmr_find` | Check whether something was tried or decided; each match names a session. |
+| `mmr_read_session` | Read one session by `session_id` (`session` is accepted too). |
+| `mmr_list_sessions` | See a project's sessions, newest first. |
+| `mmr_context_project` | Brief yourself: session list plus the newest messages. |
+| `mmr_read_project` | Read a project's raw history in time order. |
+| `mmr_list_projects` | See which projects have history. |
+| `mmr_summarize_project`, `mmr_summarize_session` | Summarize with a model (needs an API key). |
+| `mmr_compact_project`, `mmr_compact_session` | Drop low-relevance lines with Morph Compact (needs `MORPHLLM_API_KEY`). |
+| `mmr_skill_load` | Load the full mmr agent skill. |
+
 ## Runnable synthetic stdio example
 
 From the repository root, with Python 3 and a Rust build toolchain:
