@@ -3,7 +3,7 @@ goal_id: "2026-11-12-remove-unnecessary-complexity"
 title: "Remove unnecessary complexity without changing behaviour"
 description: "Delete code the binary can no longer reach and collapse copy-pasted CLI remote/peer plumbing, after adding tests that pin the current behaviour."
 date: "2026-11-12"
-status: "in-progress"
+status: "done"
 confidence_floor: 85
 created: "2026-11-12"
 updated: "2026-11-12"
@@ -91,14 +91,51 @@ product decision, not a cleanup.
 
 ## Definition of Done
 
-- [ ] DoD-1 — New loopback and context tests pass on the unchanged code.
-- [ ] DoD-2 — Dead code listed in Findings 1–2 is deleted; docs and skills no
+- [x] DoD-1 — New loopback and context tests pass on the unchanged code.
+- [x] DoD-2 — Dead code listed in Findings 1–2 is deleted; docs and skills no
   longer point at it.
-- [ ] DoD-3 — Duplication listed in Finding 3 is collapsed into shared helpers.
-- [ ] DoD-4 — Differential command matrix is byte-identical between old and new
+- [x] DoD-3 — Duplication listed in Finding 3 is collapsed into shared helpers.
+- [x] DoD-4 — Differential command matrix is byte-identical between old and new
   binaries.
-- [ ] DoD-5 — Full verification loop and `nix build` pass.
-- [ ] DoD-6 — PR open with line-count delta, coverage delta and evidence.
+- [x] DoD-5 — Full verification loop and `nix build` pass.
+- [x] DoD-6 — PR open with line-count delta, coverage delta and evidence.
+
+## Evidence
+
+- Commits: `04cc855` (tests first), `08b427c` (dead code), `dc61fd7`
+  (duplication). Each passed `cargo fmt --check`, clippy `-D warnings` and
+  `cargo test` on its own.
+- Tests added: `tests/peer_loopback_contract.rs` (9 end-to-end `--remote`
+  tests with a fake `ssh` that runs the real `mmr peer` against a second
+  seeded `HOME`) and 4 tests in `tests/cli_contract.rs` (summarize/compact
+  `--remote` transcripts for project/session/source, local `context
+  project|source`, `MMR_DEFAULT_SOURCE` parsing). All passed on `main` before
+  any source change.
+- Differential check, old (`main`) vs new binary on fresh fixture copies:
+  - 137 command cases (help, list, read, context, recall, summarize/compact
+    failures, peer, share/import, store commands, cwd discovery, every
+    `--remote` surface): 411 stdout/stderr/exit files, 404 byte-identical, 7
+    equal after masking wall-clock timestamps and hash ids. Two runs of the
+    old binary differ in the same 7 files.
+  - 47 summarize/compact cases against a mock provider, including the request
+    body sent to the provider: 188 files, all byte-identical.
+- Size: `src/` 2,930 lines deleted, 852 added (net −2,078); `src/cli.rs`
+  6,828 → 5,962 lines. Tests +934 lines.
+- Line coverage (`cargo llvm-cov`): total 73.6% → 78.4%; `src/cli.rs`
+  74.0% → 85.3%.
+- Verification loop on the final code: `cargo fmt --check`, clippy
+  `-D warnings`, `cargo test`, benchmarks, `cargo build --release` and
+  `nix build` (the sandbox suite includes the new loopback tests) all pass.
+
+Behaviour noted while pinning, deliberately not changed (contract):
+
+- `read session X --remote` without `--project` sends the local cwd as the
+  remote project, so the remote can return no messages.
+- `--remote` reads page forward from the oldest merged message; local reads
+  page from the newest.
+- `context source --remote` keeps a session found on two machines twice;
+  `context project --remote` keeps it once. Context `total_messages` counts
+  duplicates.
 
 ## Exit conditions
 
