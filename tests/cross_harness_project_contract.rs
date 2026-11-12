@@ -46,8 +46,8 @@ impl World {
         }
     }
 
-    fn run(&self, cwd: &Path, args: &[&str]) -> Value {
-        let output = Command::new(env!("CARGO_BIN_EXE_mmr"))
+    fn output(&self, cwd: &Path, args: &[&str]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_mmr"))
             .args(args)
             .env("HOME", &self.home)
             .env_remove("SIMPLEMMR_HOME")
@@ -55,7 +55,11 @@ impl World {
             .env_remove("MMR_AUTO_DISCOVER_PROJECT")
             .current_dir(cwd)
             .output()
-            .expect("run mmr");
+            .expect("run mmr")
+    }
+
+    fn run(&self, cwd: &Path, args: &[&str]) -> Value {
+        let output = self.output(cwd, args);
         assert!(
             output.status.success(),
             "mmr {args:?} failed: {}",
@@ -331,6 +335,34 @@ fn cursor_sessions_get_their_project_path_timestamps_and_plain_user_text() {
     assert_eq!(
         messages[1]["timestamp"], "2026-10-30T14:05:00.000Z",
         "inherits the turn's time"
+    );
+}
+
+#[test]
+fn read_session_takes_a_unique_id_prefix_and_fails_loudly_on_unknown_ids() {
+    let world = World::new();
+    seed(&world);
+
+    // Agents shorten ids the way they would a git hash.
+    let session = world.run(&world.project, &["read", "session", "codex-l"]);
+    assert_eq!(session["messages"][0]["session_id"], "codex-live");
+
+    // A prefix that starts two sessions names both instead of picking one.
+    let ambiguous = world.output(&world.project, &["read", "session", "codex"]);
+    assert!(!ambiguous.status.success());
+    let stderr = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(
+        stderr.contains("codex-live") && stderr.contains("codex-archived"),
+        "{stderr}"
+    );
+
+    // An unknown id is an error, not an empty session an agent would read as "nothing was said".
+    let unknown = world.output(&world.project, &["read", "session", "no-such-session"]);
+    assert!(!unknown.status.success());
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("no session no-such-session found"),
+        "{}",
+        String::from_utf8_lossy(&unknown.stderr)
     );
 }
 

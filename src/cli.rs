@@ -1291,15 +1291,23 @@ fn read_session_response(
         return serialize(&response, pretty);
     }
 
-    if args.project.is_none() && source_filter.is_none() {
-        eprintln!("hint: searching all sources for session; pass --source to narrow the search");
-    }
     let response = service.messages(
-        &[args.session_id],
+        std::slice::from_ref(&args.session_id),
         args.project.as_deref(),
         source_filter,
         MessageQueryOptions::new(args.limit, args.offset, oldest_first()),
     )?;
+    if response.total_messages == 0 {
+        // An empty page reads as "this session said nothing"; say the id was not found instead.
+        bail!(
+            "no session {} found{}; `mmr list sessions` lists session ids",
+            args.session_id,
+            args.project
+                .as_deref()
+                .map(|project| format!(" in {project}"))
+                .unwrap_or_default()
+        );
+    }
     serialize(&response, pretty)
 }
 

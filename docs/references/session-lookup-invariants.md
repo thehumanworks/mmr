@@ -33,21 +33,27 @@ default cwd-project scope (ADR-002): a bare `mmr recall` means
 with `--all` or `--project`. See ADR-004 for the full rationale, including why
 age 0 (the assumed-live newest session) is held back by default.
 
-### Hint message
+### Short ids and unknown ids
 
-When `--session` is provided without `--source`, a hint is printed to stderr:
+Agents shorten session ids the way they shorten git hashes. An id of four or
+more characters that matches no session in scope exactly is read as a prefix
+when exactly one session id in scope starts with it. When several do, the
+command fails and lists them. When none does, `read session` fails with
+`no session <id> found`, so an agent does not mistake an empty page for a
+session that said nothing.
 
-```
-hint: searching all sources for session; pass --source to narrow the search
-```
-
-This nudges the caller toward a faster, more targeted lookup without blocking the operation.
+No hint is printed when `--source` is omitted: searching every source is the
+recommended form.
 
 ### Contract tests
 
 Covered by integration tests in `tests/cli_contract.rs`:
 
 - `messages_session_without_project_searches_all_projects` — session found even when cwd points to a different project
-- `messages_session_without_project_or_source_prints_hint` — hint appears on stderr
-- `messages_session_with_source_does_not_print_hint` — hint suppressed when `--source` provided
-- `messages_session_with_explicit_project_uses_project_scope` — explicit `--project` still applies project scoping
+- `messages_session_without_project_or_source_searches_every_source_quietly` — no `--source` hint on stderr
+- `messages_session_with_source_does_not_print_hint` — no hint with `--source` either
+- `messages_session_with_explicit_project_uses_project_scope` — explicit `--project` still applies project scoping; a session outside it is an error
+
+Covered in `tests/cross_harness_project_contract.rs`:
+
+- `read_session_takes_a_unique_id_prefix_and_fails_loudly_on_unknown_ids` — prefix, ambiguous prefix and unknown id

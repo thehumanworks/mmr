@@ -338,12 +338,14 @@ impl QueryService {
             None => None,
         };
 
+        let session_ids =
+            self.expand_session_prefixes(session_ids, source_filter, resolved_project.as_ref())?;
         let filtered = self
             .messages
             .iter()
             .filter(|message| {
                 matches_source_filter(message.source, source_filter)
-                    && matches_session_filter(message.session_id.as_str(), session_ids)
+                    && matches_session_filter(message.session_id.as_str(), &session_ids)
                     && matches_message_project_filter(message, resolved_project.as_ref())
             })
             .cloned()
@@ -360,6 +362,46 @@ impl QueryService {
             session_selection: None,
             peer_results: None,
         })
+    }
+
+    /// Agents and people shorten long session ids (`1ee02b7c` for a full UUID). An id of at
+    /// least four characters that matches no session in scope exactly is taken as a prefix when
+    /// exactly one session id in scope starts with it. Several matches are an error that lists
+    /// them; no match leaves the id as given.
+    fn expand_session_prefixes(
+        &self,
+        session_ids: &[String],
+        source_filter: Option<SourceFilter>,
+        resolved_project: Option<&ResolvedProject>,
+    ) -> Result<Vec<String>> {
+        let in_scope = |session: &&SessionAggregate| {
+            matches_source_filter(session.source, source_filter)
+                && matches_project_filter(session, resolved_project)
+        };
+        let mut expanded = Vec::with_capacity(session_ids.len());
+        for id in session_ids {
+            let sessions = self.sessions.iter().filter(in_scope);
+            if id.chars().count() < 4 || sessions.clone().any(|session| &session.session_id == id) {
+                expanded.push(id.clone());
+                continue;
+            }
+            let mut matches = sessions
+                .filter(|session| session.session_id.starts_with(id.as_str()))
+                .map(|session| session.session_id.clone())
+                .collect::<Vec<_>>();
+            matches.sort();
+            matches.dedup();
+            match matches.len() {
+                0 => expanded.push(id.clone()),
+                1 => expanded.extend(matches),
+                _ => bail!(
+                    "session id {id} is ambiguous; it starts {} sessions: {}",
+                    matches.len(),
+                    matches.join(", ")
+                ),
+            }
+        }
+        Ok(expanded)
     }
 
     pub fn resolve_teleport_session(
