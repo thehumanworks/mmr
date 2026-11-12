@@ -19,11 +19,6 @@ nix run github:thehumanworks/mmr -- --help
 nix profile add github:thehumanworks/mmr      # `nix profile install` on older Nix
 ```
 
-While the repository is private, Nix needs GitHub credentials to fetch it.
-Either add `access-tokens = github.com=<token>` to `~/.config/nix/nix.conf`,
-or use the SSH form `git+ssh://git@github.com/thehumanworks/mmr` wherever these
-examples say `github:thehumanworks/mmr`.
-
 Pin a tag or commit for a reproducible install:
 
 ```bash

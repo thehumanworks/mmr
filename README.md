@@ -5,7 +5,7 @@ Code, Codex, Cursor, Grok, and Pi.
 
 ## Install From GitHub
 
-After this repository is public, install the latest `main` build with Cargo:
+Install the latest `main` build with Cargo:
 
 ```bash
 cargo install --git https://github.com/thehumanworks/mmr.git --locked
