@@ -260,15 +260,21 @@ fn run_ssh_command<T: Serialize>(
         .map_err(|error| format!("spawn {}: {error}", argv[0]))?;
 
     if let Some(request) = request {
+        let mut payload = serde_json::to_vec(request)
+            .map_err(|error| format!("serialize peer request: {error}"))?;
+        payload.push(b'\n');
         let stdin = child
             .stdin
             .as_mut()
             .ok_or_else(|| "open ssh stdin".to_string())?;
-        serde_json::to_writer(&mut *stdin, request)
-            .map_err(|error| format!("serialize peer request: {error}"))?;
-        stdin
-            .write_all(b"\n")
-            .map_err(|error| format!("write peer request: {error}"))?;
+        // A peer that fails before reading its request (no remote mmr, an
+        // older mmr without `peer`) can close stdin first. Its exit status and
+        // stderr then explain the failure better than the broken pipe does.
+        if let Err(error) = stdin.write_all(&payload)
+            && error.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(format!("write peer request: {error}"));
+        }
     }
 
     child
@@ -352,6 +358,22 @@ fn classify_peer_failure(stderr: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_ssh_command_reports_peer_stderr_when_peer_exits_before_reading_request() {
+        // The request is larger than a pipe buffer, so the write cannot
+        // complete before the fake peer exits without reading it.
+        let request = serde_json::json!({ "padding": "x".repeat(1 << 20) });
+        let argv = [
+            "sh".to_string(),
+            "-c".to_string(),
+            "echo \"error: unrecognized subcommand 'peer'\" >&2; exit 2".to_string(),
+        ];
+        let output = run_ssh_command(&argv, Some(&request)).expect("peer output");
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(classify_peer_failure(stderr.trim()), "peer_mmr_unavailable");
+    }
 
     #[test]
     fn parse_ssh_target_accepts_alias_user_host_and_port() {
