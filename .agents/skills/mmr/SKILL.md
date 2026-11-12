@@ -24,7 +24,7 @@ it with jq instead of reading it all:
 
 ```bash
 mmr read project | jq -r '.messages[]
-  | select(.content | test("redis|dedupe"; "i"))
+  | select(.content | test("WORD|OTHER WORD"; "i"))
   | "\(.timestamp[0:10]) \(.source) \(.session_id[0:8]) \(.role): \(.content[0:400])"'
 ```
 
