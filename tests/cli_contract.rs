@@ -4484,7 +4484,7 @@ JSON
 }
 
 #[test]
-fn read_project_remote_ssh_failure_is_structured() {
+fn peer_status_host_ssh_failure_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-fail");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4498,7 +4498,7 @@ exit 255
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
@@ -4509,9 +4509,9 @@ exit 255
 }
 
 #[test]
-fn read_project_remote_rejects_option_like_target() {
+fn peer_status_host_rejects_option_like_target() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["read", "project", "--remote=-oProxyCommand=sh"]);
+    let output = fixture.run_cli(&["peer", "status", "--host=-oProxyCommand=sh"]);
     assert_eq!(output.status.code(), Some(2));
     let json = parse_stdout_json(&output);
     assert_eq!(json["status"], "failed");
@@ -4520,7 +4520,7 @@ fn read_project_remote_rejects_option_like_target() {
 }
 
 #[test]
-fn read_project_remote_remote_mmr_missing_is_structured() {
+fn peer_status_host_remote_mmr_missing_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-missing");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4534,7 +4534,7 @@ exit 127
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
@@ -4545,7 +4545,7 @@ exit 127
 }
 
 #[test]
-fn read_project_remote_remote_incompatible_is_structured() {
+fn peer_status_host_remote_incompatible_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-incompatible");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4559,7 +4559,7 @@ exit 1
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
@@ -4570,7 +4570,7 @@ exit 1
 }
 
 #[test]
-fn read_project_remote_remote_peer_subcommand_missing_is_structured() {
+fn peer_status_host_remote_peer_subcommand_missing_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-subcommand-missing");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4586,7 +4586,7 @@ exit 2
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
