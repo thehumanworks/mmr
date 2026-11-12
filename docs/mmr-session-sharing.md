@@ -59,41 +59,16 @@ No SSH access, server, cloud account or shared store is required. The current
 `sync`/FakeGithubRemote implementation is file-backed simulation, not a hosted
 GitHub/S3/R2 service. A central store can be considered separately if needed.
 
-## Optional SSH Reads
+## SSH Peers
 
 `mmr` accepts trusted SSH targets per command. There is no host registry or
 background discovery: pass an already reachable target (`mini`, `user@host`,
 `user@host:22`, or `ssh://user@host:22`).
 
-Use `--remote <ssh-target>` on read/query commands when you want another machine
-to contribute history with the same shape as a local response.
-
-```bash
-mmr list projects --remote mini
-mmr list sessions --remote mini --project /Users/mish/projects/mmr
-mmr read project --remote mini
-mmr read session <session-id> --remote mini
-mmr read source --source codex --remote mini
-mmr context project --remote mini
-mmr context source --source codex --remote mini
-mmr recall --remote mini
-mmr summarize project --remote mini
-```
-
-When `--remote` is absent, local-only output remains unchanged. When it is
-present, remote projects, sessions, and messages include `origin` metadata:
-
-```json
-{
-  "transport": "ssh",
-  "host": "mini",
-  "remote_mmr_version": "0.2.0"
-}
-```
-
-Pagination commands echo `--remote`, so follow-up reads stay on the same peer
-set. A remote failure is strict: if any named peer cannot run the hidden peer
-protocol, the command exits nonzero with structured JSON.
+SSH is used only to move sessions (`share session --to`, `import session
+--from`) and to check a peer (`mmr peer status --host mini`). Read and query
+commands are local only; to read another machine's history, share or import the
+session first.
 
 ## Share From The Source Machine
 

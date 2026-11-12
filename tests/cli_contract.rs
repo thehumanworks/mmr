@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use common::{PeerLoopback, RetrieveContractFixture, TestFixture, parse_stdout_json, rows};
+use common::{RetrieveContractFixture, TestFixture, parse_stdout_json, rows};
 
 const DEV_SUBSKILLS: [&str; 4] = [
     "goal-closeout",
@@ -2609,58 +2609,6 @@ fn summarize_project_without_selector_uses_project_history() {
 }
 
 #[test]
-fn summarize_project_remote_includes_remote_messages() {
-    if !loopback_bind_available() {
-        return;
-    }
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-summary");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-cat <<'JSON'
-{"messages":[{"session_id":"remote-summary-session","source":"codex","project_name":"/Users/test/proj","role":"user","content":"remote summary evidence","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let (base_url, captured, handle) = start_mock_chat_completions_server(
-        r#"{"id":"interaction-remote","model":"test-model","choices":[{"message":{"role":"assistant","content":"remote summary"}}]}"#,
-    );
-    let output = run_cli_with_home_and_env(
-        &fixture.home,
-        &[
-            "summarize",
-            "project",
-            "--project",
-            "/Users/test/proj",
-            "--remote",
-            "studio",
-        ],
-        &[
-            ("OPENAI_API_KEY", "test-key"),
-            ("OPENAI_BASE_URL", base_url.as_str()),
-            ("PATH", path.as_str()),
-        ],
-    );
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    handle.join().expect("mock server thread");
-
-    let body = captured.lock().expect("captured body").clone().unwrap();
-    let input = first_input_text(&body);
-    assert!(input.contains("remote summary evidence"));
-    assert!(input.contains("hello from claude"));
-}
-
-#[test]
 fn summarize_fails_without_api_key_configuration() {
     let fixture = TestFixture::seeded();
     let output = run_cli_with_home_and_env(
@@ -3466,7 +3414,7 @@ fn compact_source_requires_explicit_source() {
     );
 }
 
-const LOOPBACK_PROJECT_TRANSCRIPT: &str = "
+const CODEX_PROJECT_TRANSCRIPT: &str = "
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:00:01] user: hello from codex
 
@@ -3476,25 +3424,11 @@ const LOOPBACK_PROJECT_TRANSCRIPT: &str = "
 - [2025-01-02T00:02:00] user: follow-up question
 - [2025-01-02T00:03:00] assistant: second long codex answer
 
-## Session sess-remote-a (codex, /Users/test/codex-proj)
-- [2025-01-02T00:04:00] user: remote codex question
-- [2025-01-02T00:04:30] assistant: remote codex answer
-
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:05:00] assistant: short codex answer
-
-## Session sess-remote-b (codex, /Users/test/codex-proj)
-- [2025-01-07T00:00:01] user: newest remote question
-- [2025-01-07T00:00:02] assistant: newest remote answer
-";
-
-const LOOPBACK_SESSION_TRANSCRIPT: &str = "
-## Session sess-codex-1 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:00:01] user: hello from codex
 - [2025-01-02T00:05:00] assistant: short codex answer
 ";
 
-const LOOPBACK_SOURCE_TRANSCRIPT: &str = "
+const CODEX_SOURCE_TRANSCRIPT: &str = "
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:00:01] user: hello from codex
 
@@ -3503,10 +3437,6 @@ const LOOPBACK_SOURCE_TRANSCRIPT: &str = "
 - [2025-01-02T00:01:00] assistant: first long codex answer
 - [2025-01-02T00:02:00] user: follow-up question
 - [2025-01-02T00:03:00] assistant: second long codex answer
-
-## Session sess-remote-a (codex, /Users/test/codex-proj)
-- [2025-01-02T00:04:00] user: remote codex question
-- [2025-01-02T00:04:30] assistant: remote codex answer
 
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:05:00] assistant: short codex answer
@@ -3514,29 +3444,24 @@ const LOOPBACK_SOURCE_TRANSCRIPT: &str = "
 ## Session sess-codex-recent-1 (codex, /Users/test/codex-recent)
 - [2025-01-03T00:00:01] user: brand new project question
 - [2025-01-03T00:01:00] assistant: recent project answer
-
-## Session sess-remote-only (codex, /Users/test/remote-only)
-- [2025-01-06T00:00:01] user: remote only question
-
-## Session sess-remote-b (codex, /Users/test/codex-proj)
-- [2025-01-07T00:00:01] user: newest remote question
-- [2025-01-07T00:00:02] assistant: newest remote answer
 ";
 
-/// `summarize` and `compact` with `--remote` send one deduplicated,
-/// chronological transcript built from both machines.
+const CODEX_SESSION_TRANSCRIPT: &str = "
+## Session sess-codex-1 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:00:01] user: hello from codex
+- [2025-01-02T00:05:00] assistant: short codex answer
+";
+
 #[test]
-fn summarize_and_compact_remote_send_merged_transcripts() {
+fn summarize_and_compact_send_each_scope_transcript() {
     if !loopback_bind_available() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let remote = PeerLoopback::seeded(&fixture);
-    let path = remote.path_env();
     let scopes: [(&[&str], &str); 3] = [
         (
             &["project", "--project", "/Users/test/codex-proj"],
-            LOOPBACK_PROJECT_TRANSCRIPT,
+            CODEX_PROJECT_TRANSCRIPT,
         ),
         (
             &[
@@ -3545,17 +3470,20 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
                 "--project",
                 "/Users/test/codex-proj",
             ],
-            LOOPBACK_SESSION_TRANSCRIPT,
+            CODEX_SESSION_TRANSCRIPT,
         ),
-        (&["source"], LOOPBACK_SOURCE_TRANSCRIPT),
+        (&["source"], CODEX_SOURCE_TRANSCRIPT),
     ];
 
     for (scope, transcript) in scopes {
         let mut args = vec!["--source", "codex", "summarize"];
         args.extend_from_slice(scope);
-        args.extend(["--remote", "studio"]);
+        args.extend(["--limit", "50"]);
+        if scope[0] == "source" {
+            args.truncate(args.len() - 2);
+        }
         let (base_url, captured, handle) = start_mock_chat_completions_server(
-            r#"{"id":"loopback","model":"test-model","choices":[{"message":{"role":"assistant","content":"merged summary"}}]}"#,
+            r#"{"id":"scope","model":"test-model","choices":[{"message":{"role":"assistant","content":"summary"}}]}"#,
         );
         let output = run_cli_with_home_and_env(
             &fixture.home,
@@ -3563,7 +3491,6 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
             &[
                 ("OPENAI_API_KEY", "test-key"),
                 ("OPENAI_BASE_URL", base_url.as_str()),
-                ("PATH", path.as_str()),
             ],
         );
         assert!(
@@ -3581,9 +3508,8 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
 
         let mut args = vec!["--source", "codex", "compact"];
         args.extend_from_slice(scope);
-        args.extend(["--remote", "studio"]);
         let (base_url, captured, handle) = start_mock_compact_server(
-            r#"{"id":"cmpr-loopback","object":"compact","model":"morph-compactor","output":"merged","messages":[],"usage":{"input_tokens":1,"output_tokens":1,"compression_ratio":0.5,"processing_time_ms":1}}"#,
+            r#"{"id":"cmpr-scope","object":"compact","model":"morph-compactor","output":"compacted","messages":[],"usage":{"input_tokens":1,"output_tokens":1,"compression_ratio":0.5,"processing_time_ms":1}}"#,
         );
         let output = run_cli_with_home_and_env(
             &fixture.home,
@@ -3591,7 +3517,6 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
             &[
                 ("MORPHLLM_API_KEY", "test-key"),
                 ("MORPHLLM_BASE_URL", base_url.as_str()),
-                ("PATH", path.as_str()),
             ],
         );
         assert!(
@@ -3603,19 +3528,6 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
         let body = captured.lock().expect("captured body").clone().unwrap();
         assert_eq!(body["input"], transcript, "args={args:?}");
     }
-
-    let calls = remote.ssh_calls();
-    assert_eq!(
-        calls,
-        [
-            "studio mmr peer read-project --request-json -",
-            "studio mmr peer read-project --request-json -",
-            "studio mmr peer read-session --request-json -",
-            "studio mmr peer read-session --request-json -",
-            "studio mmr peer read-source --request-json -",
-            "studio mmr peer read-source --request-json -",
-        ]
-    );
 }
 
 #[test]
@@ -3859,82 +3771,6 @@ fn read_project_next_command_quotes_project_paths_with_spaces() {
             .iter()
             .all(|message| message["project_name"] == fixture.project_arg())
     );
-}
-
-#[test]
-fn read_project_remote_next_command_quotes_shell_values() {
-    let fixture = RetrieveContractFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-remote-next");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat >/dev/null
-printf '{"messages":[{"session_id":"remote-page-session","source":"codex","project_name":"%s","role":"user","content":"remote page context","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}\n' "$MMR_FAKE_PROJECT"
-"#,
-    );
-
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let page1 = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "read",
-            "project",
-            "--project",
-            fixture.project_arg(),
-            "--remote",
-            "studio",
-            "--limit",
-            "1",
-        ],
-        &[
-            ("PATH", path.as_str()),
-            ("MMR_FAKE_PROJECT", fixture.project_arg()),
-        ],
-    );
-    assert!(
-        page1.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&page1.stderr)
-    );
-
-    let page1_json = parse_stdout_json(&page1);
-    assert!(page1_json["next_page"].as_bool().unwrap());
-    let next_command = page1_json["next_command"].as_str().unwrap();
-    assert!(
-        next_command.contains("--project '"),
-        "next_command={next_command}"
-    );
-    assert!(
-        next_command.contains("--remote studio"),
-        "next_command={next_command}"
-    );
-
-    let binary_dir = Path::new(env!("CARGO_BIN_EXE_mmr"))
-        .parent()
-        .expect("mmr binary parent");
-    let shell_path = format!("{}:{path}", binary_dir.display());
-    let page2 = Command::new("zsh")
-        .arg("-fc")
-        .arg(next_command)
-        .env("PATH", shell_path)
-        .env("HOME", &fixture.home)
-        .env("XDG_DATA_HOME", &fixture.data_home)
-        .env("MMR_FAKE_PROJECT", fixture.project_arg())
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("MMR_CONFIG_FILE")
-        .current_dir(&fixture.project)
-        .output()
-        .expect("run remote next_command");
-    assert!(
-        page2.status.success(),
-        "next_command={next_command}\nstderr={}",
-        String::from_utf8_lossy(&page2.stderr)
-    );
-    let page2_json = parse_stdout_json(&page2);
-    assert_eq!(page2_json["messages"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -4421,69 +4257,6 @@ JSON
 }
 
 #[test]
-fn read_project_remote_merges_remote_messages_with_origin() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-read");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    let ssh_log = fixture.home.join("peer-read-ssh.log");
-    let request_log = fixture.home.join("peer-read-request.json");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-printf '%s\n' "$*" > "$MMR_FAKE_SSH_LOG"
-cat > "$MMR_FAKE_REQUEST_LOG"
-cat <<'JSON'
-{"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote studio context","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-"#,
-    );
-
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let output = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "read",
-            "project",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-        ],
-        &[
-            ("PATH", path.as_str()),
-            ("MMR_FAKE_SSH_LOG", ssh_log.to_str().unwrap()),
-            ("MMR_FAKE_REQUEST_LOG", request_log.to_str().unwrap()),
-        ],
-    );
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().expect("messages");
-    let remote = messages
-        .iter()
-        .find(|message| message["content"] == "remote studio context")
-        .expect("remote message");
-    assert_eq!(remote["origin"]["host"], "studio");
-    assert_eq!(remote["origin"]["transport"], "ssh");
-    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
-    assert_eq!(json["peer_results"][0]["host"], "studio");
-    assert_eq!(json["peer_results"][0]["remote_mmr_version"], "9.9.9");
-    let request = fs::read_to_string(&request_log).expect("request log");
-    assert!(request.contains("\"protocol_version\":1"));
-    assert!(request.contains("\"source\":\"codex\""));
-    assert!(
-        fs::read_to_string(&ssh_log)
-            .expect("ssh log")
-            .contains("mmr peer read-project --request-json -")
-    );
-}
-
-#[test]
 fn peer_status_host_ssh_failure_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-fail");
@@ -4616,227 +4389,6 @@ fn read_project_without_remote_omits_peer_results() {
             .expect("messages")
             .iter()
             .all(|message| message.get("origin").is_none())
-    );
-}
-
-#[test]
-fn context_project_remote_merges_remote_context() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-context");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-cat <<'JSON'
-{"command":"context/project","scope":"project","source":"codex","project":"/Users/test/codex-proj","total_sessions":1,"total_messages":1,"sessions":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","project_path":"/Users/test/codex-proj","first_timestamp":"2025-01-08T00:00:00","last_timestamp":"2025-01-08T00:00:00","message_count":1,"user_messages":1,"assistant_messages":0,"preview":"remote"}],"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote context message","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"peer_results":[{"host":"local","transport":"local","command":"context/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1,"total_sessions":1}]}
-JSON
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let output = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "context",
-            "project",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["command"], "context/project");
-    assert_eq!(json["peer_results"][0]["host"], "studio");
-    let remote = json["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["content"] == "remote context message")
-        .expect("remote context message");
-    assert_eq!(remote["origin"]["host"], "studio");
-    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
-}
-
-#[test]
-fn recall_remote_merges_remote_recall_messages() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-recall");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-cat <<'JSON'
-{"messages":[{"session_id":"remote-previous","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote previous session","model":"model","timestamp":"2025-01-02T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"session_selection":{"scope":{"project":"/Users/test/codex-proj","all":false,"source":"codex"},"axis":"session-back","total_sessions_in_scope":2,"selected":[{"age":1,"session_id":"remote-previous","source":"codex","project_name":"/Users/test/codex-proj","first_timestamp":"2025-01-02T00:00:00","last_timestamp":"2025-01-02T00:00:00","message_count":1,"equivalent_command":"mmr read session remote-previous"}],"skipped_newest":{"age":0,"session_id":"remote-current","last_timestamp":"2025-01-03T00:00:00","assumed_live":true}},"peer_results":[{"host":"local","transport":"local","command":"recall","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let output = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "recall",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-            "1",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["peer_results"][0]["host"], "studio");
-    let remote = json["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["content"] == "remote previous session")
-        .expect("remote recall message");
-    assert_eq!(remote["origin"]["host"], "studio");
-    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
-}
-
-#[test]
-fn remote_list_read_and_context_surfaces_use_remote_flag() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-surfaces");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-case "$*" in
-  *"mmr peer list-projects --request-json -"*)
-    cat <<'JSON'
-{"projects":[{"name":"/Users/test/remote-proj","source":"codex","original_path":"/Users/test/remote-proj","aliases":["remote-proj"],"session_count":1,"message_count":1,"last_activity":"2025-01-08T00:00:00"}],"total_messages":1,"total_sessions":1,"peer_results":[{"host":"local","transport":"local","command":"list/projects","status":"ok","remote_mmr_version":"9.9.9","total_messages":1,"total_sessions":1}]}
-JSON
-    ;;
-  *"mmr peer list-sessions --request-json -"*)
-    cat <<'JSON'
-{"sessions":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","project_path":"/Users/test/codex-proj","first_timestamp":"2025-01-08T00:00:00","last_timestamp":"2025-01-08T00:00:00","message_count":1,"user_messages":1,"assistant_messages":0,"preview":"remote"}],"total_sessions":1,"peer_results":[{"host":"local","transport":"local","command":"list/sessions","status":"ok","remote_mmr_version":"9.9.9","total_sessions":1}]}
-JSON
-    ;;
-  *"mmr peer read-session --request-json -"*)
-    cat <<'JSON'
-{"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote explicit session","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/session","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-    ;;
-  *"mmr peer read-source --request-json -"*)
-    cat <<'JSON'
-{"messages":[{"session_id":"remote-source-session","source":"codex","project_name":"/Users/test/remote-proj","role":"user","content":"remote source message","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/source","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-    ;;
-  *"mmr peer context-source --request-json -"*)
-    cat <<'JSON'
-{"command":"context/source","scope":"source","source":"codex","project":null,"total_sessions":1,"total_messages":1,"sessions":[{"session_id":"remote-source-session","source":"codex","project_name":"/Users/test/remote-proj","project_path":"/Users/test/remote-proj","first_timestamp":"2025-01-08T00:00:00","last_timestamp":"2025-01-08T00:00:00","message_count":1,"user_messages":1,"assistant_messages":0,"preview":"remote"}],"messages":[{"session_id":"remote-source-session","source":"codex","project_name":"/Users/test/remote-proj","role":"user","content":"remote context source","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"peer_results":[{"host":"local","transport":"local","command":"context/source","status":"ok","remote_mmr_version":"9.9.9","total_messages":1,"total_sessions":1}]}
-JSON
-    ;;
-  *)
-    echo "unexpected peer command: $*" >&2
-    exit 2
-    ;;
-esac
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-
-    let projects = fixture.run_cli_with_env(
-        &["list", "projects", "--remote", "studio"],
-        &[("PATH", path.as_str())],
-    );
-    assert!(projects.status.success());
-    let projects_json = parse_stdout_json(&projects);
-    let remote_project = projects_json["projects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|project| project["name"] == "/Users/test/remote-proj")
-        .expect("remote project");
-    assert_eq!(remote_project["origin"]["host"], "studio");
-
-    let sessions = fixture.run_cli_with_env(
-        &[
-            "list",
-            "sessions",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(sessions.status.success());
-    let sessions_json = parse_stdout_json(&sessions);
-    let remote_session = sessions_json["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|session| session["session_id"] == "remote-session")
-        .expect("remote session");
-    assert_eq!(remote_session["origin"]["remote_mmr_version"], "9.9.9");
-
-    let read_session = fixture.run_cli_with_env(
-        &["read", "session", "remote-session", "--remote", "studio"],
-        &[("PATH", path.as_str())],
-    );
-    assert!(read_session.status.success());
-    let read_session_json = parse_stdout_json(&read_session);
-    assert!(
-        read_session_json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|message| message["origin"]["host"] == "studio")
-    );
-
-    let read_source = fixture.run_cli_with_env(
-        &["--source", "codex", "read", "source", "--remote", "studio"],
-        &[("PATH", path.as_str())],
-    );
-    assert!(read_source.status.success());
-    let read_source_json = parse_stdout_json(&read_source);
-    assert!(
-        read_source_json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|message| message["content"] == "remote source message"
-                && message["origin"]["host"] == "studio")
-    );
-
-    let context_source = fixture.run_cli_with_env(
-        &[
-            "--source", "codex", "context", "source", "--remote", "studio",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(context_source.status.success());
-    let context_json = parse_stdout_json(&context_source);
-    assert_eq!(context_json["peer_results"][0]["host"], "studio");
-    assert!(
-        context_json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|message| message["content"] == "remote context source"
-                && message["origin"]["remote_mmr_version"] == "9.9.9")
     );
 }
 
@@ -5483,4 +5035,36 @@ fn import_session_force_without_apply_is_usage_error_before_peer_access() {
         parse_stdout_json(&output)["message"],
         "--force requires --apply"
     );
+}
+
+#[test]
+fn remote_flag_is_rejected_on_every_command() {
+    let fixture = TestFixture::seeded();
+    let commands: &[&[&str]] = &[
+        &["list", "projects"],
+        &["list", "sessions"],
+        &["read", "project"],
+        &["read", "session", "sess-codex-1"],
+        &["--source", "codex", "read", "source"],
+        &["context", "project"],
+        &["--source", "codex", "context", "source"],
+        &["recall"],
+        &["summarize", "project"],
+        &["summarize", "session", "sess-codex-1"],
+        &["--source", "codex", "summarize", "source"],
+        &["compact", "project"],
+        &["compact", "session", "sess-codex-1"],
+        &["--source", "codex", "compact", "source"],
+    ];
+    for command in commands {
+        let mut args = command.to_vec();
+        args.extend(["--remote", "studio"]);
+        let output = fixture.run_cli(&args);
+        assert_eq!(output.status.code(), Some(2), "args={args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument '--remote'"),
+            "args={args:?} stderr={stderr}"
+        );
+    }
 }

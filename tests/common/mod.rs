@@ -76,7 +76,7 @@ pub fn parse_stdout_json(output: &Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("stdout JSON")
 }
 
-/// A second machine for `--remote` tests. An `ssh` script on `PATH` drops the
+/// A second machine for peer tests. An `ssh` script on `PATH` drops the
 /// ssh options and host, then runs this build's `mmr` with `HOME` set to
 /// `home`, so both the client and the `mmr peer …` server code run.
 pub struct PeerLoopback {

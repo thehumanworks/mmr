@@ -72,7 +72,7 @@ Add fixture-driven tests covering defaults, opt-in flags, filters, pagination, a
 Paged commands must emit executable continuations that preserve caller intent:
 
 - `--limit` / `--offset` or pinned session identity
-- Scope flags (`--project`, `--source`, `--remote`, etc.)
+- Scope flags (`--project`, `--source`, etc.)
 - Mode flags the caller opted into
 
 ### Example: retrieve output modes

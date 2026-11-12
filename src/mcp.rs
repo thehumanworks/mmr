@@ -745,7 +745,6 @@ impl SummarizeSourceToolArgs {
 struct CompactProjectToolArgs {
     source: Option<String>,
     project: Option<String>,
-    remote: Option<String>,
     query: Option<String>,
     compression_ratio: Option<f32>,
     preserve_recent: Option<u32>,
@@ -761,7 +760,6 @@ impl CompactProjectToolArgs {
         push_source(&mut args, self.source);
         args.extend(["compact".to_string(), "project".to_string()]);
         push_opt(&mut args, "--project", self.project);
-        push_opt(&mut args, "--remote", self.remote);
         push_compact_runner(
             &mut args,
             CompactRunnerToolArgs {
@@ -783,7 +781,6 @@ struct CompactSessionToolArgs {
     session_id: String,
     source: Option<String>,
     project: Option<String>,
-    remote: Option<String>,
     query: Option<String>,
     compression_ratio: Option<f32>,
     preserve_recent: Option<u32>,
@@ -803,7 +800,6 @@ impl CompactSessionToolArgs {
             self.session_id,
         ]);
         push_opt(&mut args, "--project", self.project);
-        push_opt(&mut args, "--remote", self.remote);
         push_compact_runner(
             &mut args,
             CompactRunnerToolArgs {
@@ -823,7 +819,6 @@ impl CompactSessionToolArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CompactSourceToolArgs {
     source: String,
-    remote: Option<String>,
     query: Option<String>,
     compression_ratio: Option<f32>,
     preserve_recent: Option<u32>,
@@ -838,7 +833,6 @@ impl CompactSourceToolArgs {
         let mut args = Vec::new();
         push_source(&mut args, Some(self.source));
         args.extend(["compact".to_string(), "source".to_string()]);
-        push_opt(&mut args, "--remote", self.remote);
         push_compact_runner(
             &mut args,
             CompactRunnerToolArgs {

@@ -3214,78 +3214,6 @@
           }
         }
       },
-      "ApiMessageOrigin": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "host",
-          "transport"
-        ],
-        "properties": {
-          "host": {
-            "type": "string"
-          },
-          "transport": {
-            "type": "string",
-            "examples": [
-              "ssh",
-              "local"
-            ]
-          },
-          "remote_mmr_version": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      },
-      "ApiPeerResult": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "host",
-          "transport",
-          "command",
-          "status"
-        ],
-        "properties": {
-          "host": {
-            "type": "string"
-          },
-          "transport": {
-            "type": "string"
-          },
-          "command": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "remote_mmr_version": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "total_messages": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0,
-            "format": "int64"
-          },
-          "total_sessions": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0,
-            "format": "int64"
-          }
-        }
-      },
       "ApiProject": {
         "type": "object",
         "additionalProperties": false,
@@ -3324,9 +3252,6 @@
           "last_activity": {
             "type": "string",
             "format": "date-time"
-          },
-          "origin": {
-            "$ref": "#/components/schemas/ApiMessageOrigin"
           }
         }
       },
@@ -3354,12 +3279,6 @@
             "type": "integer",
             "minimum": 0,
             "format": "int64"
-          },
-          "peer_results": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ApiPeerResult"
-            }
           }
         }
       },
@@ -3413,9 +3332,6 @@
           },
           "preview": {
             "type": "string"
-          },
-          "origin": {
-            "$ref": "#/components/schemas/ApiMessageOrigin"
           }
         }
       },
@@ -3437,12 +3353,6 @@
             "type": "integer",
             "minimum": 0,
             "format": "int64"
-          },
-          "peer_results": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ApiPeerResult"
-            }
           }
         }
       },
@@ -3500,9 +3410,6 @@
             "type": "integer",
             "minimum": 0,
             "format": "int64"
-          },
-          "origin": {
-            "$ref": "#/components/schemas/ApiMessageOrigin"
           }
         }
       },
@@ -3690,12 +3597,6 @@
           },
           "session_selection": {
             "$ref": "#/components/schemas/SessionSelection"
-          },
-          "peer_results": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ApiPeerResult"
-            }
           }
         }
       },
@@ -3758,12 +3659,6 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ApiMessage"
-            }
-          },
-          "peer_results": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ApiPeerResult"
             }
           }
         }

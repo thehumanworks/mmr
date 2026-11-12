@@ -22,10 +22,8 @@
   source machine.
 - `mmr note` adds a human-authored project event.
 - `mmr list projects` lists known projects with source and recency metadata.
-  `--remote <ssh-target>` also queries explicitly named SSH peers.
 - `mmr list sessions` lists sessions, defaulting to the cwd project unless
-  `--all` or an explicit project/source scope is used. `--remote <ssh-target>`
-  includes explicitly named SSH peers.
+  `--all` or an explicit project/source scope is used.
 - `mmr find` searches normalized events and learned memory. JSON is the default;
   `--format line` emits tab-delimited `citation`, `line`, `source`, `snippet`.
 - `mmr retrieve "query" --max-sessions 1` ranks readable sessions for a match.
@@ -37,22 +35,18 @@
   read without `init`.
 - `mmr recall` retrieves the previous stable session in scope. `mmr recall 2`
   reads two sessions back; age 0 remains held back unless `--include-newest` is
-  passed. `--remote <ssh-target>` also queries explicitly named SSH peers.
+  passed.
 - `mmr read session <session-id>` reads one explicit session.
 - `mmr read project` reads project-scoped history across sources, defaulting to
   cwd. Use `--format tree --output-dir <dir>` for an on-disk event tree.
-  `--remote <ssh-target>` also reads from explicitly named SSH peers.
 - `mmr read source --source <source>` reads all history for one harness across
-  projects. `--remote <ssh-target>` includes peer history for that source.
+  projects.
 - `mmr context project` returns project-specific context across sources.
   `--limit 20` bounds the returned raw messages; it does not call a model.
-  `--remote <ssh-target>` includes explicitly named SSH peers.
 - `mmr context source --source <source>` returns harness-specific context across
-  projects. `--remote <ssh-target>` includes peer context.
+  projects.
 - `mmr summarize project`, `mmr summarize source --source <source>`, and
-  `mmr summarize session <session-id>` run stateless summaries. With
-  `--remote <ssh-target>`, `mmr` fetches the remote transcript material first and
-  runs summarization locally.
+  `mmr summarize session <session-id>` run stateless summaries.
 - `mmr compact project`, `mmr compact source --source <source>`, and
   `mmr compact session <session-id>` send selected transcript history to Morph
   Compact. This removes low-relevance lines without paraphrasing surviving
@@ -87,7 +81,7 @@
 
 ## Current Peer And Movement Model
 
-- Read/query commands use `--remote <ssh-target>`.
+- Read/query commands are local only; there is no peer-read flag.
 - Source-side session movement uses `mmr share session ...`.
 - Destination-side session movement uses `mmr import session ...` or
   `mmr import bundle ...`.

@@ -6,7 +6,7 @@ Generated API documentation for MMR's REST contract.
 - Static docs: [index.html](./index.html)
 - OpenAPI version: 3.1.0
 - Operations: 24
-- Schemas: 102
+- Schemas: 100
 
 Regenerate after contract edits:
 

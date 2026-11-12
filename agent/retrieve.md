@@ -30,7 +30,7 @@ canonical_contract: `/specs/retrieval.md`
 - The all-projects provider-message scan is parallelized with rayon.
 - Selected sessions and pinned continuation use public `source_session_id`, not
   Store-internal `session_id`.
-- Broad retrieval stays local-only; `--remote` remains out of scope.
+- Broad retrieval stays local-only.
 
 ## Proof Commands
 

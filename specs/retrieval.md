@@ -105,7 +105,7 @@ Supported flags:
 | `--offset <n>` | Flattened provider-message page offset when `--full-message-history` is set. | 0 |
 | `--pinned-session <json>` | Concrete continuation identity with `source`, `project_name`, `source_session_id`. Repeatable. | none |
 
-Out of scope: ambiguous `--all`, `--remote`, semantic/vector search, automatic
+Out of scope: ambiguous `--all`, peer reads, semantic/vector search, automatic
 summarization, legacy `search`/`rg` aliases, and a first-class MCP retrieval
 tool.
 

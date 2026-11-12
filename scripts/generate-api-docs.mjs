@@ -174,20 +174,6 @@ const schemas = {
     },
     body: { type: ["object", "null"], additionalProperties: true },
   }),
-  ApiMessageOrigin: fixed(["host", "transport"], {
-    host: { type: "string" },
-    transport: { type: "string", examples: ["ssh", "local"] },
-    remote_mmr_version: nullableString(),
-  }),
-  ApiPeerResult: fixed(["host", "transport", "command", "status"], {
-    host: { type: "string" },
-    transport: { type: "string" },
-    command: { type: "string" },
-    status: { type: "string" },
-    remote_mmr_version: nullableString(),
-    total_messages: { type: ["integer", "null"], minimum: 0, format: "int64" },
-    total_sessions: { type: ["integer", "null"], minimum: 0, format: "int64" },
-  }),
   ApiProject: fixed(
     ["name", "source", "original_path", "session_count", "message_count", "last_activity"],
     {
@@ -198,14 +184,12 @@ const schemas = {
       session_count: int(),
       message_count: int(),
       last_activity: timestampSchema,
-      origin: ref("ApiMessageOrigin"),
     }
   ),
   ApiProjectsResponse: fixed(["projects", "total_messages", "total_sessions"], {
     projects: arrayOf(ref("ApiProject")),
     total_messages: int({ format: "int64" }),
     total_sessions: int({ format: "int64" }),
-    peer_results: arrayOf(ref("ApiPeerResult")),
   }),
   ApiSession: fixed(
     [
@@ -231,13 +215,11 @@ const schemas = {
       user_messages: int(),
       assistant_messages: int(),
       preview: { type: "string" },
-      origin: ref("ApiMessageOrigin"),
     }
   ),
   ApiSessionsResponse: fixed(["sessions", "total_sessions"], {
     sessions: arrayOf(ref("ApiSession")),
     total_sessions: int({ format: "int64" }),
-    peer_results: arrayOf(ref("ApiPeerResult")),
   }),
   ApiMessage: fixed(
     [
@@ -265,7 +247,6 @@ const schemas = {
       msg_type: { type: "string" },
       input_tokens: int({ format: "int64" }),
       output_tokens: int({ format: "int64" }),
-      origin: ref("ApiMessageOrigin"),
     }
   ),
   SessionSelectionScope: fixed(["project", "all", "source"], {
@@ -317,7 +298,6 @@ const schemas = {
     next_url: nullableString(),
     next_request: { oneOf: [ref("RestContinuationRequest"), { type: "null" }] },
     session_selection: ref("SessionSelection"),
-    peer_results: arrayOf(ref("ApiPeerResult")),
   }),
   ContextResponse: fixed(
     ["command", "scope", "source", "project", "total_sessions", "total_messages", "sessions", "messages"],
@@ -330,8 +310,7 @@ const schemas = {
       total_messages: int({ format: "int64" }),
       sessions: arrayOf(ref("ApiSession")),
       messages: arrayOf(ref("ApiMessage")),
-      peer_results: arrayOf(ref("ApiPeerResult")),
-    }
+      }
   ),
   SearchResult: fixed(
     [

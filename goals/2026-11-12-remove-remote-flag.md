@@ -63,16 +63,36 @@ stays 1, because the `teleport-pack` request does not change.
 
 ## Definition of Done
 
-- [ ] DoD-1 — Loopback `import session --from` / `peer status --host` tests pass
+- [x] DoD-1 — Loopback `import session --from` / `peer status --host` tests pass
   on the unchanged code.
-- [ ] DoD-2 — `--remote`, its client code, the eight peer read endpoints, the
+- [x] DoD-2 — `--remote`, its client code, the eight peer read endpoints, the
   MCP `remote` parameter and the `origin`/`peer_results` fields are removed.
-- [ ] DoD-3 — Docs and skills no longer describe `--remote`.
-- [ ] DoD-4 — Differential check: non-remote cases identical; remote cases are
+- [x] DoD-3 — Docs and skills no longer describe `--remote`.
+- [x] DoD-4 — Differential check: non-remote cases identical; remote cases are
   usage errors.
 - [ ] DoD-5 — Full verification loop and `nix build` pass.
 - [ ] DoD-6 — PR open for Tomas's review, with a note on what shared cloud
   storage would take.
+
+## Evidence
+
+- DoD-1: `tests/peer_import_loopback_contract.rs` (4 tests) passed on the
+  unchanged code (commit f38bfbf) and still passes. The peer status `--host`
+  failure tests moved off `read --remote` in aec357b.
+- DoD-2: `remote_flag_is_rejected_on_every_command` failed on the old code and
+  passes now. `summarize_and_compact_send_each_scope_transcript` replaces the
+  remote transcript test and passed on the old code first.
+- DoD-3: `specs/session-sharing.md`, `docs/mmr-session-sharing*.md`,
+  `docs/mmr-command-taxonomy.md`, the generated `docs/api/*` and two skills no
+  longer describe `--remote`.
+- DoD-4: the 137-case matrix (411 files) against the main binary: 105 cases
+  identical (7 files equal after timestamp/hash masking); 27 `--remote` cases
+  become `unexpected argument '--remote'` with exit 2; the other 5 changes are
+  intended: two help texts lose the `--remote` lines, `peer status` and `peer
+  status --host` list only `teleport-pack`, and `peer read-project` is now an
+  unrecognized subcommand. The 47-case summarize/compact matrix: 25 cases
+  byte-identical, including the provider request bodies; all 22 `--remote`
+  cases become the same usage error.
 
 ## Exit conditions
 
