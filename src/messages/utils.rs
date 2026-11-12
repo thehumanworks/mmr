@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use crate::{
     messages::service::{MessageQueryOptions, QueryService},
     types::{
-        ApiSession, RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter,
+        ApiSession, SortBy, SortOptions, SortOrder, SourceFilter,
         agent::{SessionSelection, SessionTranscript},
     },
 };
@@ -13,7 +13,6 @@ use rayon::prelude::*;
 pub(crate) fn load_session_transcripts(
     service: &QueryService,
     project: &str,
-    selection: &RememberSelection,
     source: Option<SourceFilter>,
 ) -> anyhow::Result<Vec<SessionTranscript>> {
     let sessions = service.sessions(
@@ -24,7 +23,7 @@ pub(crate) fn load_session_transcripts(
         SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
     )?;
 
-    let selected = select_sessions(&sessions.sessions, selection);
+    let selected = select_sessions(&sessions.sessions);
     let mut transcripts = selected
         .par_iter()
         .map(|selection| {
@@ -62,11 +61,8 @@ pub(crate) fn load_session_transcripts(
     Ok(transcripts)
 }
 
-fn select_sessions(
-    sessions: &[ApiSession],
-    selection: &RememberSelection,
-) -> Vec<SessionSelection> {
-    let all = sessions
+fn select_sessions(sessions: &[ApiSession]) -> Vec<SessionSelection> {
+    sessions
         .iter()
         .filter_map(|session| {
             parse_source_filter(&session.source).map(|source| SessionSelection {
@@ -75,16 +71,7 @@ fn select_sessions(
                 source,
             })
         })
-        .collect::<Vec<_>>();
-
-    match selection {
-        RememberSelection::Latest => all.into_iter().take(1).collect(),
-        RememberSelection::All => all,
-        RememberSelection::Session { session_id } => all
-            .into_iter()
-            .filter(|s| s.session_id == *session_id)
-            .collect(),
-    }
+        .collect()
 }
 
 fn parse_source_filter(source: &str) -> Option<SourceFilter> {

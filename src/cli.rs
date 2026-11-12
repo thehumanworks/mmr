@@ -21,9 +21,7 @@ use crate::dream::{
     DreamEvidence, DreamEvidenceMode, OmittedDreamEvidence, build_evidence_bundle,
     build_source_evidence_bundle,
 };
-use crate::messages::service::{
-    MessageIndexRange, MessageQueryOptions, QueryService, SessionAxis, SessionSelectionError,
-};
+use crate::messages::service::{MessageQueryOptions, QueryService, SessionSelectionError};
 use crate::peer::{
     PEER_PROTOCOL_VERSION, PeerListProjectsRequest, PeerListSessionsRequest, PeerProjectIdentity,
     PeerProjectRequest, PeerReadSessionRequest, PeerReadSourceRequest, PeerRecallRequest,
@@ -49,7 +47,7 @@ use crate::teleport::{
 use crate::types::{
     ApiMessage, ApiMessageOrigin, ApiMessagesResponse, ApiPeerResult, ApiProject,
     ApiProjectsResponse, ApiSession, ApiSessionsResponse, CompactResponse, RememberRequest,
-    RememberResponse, RememberSelection, SortBy, SortOptions, SortOrder, SourceFilter,
+    RememberResponse, SortBy, SortOptions, SortOrder, SourceFilter,
 };
 
 #[derive(Debug, Clone)]
@@ -1139,7 +1137,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
                     cli.pretty,
                     args.project,
                     args.all,
-                    SessionAxis::Back(args.n),
+                    args.n,
                     args.include_newest,
                     options,
                 )?
@@ -2507,7 +2505,6 @@ async fn summarize_command_response(
                 service,
                 RememberRequest {
                     project: project.as_str(),
-                    selection: RememberSelection::All,
                     source: source_filter,
                     instructions: args.runner.instructions.as_deref(),
                     model: &model,
@@ -3631,7 +3628,7 @@ fn peer_recall_local_response(
         project.as_deref(),
         request.all,
         source,
-        &SessionAxis::Back(recall.n),
+        recall.n,
         recall.include_newest,
         MessageQueryOptions::new(
             request.limits.limit,
@@ -5495,50 +5492,6 @@ fn effective_compact_model(cli_model: Option<&str>) -> String {
         .unwrap_or_else(|| compact::default_compact_model().to_string())
 }
 
-#[cfg(test)]
-fn validate_message_index_range(
-    from: Option<usize>,
-    to: Option<usize>,
-) -> Result<Option<MessageIndexRange>> {
-    if let (Some(from), Some(to)) = (from, to)
-        && from > to
-    {
-        bail!("--from-message-index must be less than or equal to --to-message-index");
-    }
-    Ok(MessageIndexRange::new(from, to))
-}
-
-/// Parse a `--session-range FROM..TO` argument into an inclusive span of recency ages.
-///
-/// The argument is written older-bound `..` newer-bound (e.g. `2..1` selects ages 1 and 2),
-/// so `FROM >= TO >= 1`. Age 0 (the newest, assumed-live session) is never range-addressable.
-/// Returns the ages as `newest_bound..=oldest_bound` (`1..=2` for `2..1`).
-#[cfg(test)]
-fn parse_session_range(input: &str) -> Result<std::ops::RangeInclusive<u32>> {
-    let trimmed = input.trim();
-    let (oldest_str, newest_str) = trimmed.split_once("..").with_context(|| {
-        format!("--session-range expects FROM..TO (older..newer), e.g. 2..1; got {input:?}")
-    })?;
-    let oldest: u32 = oldest_str.trim().parse().map_err(|_| {
-        anyhow::anyhow!("--session-range FROM must be a non-negative integer; got {oldest_str:?}")
-    })?;
-    let newest: u32 = newest_str.trim().parse().map_err(|_| {
-        anyhow::anyhow!("--session-range TO must be a non-negative integer; got {newest_str:?}")
-    })?;
-    if newest < 1 {
-        bail!(
-            "--session-range bounds must be >= 1; the newest session is age 0 and is not \
-             range-addressable (use --session-back 0 --include-newest); got {input:?}"
-        );
-    }
-    if oldest < newest {
-        bail!(
-            "--session-range must be written older..newer with FROM >= TO (e.g. 2..1); got {input:?}"
-        );
-    }
-    Ok(newest..=oldest)
-}
-
 /// Reject the not-by-default newest session (age 0) unless the caller opted in with
 /// `--include-newest`. Out-of-range ages depend on the in-scope session count and are
 /// enforced later in the service against the recency ranking.
@@ -5832,7 +5785,6 @@ fn build_next_messages_command(
     session: &[String],
     project: Option<&str>,
     all: bool,
-    message_index_range: Option<MessageIndexRange>,
     limit: usize,
     next_offset: usize,
     sort_by: SortBy,
@@ -5866,14 +5818,6 @@ fn build_next_messages_command(
     }
     if all {
         parts.push("--all".to_string());
-    }
-    if let Some(range) = message_index_range {
-        if let Some(from) = range.from {
-            parts.push(format!("--from-message-index {from}"));
-        }
-        if let Some(to) = range.to {
-            parts.push(format!("--to-message-index {to}"));
-        }
     }
 
     parts.push(format!("--limit {limit}"));
@@ -5933,7 +5877,7 @@ fn build_next_recall_command_with_remotes(
     parts.join(" ")
 }
 
-/// Resolve and serialize a reverse session-axis query (`--session-back`/`--session-range`/`prev`).
+/// Resolve and serialize `recall N`: the session N sessions back from the newest in scope.
 ///
 /// Recency-derived ages are unstable across time, so a paged result pins `next_command` to the
 /// concrete resolved session id(s) rather than echoing the age-based selector; a session landing
@@ -5946,14 +5890,12 @@ fn run_session_axis(
     pretty: bool,
     project: Option<String>,
     all: bool,
-    axis: SessionAxis,
+    age: u32,
     include_newest: bool,
     options: MessageQueryOptions,
 ) -> Result<String> {
     // Fail fast on the age-0 rule (out-of-range needs the scope count and is enforced below).
-    if let SessionAxis::Back(age) = &axis
-        && let Err(error) = validate_session_back(*age, include_newest)
-    {
+    if let Err(error) = validate_session_back(age, include_newest) {
         return Err(anyhow::Error::new(session_selection_cli_failure(
             error, pretty,
         )?));
@@ -5964,7 +5906,7 @@ fn run_session_axis(
         project_scope.as_deref(),
         all,
         source_filter,
-        &axis,
+        age,
         include_newest,
         options,
     )?;
@@ -5995,7 +5937,6 @@ fn run_session_axis(
             &session_ids,
             project_scope.as_deref(),
             all,
-            options.message_index_range,
             options.limit.unwrap_or(0),
             response.next_offset as usize,
             options.sort.by,
@@ -6030,7 +5971,7 @@ fn recall_with_remotes_response(
         project_scope.as_deref(),
         args.all,
         source_filter,
-        &SessionAxis::Back(args.n),
+        args.n,
         args.include_newest,
         unpaged_options,
     )?;
@@ -6132,17 +6073,6 @@ fn session_selection_cli_failure(error: SessionSelectionError, pretty: bool) -> 
             value["total_sessions_in_scope"] = serde_json::json!(total_sessions_in_scope);
             value["max_selectable_age"] = serde_json::json!(max_selectable_age);
             value["requested_age"] = serde_json::json!(requested);
-        }
-        SessionSelectionError::SessionRangeOutOfRange {
-            total_sessions_in_scope,
-            max_selectable_age,
-            requested_newest,
-            requested_oldest,
-        } => {
-            value["total_sessions_in_scope"] = serde_json::json!(total_sessions_in_scope);
-            value["max_selectable_age"] = serde_json::json!(max_selectable_age);
-            value["requested_newest_age"] = serde_json::json!(requested_newest);
-            value["requested_oldest_age"] = serde_json::json!(requested_oldest);
         }
     }
     let stdout = serialize(&value, pretty)?;
@@ -6414,41 +6344,6 @@ mod tests {
     }
 
     #[test]
-    fn message_index_range_validation_accepts_open_and_closed_ranges() {
-        assert_eq!(validate_message_index_range(None, None).unwrap(), None);
-        assert_eq!(
-            validate_message_index_range(Some(1), None).unwrap(),
-            Some(MessageIndexRange {
-                from: Some(1),
-                to: None,
-            })
-        );
-        assert_eq!(
-            validate_message_index_range(None, Some(3)).unwrap(),
-            Some(MessageIndexRange {
-                from: None,
-                to: Some(3),
-            })
-        );
-        assert_eq!(
-            validate_message_index_range(Some(1), Some(3)).unwrap(),
-            Some(MessageIndexRange {
-                from: Some(1),
-                to: Some(3),
-            })
-        );
-    }
-
-    #[test]
-    fn message_index_range_validation_rejects_inverted_range() {
-        let err = validate_message_index_range(Some(4), Some(1)).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("--from-message-index must be less than or equal to --to-message-index")
-        );
-    }
-
-    #[test]
     fn recall_defaults_to_one_session_back() {
         let parsed = Cli::try_parse_from(["mmr", "recall"]).expect("recall should parse");
         let Commands::Recall(args) = parsed.command else {
@@ -6505,44 +6400,6 @@ mod tests {
     fn old_messages_and_prev_do_not_parse() {
         assert!(Cli::try_parse_from(["mmr", "messages", "--session", "a"]).is_err());
         assert!(Cli::try_parse_from(["mmr", "prev"]).is_err());
-    }
-
-    #[test]
-    fn parse_session_range_accepts_older_to_newer_span() {
-        assert_eq!(parse_session_range("2..1").unwrap(), 1..=2);
-        assert_eq!(parse_session_range("1..1").unwrap(), 1..=1);
-        assert_eq!(parse_session_range("5..3").unwrap(), 3..=5);
-        // Surrounding whitespace is tolerated.
-        assert_eq!(parse_session_range(" 2 .. 1 ").unwrap(), 1..=2);
-    }
-
-    #[test]
-    fn parse_session_range_rejects_reversed_span() {
-        let err = parse_session_range("1..2").unwrap_err();
-        assert!(
-            err.to_string().contains("older..newer"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_session_range_rejects_age_zero_bounds() {
-        let err = parse_session_range("1..0").unwrap_err();
-        assert!(err.to_string().contains(">= 1"), "unexpected error: {err}");
-        assert!(parse_session_range("0..0").is_err());
-    }
-
-    #[test]
-    fn parse_session_range_rejects_non_numeric_and_negative() {
-        assert!(parse_session_range("a..b").is_err());
-        assert!(parse_session_range("-1..1").is_err());
-        assert!(parse_session_range("2..-1").is_err());
-        // Missing separator and empty bounds are rejected.
-        assert!(parse_session_range("2.1").is_err());
-        assert!(parse_session_range("..1").is_err());
-        assert!(parse_session_range("2..").is_err());
-        // A trailing extra bound is not a valid integer.
-        assert!(parse_session_range("3..2..1").is_err());
     }
 
     #[test]

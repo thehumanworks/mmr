@@ -79,8 +79,7 @@ pub async fn remember(
     let client = ChatCompletionsClient::new(settings.api_key, settings.base_url);
     let system_instruction = build_system_instruction(request.instructions);
 
-    let sessions =
-        load_session_transcripts(service, request.project, &request.selection, request.source)?;
+    let sessions = load_session_transcripts(service, request.project, request.source)?;
     let formatted = format_messages_for_input(&sessions);
     let input = format!("Analyze the following AI coding session transcript(s).\n\n{formatted}");
 

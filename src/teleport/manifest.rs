@@ -9,15 +9,6 @@ pub enum TeleportFidelity {
     SharedSafe,
 }
 
-impl TeleportFidelity {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::SharedSafe => "shared-safe",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeleportManifest {
     pub mmr_teleport_manifest_version: u32,

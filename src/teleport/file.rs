@@ -45,21 +45,6 @@ pub fn is_file_url(value: &str) -> bool {
     value.trim().starts_with("file://")
 }
 
-pub fn parse_locator(value: &str) -> Result<PathBuf, TeleportFailure> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(TeleportFailure::usage(
-            "teleport/receive",
-            "locator path is required",
-        ));
-    }
-    if is_file_url(trimmed) {
-        parse_file_url_for_command(trimmed, "teleport/receive")
-    } else {
-        expand_path(PathBuf::from(trimmed))
-    }
-}
-
 pub fn parse_file_url(value: &str) -> Result<PathBuf, TeleportFailure> {
     parse_file_url_for_command(value, "teleport/send")
 }

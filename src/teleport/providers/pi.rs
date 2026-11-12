@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::teleport::bundle::{remap_text, transcript_latest_timestamp};
+use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{
     NativeArtifactSpec, TeleportProviderProfile, pi_project_dir, relative_after_marker,
@@ -47,10 +47,6 @@ impl TeleportProviderProfile for PiProfile {
         RESTORE_PATH
     }
 
-    fn primary_native_path(&self) -> &'static str {
-        NATIVE_TRANSCRIPT
-    }
-
     fn build_restore_hints(&self, session_id: &str) -> Value {
         restore_hints_for_provider(
             "pi",
@@ -75,10 +71,6 @@ impl TeleportProviderProfile for PiProfile {
 
     fn supports_native_apply(&self) -> bool {
         true
-    }
-
-    fn supports_resume_transform(&self, bundle_source: &str, target: &str) -> bool {
-        bundle_source == "pi" && target == "pi"
     }
 
     fn native_destination_path(
@@ -109,17 +101,6 @@ impl TeleportProviderProfile for PiProfile {
             source_canonical,
             aliases,
         )
-    }
-
-    fn conflict_check_path(
-        &self,
-        bundle: &crate::teleport::bundle::TeleportBundleFile,
-    ) -> Option<String> {
-        bundle
-            .files
-            .keys()
-            .find(|path| *path == NATIVE_TRANSCRIPT || *path == "transcript.native.jsonl")
-            .cloned()
     }
 }
 
@@ -181,8 +162,4 @@ pub fn remap_pi_native_transcript(
         updated.push('\n');
     }
     updated
-}
-
-pub fn pi_conflict_timestamp(content: &str) -> Option<String> {
-    transcript_latest_timestamp(content)
 }
