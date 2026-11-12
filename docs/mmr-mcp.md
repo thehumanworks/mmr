@@ -1,20 +1,4 @@
-# MMR REST API
-
-Generated API documentation for MMR's REST contract.
-
-- OpenAPI source: [openapi.json](./openapi.json)
-- Static docs: [index.html](./index.html)
-- OpenAPI version: 3.1.0
-- Operations: 24
-- Schemas: 100
-
-Regenerate after contract edits:
-
-```sh
-node scripts/generate-api-docs.mjs
-```
-
-## MCP server
+# mmr MCP server
 
 `mmr mcp --transport stdio` and `mmr mcp --transport http` run the native Rust
 MCP server. Stdio is the simplest setup for a local MCP client: it calls the
@@ -37,7 +21,7 @@ cargo build --locked
 python3 examples/standalone_stdio.py
 ```
 
-The [example](../../examples/standalone_stdio.py) creates a temporary HOME and
+The [example](../examples/standalone_stdio.py) creates a temporary HOME and
 Codex session, starts the real MCP subprocess with a minimal environment and
 unusable REST settings, then initializes, lists tools and reads the session.
 It checks JSON-only protocol output, unchanged native files and clean EOF
@@ -47,7 +31,7 @@ Expected output:
 
 ```text
 Stdio initialized with unusable REST settings; no REST server needed.
-Listed 19 MCP tools.
+Listed 15 MCP tools.
 user: Keep the retry limit at three.
 assistant: Noted for the next session.
 Protocol stdout was JSON only; native histories unchanged; clean EOF shutdown.

@@ -138,7 +138,7 @@ The example creates an isolated temporary HOME/project, clears inherited provide
 configuration, and verifies native files remain byte-for-byte unchanged. The
 current file-backed sync simulation used by `init` stays inside that HOME.
 
-For a local MCP client, use `mmr mcp --transport stdio`.
+For a local MCP client, use `mmr mcp --transport stdio`; see [docs/mmr-mcp.md](docs/mmr-mcp.md).
 
 Carry one session to another machine without SSH:
 
