@@ -164,11 +164,12 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Find text in this project's history from every harness, newest first
-    /// (case-insensitive; no setup). Use before proposing an approach that may already have
-    /// been tried, decided or rejected, or to answer "did we ever..." or "why did we..."
-    /// questions. Each match has a session_id and source to pass to mmr_read_session. Set
-    /// all=true to search every project.
+    /// Find text in this project's earlier agent sessions from every harness, newest first
+    /// (case-insensitive; no setup). Use before explaining why code is the way it is, before
+    /// proposing an approach that may already have been tried or rejected, before risky steps
+    /// such as deploys, and for "did we ever..." or "why did we..." questions. Search for a
+    /// few distinctive words. Each match has a session_id and source to pass to
+    /// mmr_read_session. Set all=true to search every project.
     #[tool(name = "mmr_find")]
     async fn find(
         &self,
@@ -324,11 +325,15 @@ impl ServerHandler for MmrMcpServer {
         )
         .with_server_info(Implementation::new("mmr", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "mmr reads this machine's earlier agent sessions from Claude Code, Codex, Cursor, \
-             Grok and Pi, scoped to a project. To continue earlier work, call mmr_recall. To \
-             check whether something was tried or decided, call mmr_find, then mmr_read_session \
-             with a match's session_id and source. To brief yourself on a project, call \
-             mmr_context_project. Omitting project uses the project of the directory the \
+            "mmr holds this project's earlier agent sessions from Claude Code, Codex, Cursor, \
+             Grok and Pi on this machine. Git history records what changed; these sessions \
+             record why, what was tried and rejected, and what was left unfinished. Check them \
+             before you explain why code is the way it is, when the user asks you to resume or \
+             refers to earlier work, and before a risky step such as a deploy, migration or \
+             large refactor. Call mmr_find with a few distinctive words (a constant, file or \
+             error name), then mmr_read_session with a match's session_id and source. Call \
+             mmr_recall to continue the previous session, and mmr_context_project to brief \
+             yourself on the project. Omitting project uses the project of the directory the \
              server runs in. Tools return JSON text that matches the mmr CLI.",
         )
     }

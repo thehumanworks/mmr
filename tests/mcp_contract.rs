@@ -88,6 +88,17 @@ async fn mcp_server_initializes_with_tools_and_prompts() -> anyhow::Result<()> {
     let info = client.peer_info().expect("server initialize info");
     assert!(info.capabilities.tools.is_some());
     assert!(info.capabilities.prompts.is_some());
+    // Clients such as Claude Code defer tools behind search, so the
+    // instructions must say when to check earlier sessions.
+    let instructions = info.instructions.as_deref().expect("server instructions");
+    for trigger in [
+        "before you explain why code is the way it is",
+        "resume",
+        "before a risky step",
+        "mmr_find",
+    ] {
+        assert!(instructions.contains(trigger), "{trigger}: {instructions}");
+    }
 
     client.cancel().await?;
     server.await??;
