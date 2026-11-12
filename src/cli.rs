@@ -1,6 +1,7 @@
+mod find;
 mod retrieval;
 
-use retrieval::{find_output, retrieve_output};
+use retrieval::retrieve_output;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -115,7 +116,7 @@ const BUNDLED_MMR_SKILL_FILES: &[BundledSkillFile] = &[
     name = "mmr",
     version = env!("CARGO_PKG_VERSION"),
     about = "Browse AI conversation history from Claude, Codex, Cursor, Grok, and Pi",
-    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr --source codex ingest events --project /path/to/project\n  mmr find \"migration append-only\" --format line\n  mmr summarize project --project /path/to/project\n  mmr compact project --project /path/to/project --query \"current task\"\n  mmr skill load\n  mmr skill install --local\n  mmr mcp --transport stdio\n  mmr mcp --transport http\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
+    after_help = "Examples:\n  mmr init\n  mmr status --pretty\n  mmr list projects --pretty\n  mmr read session <session-id> --pretty\n  mmr read project --format tree --output-dir /tmp/mmr-tree\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr --source codex ingest events --project /path/to/project\n  mmr find \"retry limit\"\n  mmr summarize project --project /path/to/project\n  mmr compact project --project /path/to/project --query \"current task\"\n  mmr skill load\n  mmr skill install --local\n  mmr mcp --transport stdio\n  mmr mcp --transport http\n  mmr sync --pretty\n\nOutput:\n  Commands emit machine-readable JSON on stdout unless an explicit stream format such as --format line is selected. Use --pretty for indented JSON. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -137,8 +138,8 @@ pub enum Commands {
     Init(InitArgs),
     /// List known projects or sessions
     List(ListArgs),
-    /// Search normalized events and learned memory
-    Find(SearchTextArgs),
+    /// Find text in project history across every harness; no setup needed
+    Find(find::FindArgs),
     /// Search normalized matches, then read bounded provider transcript windows
     Retrieve(RetrieveArgs),
     /// Retrieve a previous stable session for immediate continuity
@@ -586,41 +587,6 @@ pub enum ReadFormatArg {
     Tree,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[clap(rename_all = "kebab-case")]
-pub enum FindFormatArg {
-    #[default]
-    Json,
-    Line,
-}
-
-#[derive(Args, Debug)]
-pub struct SearchTextArgs {
-    /// Literal query or pattern to find
-    query: String,
-    /// Project path (omit to use current directory)
-    #[arg(long)]
-    project: Option<PathBuf>,
-    /// Source session id to search
-    #[arg(long)]
-    session: Option<String>,
-    /// Event role filter
-    #[arg(long)]
-    role: Option<String>,
-    /// Event type filter
-    #[arg(long = "event-type")]
-    event_type: Option<String>,
-    /// Case-insensitive literal matching
-    #[arg(short = 'i', long)]
-    ignore_case: bool,
-    /// Context lines before and after each match
-    #[arg(short = 'C', long, default_value_t = 0)]
-    context: usize,
-    /// Output format
-    #[arg(long, value_enum, default_value = "json")]
-    format: FindFormatArg,
-}
-
 #[derive(Args, Debug)]
 pub struct RetrieveArgs {
     /// Literal query or pattern to find
@@ -868,7 +834,6 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
     match cli.command {
         Commands::Mcp(args) => crate::mcp::run_mcp(&args, pretty).await,
         Commands::Note { text } => serialize(&note_response(text)?, pretty),
-        Commands::Find(args) => find_output(&args, source_filter, pretty),
         Commands::Skill(args) => skill_command_response(&args, pretty),
         Commands::Import(args) => import_command_response(&args, source_filter, pretty),
         Commands::Ingest(args) => ingest_command_response(&args, source_filter, pretty),
@@ -882,6 +847,7 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
             smoke_event,
         } => serialize(&db_info_response(project, smoke_event)?, pretty),
         Commands::Peer(args) => peer_command_response(&args, source_filter, pretty),
+        Commands::Find(args) => find::find_output(args, &load_service()?, source_filter, pretty),
         Commands::List(args) => {
             list_command_response(&load_service()?, args, source_filter, pretty)
         }
@@ -4276,26 +4242,15 @@ mod tests {
     }
 
     #[test]
-    fn find_command_parses_json_and_line_formats() {
-        let find = Cli::try_parse_from([
-            "mmr",
-            "find",
-            "panic",
-            "--role",
-            "assistant",
-            "-i",
-            "--format",
-            "line",
-        ])
-        .expect("find should parse");
-        let Commands::Find(args) = find.command else {
-            panic!("expected find command");
-        };
-        assert_eq!(args.query, "panic");
-        assert_eq!(args.role.as_deref(), Some("assistant"));
-        assert!(args.ignore_case);
-        assert_eq!(args.format, FindFormatArg::Line);
-
+    fn find_command_rejects_store_era_flags() {
+        assert!(Cli::try_parse_from(["mmr", "find", "panic", "--all"]).is_ok());
+        for flag in ["--role", "--event-type", "--format", "-C"] {
+            assert!(
+                Cli::try_parse_from(["mmr", "find", "panic", flag, "x"]).is_err(),
+                "{flag}"
+            );
+        }
+        assert!(Cli::try_parse_from(["mmr", "find", "panic", "-i"]).is_err());
         assert!(Cli::try_parse_from(["mmr", "rg", "panic"]).is_err());
         assert!(Cli::try_parse_from(["mmr", "search", "decision"]).is_err());
     }

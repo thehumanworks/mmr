@@ -1,181 +1,19 @@
-//! Find and retrieve command execution: matching, session ranking and continuation.
+//! Retrieve command execution: matching, session ranking and continuation.
 //!
 //! Clap arguments and routing stay in the parent. Responses and algorithm helpers
-//! are private here; only the two output handlers cross that boundary.
+//! are private here; only the output handler crosses that boundary.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 
-use super::{
-    CliFailure, FindFormatArg, RetrieveArgs, SearchTextArgs, linked_project, serialize, shell_quote,
-};
+use super::{CliFailure, RetrieveArgs, linked_project, serialize, shell_quote};
 use crate::messages::service::{MessageQueryOptions, QueryService};
 use crate::store::{EventRecord, ProjectRecord, Store, content_hash};
 use crate::types::{ApiMessage, SortBy, SortOptions, SortOrder, SourceFilter};
-
-#[derive(Debug, Serialize)]
-struct SearchResponse {
-    query: String,
-    total_results: usize,
-    results: Vec<SearchResult>,
-}
-
-#[derive(Debug, Serialize)]
-struct SearchResult {
-    project_id: String,
-    source: String,
-    session_id: String,
-    event_id: String,
-    event_type: String,
-    role: String,
-    timestamp: String,
-    citation: String,
-    line_number: usize,
-    snippet: String,
-    before: Vec<String>,
-    after: Vec<String>,
-}
-
-pub(super) fn find_output(
-    args: &SearchTextArgs,
-    source_filter: Option<SourceFilter>,
-    pretty: bool,
-) -> Result<String> {
-    let response = search_response(args, source_filter)?;
-    if args.format == FindFormatArg::Json {
-        return serialize(&response, pretty);
-    }
-
-    let mut output = String::new();
-    for result in response.results {
-        output.push_str(&format!(
-            "{}\t{}\t{}\t{}\n",
-            result.citation, result.line_number, result.source, result.snippet
-        ));
-    }
-    Ok(output)
-}
-
-fn search_response(
-    args: &SearchTextArgs,
-    source_filter: Option<SourceFilter>,
-) -> Result<SearchResponse> {
-    let mut store = Store::open_default()?;
-    let project = linked_project(&store, args.project.as_deref())?;
-    let results = search_project(
-        &mut store,
-        &project,
-        source_filter,
-        args.session.as_deref(),
-        args.role.as_deref(),
-        args.event_type.as_deref(),
-        &args.query,
-        args.ignore_case,
-        args.context,
-    )?;
-
-    Ok(SearchResponse {
-        query: args.query.clone(),
-        total_results: results.len(),
-        results,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn search_project(
-    store: &mut Store,
-    project: &ProjectRecord,
-    source_filter: Option<SourceFilter>,
-    session: Option<&str>,
-    role: Option<&str>,
-    event_type: Option<&str>,
-    query: &str,
-    ignore_case: bool,
-    context: usize,
-) -> Result<Vec<SearchResult>> {
-    if query.is_empty() {
-        bail!("search query is empty");
-    }
-
-    let events = store.events_for_project(
-        &project.id,
-        source_filter.map(SourceFilter::as_str),
-        session,
-    )?;
-    let mut results = Vec::new();
-    for event in events {
-        if role.is_some_and(|role| role != event.role) {
-            continue;
-        }
-        if event_type.is_some_and(|event_type| event_type != event.event_type) {
-            continue;
-        }
-
-        let search_document = store.upsert_search_document(&event)?;
-        for line_match in
-            find_line_matches(&search_document.document_text, query, ignore_case, context)
-        {
-            results.push(SearchResult {
-                project_id: event.project_id.clone(),
-                source: event.source.clone(),
-                session_id: event.session_id.clone(),
-                event_id: event.id.clone(),
-                event_type: event.event_type.clone(),
-                role: event.role.clone(),
-                timestamp: event.timestamp.clone(),
-                citation: search_document.citation.clone(),
-                line_number: line_match.line_number,
-                snippet: line_match.snippet,
-                before: line_match.before,
-                after: line_match.after,
-            });
-        }
-    }
-    if source_filter.is_none() && session.is_none() {
-        for memory in store.learned_memory_for_project(&project.id)? {
-            if memory.status != "active" {
-                continue;
-            }
-            if role.is_some_and(|role| role != "memory") {
-                continue;
-            }
-            if event_type.is_some_and(|event_type| event_type != "learned_memory") {
-                continue;
-            }
-            for line_match in find_line_matches(&memory.claim, query, ignore_case, context) {
-                results.push(SearchResult {
-                    project_id: memory.project_id.clone(),
-                    source: "learned_memory".to_string(),
-                    session_id: memory
-                        .dream_run_id
-                        .clone()
-                        .unwrap_or_else(|| "learned_memory".to_string()),
-                    event_id: memory.id.clone(),
-                    event_type: "learned_memory".to_string(),
-                    role: "memory".to_string(),
-                    timestamp: memory.created_at.clone(),
-                    citation: format!("mmr://learned-memory/{}", memory.id),
-                    line_number: line_match.line_number,
-                    snippet: line_match.snippet,
-                    before: line_match.before,
-                    after: line_match.after,
-                });
-            }
-        }
-    }
-
-    results.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-            .then_with(|| left.line_number.cmp(&right.line_number))
-    });
-    Ok(results)
-}
 
 #[derive(Debug, Serialize)]
 struct RetrieveResponse {

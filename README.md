@@ -98,21 +98,19 @@ mmr read session <session-id>
 mmr recall --project /path/to/project
 ```
 
-To recover a decision when you do not know its session, run these in the project:
+To recover a decision when you do not know its session, run these in the project.
+Nothing needs to be set up first:
 
 ```bash
-mmr init                             # create/update the local indexed store
-mmr find "retry"                     # inspect matching lines and citations
-mmr retrieve "retry" --max-sessions 1 # select a readable native session
-mmr --source <source> read session <source_session_id> --project <project_name>
+mmr find "retry"                      # matches from every harness, newest first
+mmr --source <source> read session <session_id>   # each match's read_command
 mmr context project --limit 20        # collect bounded raw context for an agent
 ```
 
-Use `source`, `source_session_id`, and `project_name` from `retrieve`'s
-`selected_sessions` for `read`; `find`'s `session_id` is an internal store ID.
-If you already know the native session ID, go straight to `read` without `init`.
-`context project` returns session metadata and a bounded message array locally;
-it does not call a model.
+`find` is case-insensitive and searches the current project; pass `--project`
+or `--all` to widen it. Each match carries a `read_command` that reads its
+session. `context project` returns session metadata and a bounded message array
+locally; it does not call a model.
 
 Try the whole workflow on synthetic history (Python 3, standard library only):
 
@@ -126,17 +124,16 @@ Expected output:
 
 ```text
 find: Keep the retry limit at three.
-retrieve: codex/example-session
+read with: mmr --source codex read session example-session
 read user: Keep the retry limit at three.
 read assistant: Noted for the next session.
 context: 1 session, 2 messages
-Native histories unchanged; only the temporary local store was initialized.
+Native histories unchanged; nothing was set up or written.
 Temporary home removed.
 ```
 
 The example creates an isolated temporary HOME/project, clears inherited provider
-configuration, and verifies native files remain byte-for-byte unchanged. The
-current file-backed sync simulation used by `init` stays inside that HOME.
+configuration, and verifies native files remain byte-for-byte unchanged.
 
 For a local MCP client, use `mmr mcp --transport stdio`; see [docs/mmr-mcp.md](docs/mmr-mcp.md).
 

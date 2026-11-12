@@ -312,8 +312,6 @@ fn seed_find_fixture(fixture: &TestFixture) -> anyhow::Result<()> {
             .collect::<Vec<_>>()
             .join("\n"),
     )?;
-    let init = fixture.run_cli(&["init"]);
-    assert!(init.status.success(), "{}", stderr_text(&init));
     Ok(())
 }
 
@@ -348,7 +346,7 @@ fn assert_stdio_query_contract(fixture: &TestFixture, mcp: &mut StdioMcp) -> any
         let actual: Value = serde_json::from_str(&tool_text(&response))?;
         assert_eq!(actual, parse_stdout_json(&cli));
         if tool == "mmr_find" {
-            assert!(!actual["results"].as_array().unwrap().is_empty());
+            assert!(!actual["matches"].as_array().unwrap().is_empty());
         }
     }
     Ok(())

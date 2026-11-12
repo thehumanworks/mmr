@@ -23,17 +23,14 @@ mmr recall --project /path/to/project
 given; pass `--project` when the scope matters. Omit `--source` for all providers unless `MMR_DEFAULT_SOURCE` sets a default,
 or use `--source claude|codex|cursor|grok|pi`; `all` is not a source value.
 
-For existing indexed text search, use `mmr find "query"`. It needs a linked local
-store: `mmr init` in the project creates one and ingests available source history.
-Reading raw sessions does not require that setup. Do not run ingestion merely
-to read a known session. If access to history is restricted, report the missing
-context instead of reading protected provider files as a fallback.
+When you do not know which session holds something, run `mmr find "phrase"` in
+the project. It needs no setup, is case-insensitive, searches every harness,
+and returns matches newest first. Run a match's `read_command` (or pass its
+`source` and `session_id` to `mmr --source <source> read session <session_id>`)
+to read the whole session. Use `--project <path>` or `--all` to widen the scope.
+If access to history is restricted, report the missing context instead of
+reading protected provider files as a fallback.
 
-When starting from a phrase, use `find "phrase"` for lines/citations, then
-`retrieve "phrase" --max-sessions 1` for readable session selection. Pass its
-`selected_sessions` fields `source`, `source_session_id`, and `project_name` to
-`mmr --source <source> read session <source_session_id> --project <project_name>`.
-Do not pass `find`'s internal store `session_id` to `read session`.
 Use `mmr context project --limit 20` for bounded raw messages and session metadata
 without model calls. In the source checkout, run `python3
 examples/find_read_context.py` after `cargo build --locked` to try this flow with

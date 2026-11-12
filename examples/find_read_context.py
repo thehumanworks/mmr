@@ -1,4 +1,4 @@
-"""Find a decision, read its native session, then collect bounded project context."""
+"""Find a decision, read its session, then collect bounded project context. No setup."""
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,28 +12,23 @@ def main():
         home = Path(temp) / "home"
         project = seed(home)
         before = native_snapshot(home)
-        run(mmr, home, project, "init")
 
-        found = run(mmr, home, project, "find", "retry")
-        assert found["total_results"] == 1, found
-        assert found["results"][0]["snippet"] == "Keep the retry limit at three.", found
-        print(f'find: {found["results"][0]["snippet"]}')
+        found = run(mmr, home, project, "find", "RETRY")
+        assert found["total_matches"] == 1, found
+        match = found["matches"][0]
+        assert match["snippet"] == "Keep the retry limit at three.", found
+        print(f'find: {match["snippet"]}')
+        print(f'read with: {match["read_command"]}')
 
-        # find reports store IDs. retrieve supplies the provider ID for read.
-        retrieved = run(mmr, home, project, "retrieve", "retry", "--max-sessions", "1")
-        assert retrieved["total_selected_sessions"] == 1, retrieved
-        selected = retrieved["selected_sessions"][0]
-        assert selected["first_match_citation"] == found["results"][0]["citation"], retrieved
-        session = selected["source_session_id"]
-        print(f'retrieve: {selected["source"]}/{session}')
-        read = run(mmr, home, project, "--source", selected["source"], "read", "session",
-                   session, "--project", selected["project_name"])
+        read = run(mmr, home, project, "--source", match["source"], "read", "session",
+                   match["session_id"])
         assert [(item["role"], item["content"]) for item in read["messages"]] == [
             ("user", "Keep the retry limit at three."),
             ("assistant", "Noted for the next session."),
         ], read
         for message in read["messages"]:
             print(f'read {message["role"]}: {message["content"]}')
+        session = match["session_id"]
 
         context = run(mmr, home, project, "context", "project", "--limit", "2")
         assert context["messages"] == read["messages"], context
@@ -41,7 +36,7 @@ def main():
         assert context["sessions"][0]["session_id"] == session, context
         print(f'context: {context["total_sessions"]} session, {len(context["messages"])} messages')
         assert native_snapshot(home) == before, "Native histories changed"
-        print("Native histories unchanged; only the temporary local store was initialized.")
+        print("Native histories unchanged; nothing was set up or written.")
     print("Temporary home removed.")
 
 

@@ -5017,3 +5017,128 @@ fn assimilate_command_is_rejected() {
         );
     }
 }
+
+// --- find: raw history search, no setup ---
+
+fn run_read_command(fixture: &TestFixture, read_command: &str) -> serde_json::Value {
+    let words = read_command.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(words[0], "mmr", "read_command={read_command}");
+    let output = fixture.run_cli(&words[1..]);
+    assert!(
+        output.status.success(),
+        "read_command={read_command} stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_stdout_json(&output)
+}
+
+#[test]
+fn find_searches_the_cwd_project_across_harnesses_without_setup() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["find", "CWD"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "find");
+    assert_eq!(json["query"], "CWD");
+    assert_eq!(json["total_matches"], 4);
+    assert_eq!(
+        rows(
+            &json["matches"],
+            &["/source", "/session_id", "/role", "/snippet"]
+        ),
+        [
+            "claude|sess-cwd-claude|assistant|cwd claude answer",
+            "claude|sess-cwd-claude|user|cwd claude question",
+            "codex|sess-cwd-codex|assistant|cwd codex answer",
+            "codex|sess-cwd-codex|user|cwd codex question",
+        ]
+    );
+    assert_eq!(json["next_page"], false);
+    assert!(json["next_command"].is_null());
+
+    for found in json["matches"].as_array().unwrap() {
+        let read = run_read_command(&fixture, found["read_command"].as_str().unwrap());
+        assert!(
+            read["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message["content"] == found["snippet"]),
+            "read_command should return the matched message: {found}"
+        );
+    }
+    assert!(
+        !fixture.home.join(".local/share/mmr").exists(),
+        "find must not create a store"
+    );
+}
+
+#[test]
+fn find_scopes_to_a_project_or_every_project() {
+    let fixture = TestFixture::seeded();
+    let project = fixture.run_cli(&["find", "hello from", "--project", "/Users/test/grok-proj"]);
+    assert!(project.status.success());
+    let project = parse_stdout_json(&project);
+    assert_eq!(project["scope"]["project"], "/Users/test/grok-proj");
+    assert_eq!(rows(&project["matches"], &["/source"]), ["grok"]);
+
+    let all = fixture.run_cli(&["find", "hello from", "--all"]);
+    assert!(all.status.success());
+    let all = parse_stdout_json(&all);
+    assert_eq!(all["scope"]["all"], true);
+    let mut sources = rows(&all["matches"], &["/source"]);
+    sources.sort();
+    sources.dedup();
+    assert_eq!(sources, ["claude", "codex", "cursor", "grok", "pi"]);
+
+    let session = fixture.run_cli(&["find", "hello", "--all", "--session", "sess-pi-1"]);
+    assert!(session.status.success());
+    assert_eq!(
+        rows(&parse_stdout_json(&session)["matches"], &["/session_id"]),
+        ["sess-pi-1"]
+    );
+}
+
+#[test]
+fn find_pages_with_a_next_command() {
+    let fixture = TestFixture::seeded();
+    let first = fixture.run_cli(&["find", "hello from", "--all", "--limit", "2"]);
+    assert!(first.status.success());
+    let first = parse_stdout_json(&first);
+    assert_eq!(first["matches"].as_array().unwrap().len(), 2);
+    assert_eq!(first["next_page"], true);
+    assert_eq!(first["next_offset"], 2);
+    let next_command = first["next_command"].as_str().unwrap();
+    assert_eq!(
+        next_command,
+        "mmr find 'hello from' --all --limit 2 --offset 2"
+    );
+    let second = fixture.run_cli(&[
+        "find",
+        "hello from",
+        "--all",
+        "--limit",
+        "2",
+        "--offset",
+        "2",
+    ]);
+    let second = parse_stdout_json(&second);
+    assert_ne!(first["matches"][0], second["matches"][0]);
+    assert_eq!(first["total_matches"], second["total_matches"]);
+}
+
+#[test]
+fn find_rejects_an_empty_query() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["find", ""]);
+    assert_eq!(output.status.code(), Some(2));
+}

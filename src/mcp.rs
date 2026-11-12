@@ -164,24 +164,16 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Search normalized events and learned memory across all sessions. Use before proposing
-    /// an approach that may already have been tried, decided, or rejected, or to answer
-    /// "did we ever..." / "why did we..." questions about past work.
+    /// Find text in this project's history from every harness (case-insensitive; no setup).
+    /// Use before proposing an approach that may already have been tried, decided, or
+    /// rejected, or to answer "did we ever..." / "why did we..." questions. Each match has a
+    /// session_id and source to pass to mmr_read_session. Set all=true for every project.
     #[tool(name = "mmr_find")]
     async fn find(
         &self,
         Parameters(args): Parameters<FindToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let format = args.format.clone();
-        let output = run_cli_string(args.into_cli_args()).await?;
-        if matches!(format.as_deref(), Some("line")) {
-            return Ok(json_tool_result(serde_json::json!({
-                "command": "find",
-                "format": "line",
-                "text": output,
-            })));
-        }
-        Ok(text_tool_result(output))
+        run_cli_tool(args.into_cli_args()).await
     }
 
     /// Produce scoped, ready-to-use context for a project across sources. Use to brief
@@ -475,13 +467,12 @@ impl RecallToolArgs {
 struct FindToolArgs {
     query: String,
     source: Option<String>,
-    project: Option<PathBuf>,
-    session: Option<String>,
-    role: Option<String>,
+    project: Option<String>,
     #[serde(default)]
-    ignore_case: bool,
-    context: Option<usize>,
-    format: Option<String>,
+    all: bool,
+    session: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 impl FindToolArgs {
@@ -489,12 +480,11 @@ impl FindToolArgs {
         let mut args = Vec::new();
         push_source(&mut args, self.source);
         args.extend(["find".to_string(), self.query]);
-        push_opt(&mut args, "--project", self.project.map(path_to_string));
+        push_opt(&mut args, "--project", self.project);
+        push_flag(&mut args, "--all", self.all);
         push_opt(&mut args, "--session", self.session);
-        push_opt(&mut args, "--role", self.role);
-        push_flag(&mut args, "--ignore-case", self.ignore_case);
-        push_opt(&mut args, "--context", self.context);
-        push_opt(&mut args, "--format", self.format);
+        push_opt(&mut args, "--limit", self.limit);
+        push_opt(&mut args, "--offset", self.offset);
         args
     }
 }
