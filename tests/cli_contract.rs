@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use common::{PeerLoopback, RetrieveContractFixture, TestFixture, parse_stdout_json, rows};
+use common::{SpacedProjectFixture, TestFixture, parse_stdout_json, rows};
 
 const DEV_SUBSKILLS: [&str; 4] = [
     "goal-closeout",
@@ -730,34 +730,6 @@ fn read_project_replaces_export_project_history() {
 }
 
 #[test]
-fn read_source_requires_explicit_source_and_reads_across_projects() {
-    let fixture = TestFixture::seeded();
-    let missing_source = fixture.run_cli(&["read", "source"]);
-    assert!(!missing_source.status.success());
-    assert!(
-        String::from_utf8_lossy(&missing_source.stderr).contains("requires --source"),
-        "stderr={}",
-        String::from_utf8_lossy(&missing_source.stderr)
-    );
-
-    let output = fixture.run_cli(&["--source", "grok", "read", "source"]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["total_messages"].as_i64().unwrap(), 3);
-    assert!(
-        json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|message| message["source"] == "grok")
-    );
-}
-
-#[test]
 fn recall_replaces_prev_for_previous_stable_session() {
     let fixture = TestFixture::seeded();
     let cwd = seed_cwd_project_with_history(&fixture);
@@ -799,7 +771,10 @@ fn projects_with_source_cursor_filters() {
 #[test]
 fn messages_filtered_by_source_cursor() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "cursor", "read", "source"], &[]);
+    let output = fixture.run_cli_with_env(
+        &["--source", "cursor", "read", "session", "sess-cursor-1"],
+        &[],
+    );
 
     assert!(
         output.status.success(),
@@ -865,7 +840,8 @@ fn projects_with_source_grok_filters() {
 #[test]
 fn messages_filtered_by_source_grok() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "grok", "read", "source"], &[]);
+    let output =
+        fixture.run_cli_with_env(&["--source", "grok", "read", "session", "sess-grok-1"], &[]);
 
     assert!(
         output.status.success(),
@@ -950,7 +926,7 @@ fn projects_with_source_pi_filters() {
 #[test]
 fn messages_filtered_by_source_pi() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "pi", "read", "source"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "pi", "read", "session", "sess-pi-1"], &[]);
 
     assert!(
         output.status.success(),
@@ -1423,7 +1399,10 @@ fn read_session_is_chronological_and_paginated() {
 #[test]
 fn messages_filtered_by_source() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "claude", "read", "source"], &[]);
+    let output = fixture.run_cli_with_env(
+        &["--source", "claude", "read", "session", "sess-claude-1"],
+        &[],
+    );
 
     assert!(
         output.status.success(),
@@ -1591,7 +1570,7 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
     );
 
     let override_output = fixture.run_cli_in_dir_with_env(
-        &["--source", "claude", "read", "source"],
+        &["--source", "claude", "list", "sessions", "--all"],
         &cwd,
         &[
             ("MMR_AUTO_DISCOVER_PROJECT", "1"),
@@ -1606,689 +1585,16 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
     );
 
     let override_json = parse_stdout_json(&override_output);
-    let override_messages = override_json["messages"].as_array().unwrap();
-    assert_eq!(override_json["total_messages"].as_i64().unwrap(), 4);
+    let override_sessions = override_json["sessions"].as_array().unwrap();
+    assert_eq!(override_json["total_sessions"].as_i64().unwrap(), 2);
     assert!(
-        override_messages
+        override_sessions
             .iter()
-            .all(|message| message["source"].as_str().unwrap() == "claude")
+            .all(|session| session["source"].as_str().unwrap() == "claude")
     );
 }
 
 // --- retrieve ---
-
-#[test]
-fn retrieve_parser_accepts_documented_flags() {
-    let fixture = RetrieveContractFixture::seeded();
-    let pinned = format!(
-        r#"{{"source":"codex","project_name":"{}","source_session_id":"retrieve-codex-alpha"}}"#,
-        fixture.project_arg()
-    );
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "retrieve",
-        "public mapping marker",
-        "--debug",
-        "--full-message-history",
-        "--project",
-        fixture.project_arg(),
-        "--session",
-        "retrieve-codex-alpha",
-        "--role",
-        "assistant",
-        "--event-type",
-        "message",
-        "--ignore-case",
-        "-C",
-        "1",
-        "--max-sessions",
-        "1",
-        "--before-messages",
-        "1",
-        "--after-messages",
-        "2",
-        "--max-messages-per-session",
-        "3",
-        "--limit",
-        "2",
-        "--offset",
-        "0",
-        "--pinned-session",
-        pinned.as_str(),
-    ]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["debug"]["limits"]["max_sessions"].as_u64().unwrap(), 1);
-    assert_eq!(
-        json["debug"]["limits"]["before_messages"].as_u64().unwrap(),
-        1
-    );
-    assert_eq!(
-        json["debug"]["limits"]["after_messages"].as_u64().unwrap(),
-        2
-    );
-    assert_eq!(
-        json["debug"]["limits"]["max_messages_per_session"]
-            .as_u64()
-            .unwrap(),
-        3
-    );
-    assert_eq!(json["debug"]["limits"]["limit"].as_u64().unwrap(), 2);
-    assert_eq!(json["debug"]["limits"]["offset"].as_u64().unwrap(), 0);
-    assert!(json["suggested_next_action"].is_null());
-    assert_eq!(json["debug"]["scope"]["all_projects"], false);
-    let selected = &json["selected_sessions"][0];
-    assert_eq!(selected["rank"].as_u64().unwrap(), 1);
-    assert_eq!(selected["match_count"].as_u64().unwrap(), 1);
-    assert!(selected["messages"].as_array().unwrap().len() <= 2);
-    assert!(selected["message_window"].is_object());
-    assert_eq!(
-        selected["rank_reason"]["tie_break"]
-            .as_array()
-            .unwrap()
-            .len(),
-        3
-    );
-    let next_command = json["next_command"].as_str().unwrap();
-    assert!(next_command.contains("--debug"));
-    assert!(next_command.contains("--full-message-history"));
-}
-
-#[test]
-fn retrieve_parser_rejects_out_of_scope_all_and_remote_flags() {
-    let fixture = RetrieveContractFixture::seeded();
-
-    let all = fixture.run_cli(&["retrieve", "public mapping marker", "--all"]);
-    assert!(!all.status.success(), "--all is outside retrieve v1");
-    assert!(
-        String::from_utf8_lossy(&all.stderr).contains("--all"),
-        "stderr={}",
-        String::from_utf8_lossy(&all.stderr)
-    );
-
-    let remote = fixture.run_cli(&["retrieve", "public mapping marker", "--remote", "mini"]);
-    assert!(!remote.status.success(), "--remote is outside retrieve v1");
-    assert!(
-        String::from_utf8_lossy(&remote.stderr).contains("--remote"),
-        "stderr={}",
-        String::from_utf8_lossy(&remote.stderr)
-    );
-}
-
-#[test]
-fn retrieve_scope_flags_reject_ambiguous_combinations() {
-    let fixture = RetrieveContractFixture::seeded();
-
-    let project_and_all = fixture.run_cli(&[
-        "retrieve",
-        "system wide marker",
-        "--project",
-        fixture.project_arg(),
-        "--all-projects",
-    ]);
-    assert!(!project_and_all.status.success());
-    let project_json = parse_stdout_json(&project_and_all);
-    assert_eq!(project_json["error_kind"], "invalid_scope_flags");
-
-    let source_and_all = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "retrieve",
-        "system wide marker",
-        "--all-sources",
-    ]);
-    assert!(!source_and_all.status.success());
-    let source_json = parse_stdout_json(&source_and_all);
-    assert_eq!(source_json["error_kind"], "invalid_scope_flags");
-}
-
-#[test]
-fn retrieve_stdout_pretty_is_json_and_stderr_is_diagnostic_only() {
-    let fixture = RetrieveContractFixture::seeded();
-    let output = fixture.run_cli(&["retrieve", "public mapping marker", "--pretty"]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    assert!(
-        output.stderr.is_empty(),
-        "successful JSON retrieve should not print stderr diagnostics"
-    );
-    let stdout = stdout_text(&output);
-    assert!(stdout.starts_with("{\n  \"query\":"));
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["query"], "public mapping marker");
-    assert!(json["selected_sessions"].is_array());
-    assert!(json["unreadable_matches"].is_array());
-}
-
-#[test]
-fn retrieve_default_output_is_concise_without_debug_or_messages() {
-    let fixture = RetrieveContractFixture::seeded();
-    let output = fixture.run_cli(&["retrieve", "public mapping marker"]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    assert!(
-        json.get("debug").is_none(),
-        "default retrieve output should omit debug scope metadata"
-    );
-    assert!(json.get("scope").is_none());
-    assert!(json.get("limits").is_none());
-    assert!(json.get("total_ranked_sessions").is_none());
-    assert!(json.get("next_page").is_none());
-    assert!(json.get("next_command").is_none());
-    let selected = &json["selected_sessions"][0];
-    assert_eq!(selected["source"], "codex");
-    assert_eq!(selected["project_name"], fixture.project_arg());
-    assert_eq!(selected["source_session_id"], "retrieve-codex-alpha");
-    assert!(selected.get("messages").is_none());
-    assert!(selected.get("message_window").is_none());
-    let stdout = stdout_text(&output);
-    for raw_message_field in ["input_tokens", "output_tokens", "msg_type", "model"] {
-        assert!(
-            !stdout.contains(raw_message_field),
-            "default retrieve output leaked ApiMessage field {raw_message_field}: {stdout}"
-        );
-    }
-    let matches = selected["matches"].as_array().unwrap();
-    assert!(!matches.is_empty());
-    assert!(matches.iter().all(|item| {
-        item["source"] == "codex"
-            && item["source_session_id"] == "retrieve-codex-alpha"
-            && item["citation"]
-                .as_str()
-                .unwrap()
-                .starts_with("mmr://event/")
-            && item["snippet"]
-                .as_str()
-                .unwrap()
-                .contains("public mapping marker")
-    }));
-}
-
-#[test]
-fn retrieve_debug_includes_scope_metadata() {
-    let fixture = RetrieveContractFixture::seeded();
-    let output = fixture.run_cli(&[
-        "retrieve",
-        "provider only marker",
-        "--all-projects",
-        "--debug",
-        "--max-sessions",
-        "5",
-    ]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    assert!(json.get("scope").is_none());
-    assert!(json.get("limits").is_none());
-    let debug = json["debug"].as_object().expect("debug object");
-    assert_eq!(debug["scope"]["all_projects"], true);
-    assert_eq!(debug["scope"]["all_sources"], true);
-    assert!(debug["scope"]["source_filter"].is_null());
-    assert!(
-        debug["scope"]["total_projects_searched"].as_u64().unwrap() >= 3,
-        "debug={debug:?}"
-    );
-    assert!(
-        debug["scope"]["projects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|project| project.as_str().unwrap() == fixture.provider_only_project_arg())
-    );
-    assert_eq!(debug["limits"]["max_sessions"].as_u64().unwrap(), 5);
-    assert!(debug["total_ranked_sessions"].as_u64().unwrap() >= 1);
-    assert!(
-        json["selected_sessions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|session| session.get("messages").is_none())
-    );
-}
-
-#[test]
-fn retrieve_full_message_history_includes_provider_windows() {
-    let fixture = RetrieveContractFixture::seeded();
-    let output = fixture.run_cli(&[
-        "retrieve",
-        "window marker",
-        "--full-message-history",
-        "--before-messages",
-        "1",
-        "--after-messages",
-        "1",
-        "--max-messages-per-session",
-        "3",
-        "--limit",
-        "3",
-    ]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    assert!(json.get("debug").is_none());
-    assert!(json.get("scope").is_none());
-    assert!(json.get("limits").is_none());
-    assert_eq!(json["next_page"], false);
-    assert!(json["next_command"].is_null());
-    let selected = &json["selected_sessions"][0];
-    assert_eq!(selected["message_window"]["before_messages"], 1);
-    assert_eq!(selected["message_window"]["after_messages"], 1);
-    assert_eq!(selected["message_window"]["max_messages_per_session"], 3);
-    let messages = selected["messages"].as_array().expect("messages");
-    assert!(!messages.is_empty());
-    assert!(messages.iter().all(|message| {
-        message["session_id"] == "retrieve-codex-alpha" && message["source"] == "codex"
-    }));
-}
-
-#[test]
-fn retrieve_all_projects_searches_provider_discovered_projects() {
-    let fixture = RetrieveContractFixture::seeded();
-
-    let scoped = fixture.run_cli(&["retrieve", "provider only marker"]);
-    assert!(
-        scoped.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&scoped.stderr)
-    );
-    let scoped_json = parse_stdout_json(&scoped);
-    assert_eq!(scoped_json["total_matches"].as_u64().unwrap(), 0);
-    assert_eq!(
-        scoped_json.get("debug"),
-        None,
-        "default retrieve output should omit debug scope metadata"
-    );
-
-    let all_projects = fixture.run_cli(&[
-        "retrieve",
-        "provider only marker",
-        "--all-projects",
-        "--debug",
-        "--max-sessions",
-        "5",
-    ]);
-    assert!(
-        all_projects.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&all_projects.stderr)
-    );
-    let all_json = parse_stdout_json(&all_projects);
-    assert_eq!(all_json["debug"]["scope"]["all_projects"], true);
-    assert!(
-        all_json["debug"]["scope"]["projects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|project| project.as_str().unwrap() == fixture.provider_only_project_arg())
-    );
-    let selected = all_json["selected_sessions"].as_array().unwrap();
-    assert_eq!(selected.len(), 1);
-    assert_eq!(
-        selected[0]["project_name"],
-        fixture.provider_only_project_arg()
-    );
-    assert_eq!(
-        selected[0]["source_session_id"],
-        "retrieve-codex-provider-only"
-    );
-    assert!(
-        selected[0]["first_match_citation"]
-            .as_str()
-            .unwrap()
-            .starts_with("mmr://message/message:v1:")
-    );
-}
-
-#[test]
-fn retrieve_filters_apply_source_env_session_role_event_and_context() {
-    let fixture = RetrieveContractFixture::seeded();
-
-    let default_source = fixture.run_cli_with_env(
-        &[
-            "retrieve",
-            "ranking tie marker",
-            "--max-sessions",
-            "3",
-            "--event-type",
-            "message",
-            "--role",
-            "assistant",
-            "-C",
-            "1",
-        ],
-        &[("MMR_DEFAULT_SOURCE", "claude")],
-    );
-    assert!(
-        default_source.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&default_source.stderr)
-    );
-    let default_json = parse_stdout_json(&default_source);
-    assert!(
-        default_json["selected_sessions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|session| session["source"] == "claude")
-    );
-    assert!(
-        default_json["selected_sessions"][0]["matches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|item| item["before"].is_array() && item["after"].is_array())
-    );
-
-    let explicit_source = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "retrieve",
-            "ranking tie marker",
-            "--session",
-            "retrieve-codex-beta",
-            "--max-sessions",
-            "3",
-        ],
-        &[("MMR_DEFAULT_SOURCE", "claude")],
-    );
-    assert!(
-        explicit_source.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&explicit_source.stderr)
-    );
-    let explicit_json = parse_stdout_json(&explicit_source);
-    let sessions = explicit_json["selected_sessions"].as_array().unwrap();
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0]["source"], "codex");
-    assert_eq!(sessions[0]["source_session_id"], "retrieve-codex-beta");
-
-    let all_sources = fixture.run_cli_with_env(
-        &[
-            "retrieve",
-            "ranking tie marker",
-            "--all-sources",
-            "--debug",
-            "--max-sessions",
-            "3",
-        ],
-        &[("MMR_DEFAULT_SOURCE", "claude")],
-    );
-    assert!(
-        all_sources.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&all_sources.stderr)
-    );
-    let all_sources_json = parse_stdout_json(&all_sources);
-    let sources = all_sources_json["selected_sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|session| session["source"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert!(sources.contains(&"claude"));
-    assert!(sources.contains(&"codex"));
-    assert_eq!(all_sources_json["debug"]["scope"]["all_sources"], true);
-    assert!(all_sources_json["debug"]["scope"]["source_filter"].is_null());
-}
-
-#[test]
-fn retrieve_limit_default_derives_from_session_caps() {
-    let fixture = RetrieveContractFixture::seeded();
-    let output = fixture.run_cli(&[
-        "retrieve",
-        "ranking tie marker",
-        "--debug",
-        "--full-message-history",
-        "--max-sessions",
-        "2",
-        "--max-messages-per-session",
-        "5",
-    ]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["debug"]["limits"]["limit"].as_u64().unwrap(), 10);
-}
-
-#[test]
-fn retrieve_flattened_pagination_across_selected_sessions() {
-    let fixture = RetrieveContractFixture::seeded();
-    let page1 = fixture.run_cli(&[
-        "retrieve",
-        "ranking tie marker",
-        "--full-message-history",
-        "--max-sessions",
-        "2",
-        "--max-messages-per-session",
-        "4",
-        "--limit",
-        "2",
-    ]);
-    assert!(
-        page1.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&page1.stderr)
-    );
-    let page1_json = parse_stdout_json(&page1);
-    let selected = page1_json["selected_sessions"].as_array().unwrap();
-    assert_eq!(selected.len(), 2);
-    assert_eq!(selected[0]["rank"].as_u64().unwrap(), 1);
-    assert_eq!(selected[1]["rank"].as_u64().unwrap(), 2);
-    let total_page1_messages = selected
-        .iter()
-        .map(|session| session["messages"].as_array().unwrap().len())
-        .sum::<usize>();
-    assert_eq!(total_page1_messages, 2);
-    assert_eq!(selected[0]["messages"].as_array().unwrap().len(), 2);
-    assert!(selected[1]["messages"].as_array().unwrap().is_empty());
-    assert_eq!(page1_json["next_page"], true);
-
-    let next_command = page1_json["next_command"].as_str().unwrap();
-    assert!(
-        next_command.contains("--full-message-history"),
-        "next_command={next_command}"
-    );
-    let page2 = fixture.run_shell_command(next_command);
-    assert!(
-        page2.status.success(),
-        "next_command={next_command}\nstderr={}",
-        String::from_utf8_lossy(&page2.stderr)
-    );
-    let page2_json = parse_stdout_json(&page2);
-    let page2_selected = page2_json["selected_sessions"].as_array().unwrap();
-    assert_eq!(page2_selected.len(), 2);
-    let total_page2_messages = page2_selected
-        .iter()
-        .map(|session| session["messages"].as_array().unwrap().len())
-        .sum::<usize>();
-    assert_eq!(total_page2_messages, 2);
-    assert!(page2_selected[0]["messages"].as_array().unwrap().is_empty());
-    assert_eq!(page2_selected[1]["messages"].as_array().unwrap().len(), 2);
-}
-
-#[test]
-fn retrieve_next_command_preserves_debug_and_full_message_history() {
-    let fixture = RetrieveContractFixture::seeded();
-    let page1 = fixture.run_cli(&[
-        "retrieve",
-        "ranking tie marker",
-        "--all-projects",
-        "--all-sources",
-        "--debug",
-        "--full-message-history",
-        "--max-sessions",
-        "2",
-        "--max-messages-per-session",
-        "4",
-        "--limit",
-        "2",
-    ]);
-    assert!(
-        page1.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&page1.stderr)
-    );
-    let page1_json = parse_stdout_json(&page1);
-    assert_eq!(page1_json["next_page"], true);
-    let next_command = page1_json["next_command"].as_str().unwrap();
-    assert!(
-        next_command.contains("--all-projects"),
-        "next_command={next_command}"
-    );
-    assert!(
-        next_command.contains("--all-sources"),
-        "next_command={next_command}"
-    );
-    assert!(
-        next_command.contains("--debug"),
-        "next_command={next_command}"
-    );
-    assert!(
-        next_command.contains("--full-message-history"),
-        "next_command={next_command}"
-    );
-    assert!(
-        !next_command.contains("--project"),
-        "next_command={next_command}"
-    );
-
-    let page2 = fixture.run_shell_command(next_command);
-    assert!(
-        page2.status.success(),
-        "next_command={next_command}\nstderr={}",
-        String::from_utf8_lossy(&page2.stderr)
-    );
-    let page2_json = parse_stdout_json(&page2);
-    assert_eq!(page2_json["debug"]["scope"]["all_projects"], true);
-    assert_eq!(page2_json["debug"]["scope"]["all_sources"], true);
-}
-
-#[test]
-fn retrieve_pinned_next_command_executes_as_printed_and_freezes_sessions() {
-    let fixture = RetrieveContractFixture::seeded();
-    let page1 = fixture.run_cli(&[
-        "retrieve",
-        "next command marker",
-        "--full-message-history",
-        "--project",
-        fixture.project_arg(),
-        "--max-sessions",
-        "1",
-        "--max-messages-per-session",
-        "6",
-        "--limit",
-        "2",
-    ]);
-    assert!(
-        page1.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&page1.stderr)
-    );
-    let page1_json = parse_stdout_json(&page1);
-    assert_eq!(page1_json["next_page"], true);
-    let next_command = page1_json["next_command"].as_str().expect("next_command");
-    assert!(next_command.contains("--pinned-session"));
-    assert!(next_command.contains("--full-message-history"));
-    assert!(next_command.contains(fixture.project_arg()));
-
-    fixture.add_newer_matching_session("next command marker");
-    let page2 = fixture.run_shell_command(next_command);
-    assert!(
-        page2.status.success(),
-        "next_command={next_command}\nstderr={}",
-        String::from_utf8_lossy(&page2.stderr)
-    );
-    let page2_json = parse_stdout_json(&page2);
-    assert_eq!(page2_json["selected_sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        page2_json["selected_sessions"][0]["source_session_id"],
-        "retrieve-codex-alpha"
-    );
-    assert!(
-        !serde_json::to_string(&page2_json)
-            .unwrap()
-            .contains("retrieve-codex-newer"),
-        "pinned continuation must not drift to newer matching sessions"
-    );
-}
-
-#[test]
-fn retrieve_pinned_session_validation_returns_structured_errors() {
-    let fixture = RetrieveContractFixture::seeded();
-
-    let malformed = fixture.run_cli(&[
-        "retrieve",
-        "public mapping marker",
-        "--pinned-session",
-        "{\"source\":\"codex\"}",
-    ]);
-    assert!(!malformed.status.success());
-    assert!(
-        !malformed.stdout.is_empty(),
-        "retrieve errors should be structured JSON on stdout; stderr={}",
-        String::from_utf8_lossy(&malformed.stderr)
-    );
-    let malformed_json = parse_stdout_json(&malformed);
-    assert_eq!(malformed_json["error_kind"], "invalid_pinned_session");
-
-    let extra_field = fixture.run_cli(&[
-        "retrieve",
-        "public mapping marker",
-        "--pinned-session",
-        r#"{"source":"codex","project_name":"/tmp/project","source_session_id":"retrieve-codex-alpha","session_id":"internal"}"#,
-    ]);
-    assert!(!extra_field.status.success());
-    assert!(
-        !extra_field.stdout.is_empty(),
-        "retrieve errors should be structured JSON on stdout; stderr={}",
-        String::from_utf8_lossy(&extra_field.stderr)
-    );
-    let extra_field_json = parse_stdout_json(&extra_field);
-    assert_eq!(extra_field_json["error_kind"], "invalid_pinned_session");
-
-    let stale = fixture.run_cli(&[
-        "retrieve",
-        "public mapping marker",
-        "--pinned-session",
-        r#"{"source":"codex","project_name":"/missing/project","source_session_id":"missing-session"}"#,
-    ]);
-    assert!(!stale.status.success());
-    assert!(
-        !stale.stdout.is_empty(),
-        "retrieve errors should be structured JSON on stdout; stderr={}",
-        String::from_utf8_lossy(&stale.stderr)
-    );
-    let stale_json = parse_stdout_json(&stale);
-    assert_eq!(stale_json["error_kind"], "pinned_session_not_found");
-}
 
 // --- export ---
 
@@ -2609,58 +1915,6 @@ fn summarize_project_without_selector_uses_project_history() {
 }
 
 #[test]
-fn summarize_project_remote_includes_remote_messages() {
-    if !loopback_bind_available() {
-        return;
-    }
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-summary");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-cat <<'JSON'
-{"messages":[{"session_id":"remote-summary-session","source":"codex","project_name":"/Users/test/proj","role":"user","content":"remote summary evidence","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let (base_url, captured, handle) = start_mock_chat_completions_server(
-        r#"{"id":"interaction-remote","model":"test-model","choices":[{"message":{"role":"assistant","content":"remote summary"}}]}"#,
-    );
-    let output = run_cli_with_home_and_env(
-        &fixture.home,
-        &[
-            "summarize",
-            "project",
-            "--project",
-            "/Users/test/proj",
-            "--remote",
-            "studio",
-        ],
-        &[
-            ("OPENAI_API_KEY", "test-key"),
-            ("OPENAI_BASE_URL", base_url.as_str()),
-            ("PATH", path.as_str()),
-        ],
-    );
-
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    handle.join().expect("mock server thread");
-
-    let body = captured.lock().expect("captured body").clone().unwrap();
-    let input = first_input_text(&body);
-    assert!(input.contains("remote summary evidence"));
-    assert!(input.contains("hello from claude"));
-}
-
-#[test]
 fn summarize_fails_without_api_key_configuration() {
     let fixture = TestFixture::seeded();
     let output = run_cli_with_home_and_env(
@@ -2760,45 +2014,6 @@ fn summarize_api_key_env_takes_precedence_over_openai_api_key() {
     assert_eq!(
         stdout_json["text"].as_str().unwrap(),
         "env precedence summary"
-    );
-}
-
-#[test]
-fn status_summary_runner_configured_with_api_key_env() {
-    let fixture = TestFixture::seeded();
-    mmr::config::write_summarize_config_for_tests_with_api(
-        &fixture.home,
-        "https://api.openai.com/v1",
-        "gpt-5.5",
-        None,
-        Some("MMR_TEST_API_KEY"),
-    )
-    .expect("write summarize config");
-    let output = run_cli_with_home_and_env(
-        &fixture.home,
-        &["status", "--pretty"],
-        &[("MMR_TEST_API_KEY", "test-key")],
-    );
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let status_json = parse_stdout_json(&output);
-    assert_eq!(
-        status_json["diagnostics"]["summary_runner"]["status"],
-        "configured"
-    );
-    assert_eq!(
-        status_json["diagnostics"]["summary_runner"]["model"]
-            .as_str()
-            .unwrap(),
-        "gpt-5.5"
-    );
-    assert!(
-        status_json["diagnostics"]["summary_runner"]["config_file"]
-            .as_str()
-            .is_some_and(|path| path.contains("config.json"))
     );
 }
 
@@ -3450,23 +2665,7 @@ fn compact_session_markdown_outputs_compacted_text_only() {
     assert!(input.contains("hello from claude"));
 }
 
-#[test]
-fn compact_source_requires_explicit_source() {
-    let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_raw(&["compact", "source"]);
-
-    assert!(
-        !output.status.success(),
-        "compact source without --source should be rejected"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("`mmr compact source` requires --source"),
-        "stderr should explain missing source: {stderr}"
-    );
-}
-
-const LOOPBACK_PROJECT_TRANSCRIPT: &str = "
+const CODEX_PROJECT_TRANSCRIPT: &str = "
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:00:01] user: hello from codex
 
@@ -3476,67 +2675,26 @@ const LOOPBACK_PROJECT_TRANSCRIPT: &str = "
 - [2025-01-02T00:02:00] user: follow-up question
 - [2025-01-02T00:03:00] assistant: second long codex answer
 
-## Session sess-remote-a (codex, /Users/test/codex-proj)
-- [2025-01-02T00:04:00] user: remote codex question
-- [2025-01-02T00:04:30] assistant: remote codex answer
-
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:05:00] assistant: short codex answer
-
-## Session sess-remote-b (codex, /Users/test/codex-proj)
-- [2025-01-07T00:00:01] user: newest remote question
-- [2025-01-07T00:00:02] assistant: newest remote answer
 ";
 
-const LOOPBACK_SESSION_TRANSCRIPT: &str = "
+const CODEX_SESSION_TRANSCRIPT: &str = "
 ## Session sess-codex-1 (codex, /Users/test/codex-proj)
 - [2025-01-02T00:00:01] user: hello from codex
 - [2025-01-02T00:05:00] assistant: short codex answer
 ";
 
-const LOOPBACK_SOURCE_TRANSCRIPT: &str = "
-## Session sess-codex-1 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:00:01] user: hello from codex
-
-## Session sess-codex-2 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:00:30] user: start longer codex thread
-- [2025-01-02T00:01:00] assistant: first long codex answer
-- [2025-01-02T00:02:00] user: follow-up question
-- [2025-01-02T00:03:00] assistant: second long codex answer
-
-## Session sess-remote-a (codex, /Users/test/codex-proj)
-- [2025-01-02T00:04:00] user: remote codex question
-- [2025-01-02T00:04:30] assistant: remote codex answer
-
-## Session sess-codex-1 (codex, /Users/test/codex-proj)
-- [2025-01-02T00:05:00] assistant: short codex answer
-
-## Session sess-codex-recent-1 (codex, /Users/test/codex-recent)
-- [2025-01-03T00:00:01] user: brand new project question
-- [2025-01-03T00:01:00] assistant: recent project answer
-
-## Session sess-remote-only (codex, /Users/test/remote-only)
-- [2025-01-06T00:00:01] user: remote only question
-
-## Session sess-remote-b (codex, /Users/test/codex-proj)
-- [2025-01-07T00:00:01] user: newest remote question
-- [2025-01-07T00:00:02] assistant: newest remote answer
-";
-
-/// `summarize` and `compact` with `--remote` send one deduplicated,
-/// chronological transcript built from both machines.
 #[test]
-fn summarize_and_compact_remote_send_merged_transcripts() {
+fn summarize_and_compact_send_each_scope_transcript() {
     if !loopback_bind_available() {
         return;
     }
     let fixture = TestFixture::seeded();
-    let remote = PeerLoopback::seeded(&fixture);
-    let path = remote.path_env();
-    let scopes: [(&[&str], &str); 3] = [
+    let scopes: [(&[&str], &str); 2] = [
         (
             &["project", "--project", "/Users/test/codex-proj"],
-            LOOPBACK_PROJECT_TRANSCRIPT,
+            CODEX_PROJECT_TRANSCRIPT,
         ),
         (
             &[
@@ -3545,17 +2703,16 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
                 "--project",
                 "/Users/test/codex-proj",
             ],
-            LOOPBACK_SESSION_TRANSCRIPT,
+            CODEX_SESSION_TRANSCRIPT,
         ),
-        (&["source"], LOOPBACK_SOURCE_TRANSCRIPT),
     ];
 
     for (scope, transcript) in scopes {
         let mut args = vec!["--source", "codex", "summarize"];
         args.extend_from_slice(scope);
-        args.extend(["--remote", "studio"]);
+        args.extend(["--limit", "50"]);
         let (base_url, captured, handle) = start_mock_chat_completions_server(
-            r#"{"id":"loopback","model":"test-model","choices":[{"message":{"role":"assistant","content":"merged summary"}}]}"#,
+            r#"{"id":"scope","model":"test-model","choices":[{"message":{"role":"assistant","content":"summary"}}]}"#,
         );
         let output = run_cli_with_home_and_env(
             &fixture.home,
@@ -3563,7 +2720,6 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
             &[
                 ("OPENAI_API_KEY", "test-key"),
                 ("OPENAI_BASE_URL", base_url.as_str()),
-                ("PATH", path.as_str()),
             ],
         );
         assert!(
@@ -3581,9 +2737,8 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
 
         let mut args = vec!["--source", "codex", "compact"];
         args.extend_from_slice(scope);
-        args.extend(["--remote", "studio"]);
         let (base_url, captured, handle) = start_mock_compact_server(
-            r#"{"id":"cmpr-loopback","object":"compact","model":"morph-compactor","output":"merged","messages":[],"usage":{"input_tokens":1,"output_tokens":1,"compression_ratio":0.5,"processing_time_ms":1}}"#,
+            r#"{"id":"cmpr-scope","object":"compact","model":"morph-compactor","output":"compacted","messages":[],"usage":{"input_tokens":1,"output_tokens":1,"compression_ratio":0.5,"processing_time_ms":1}}"#,
         );
         let output = run_cli_with_home_and_env(
             &fixture.home,
@@ -3591,7 +2746,6 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
             &[
                 ("MORPHLLM_API_KEY", "test-key"),
                 ("MORPHLLM_BASE_URL", base_url.as_str()),
-                ("PATH", path.as_str()),
             ],
         );
         assert!(
@@ -3603,19 +2757,6 @@ fn summarize_and_compact_remote_send_merged_transcripts() {
         let body = captured.lock().expect("captured body").clone().unwrap();
         assert_eq!(body["input"], transcript, "args={args:?}");
     }
-
-    let calls = remote.ssh_calls();
-    assert_eq!(
-        calls,
-        [
-            "studio mmr peer read-project --request-json -",
-            "studio mmr peer read-project --request-json -",
-            "studio mmr peer read-session --request-json -",
-            "studio mmr peer read-session --request-json -",
-            "studio mmr peer read-source --request-json -",
-            "studio mmr peer read-source --request-json -",
-        ]
-    );
 }
 
 #[test]
@@ -3657,40 +2798,6 @@ fn context_project_returns_sessions_newest_first_and_newest_message_window() {
     assert_eq!(json["total_sessions"], 2);
     assert_eq!(json["total_messages"], 6);
     assert!(json.get("peer_results").is_none());
-}
-
-#[test]
-fn context_source_requires_source_and_spans_projects() {
-    let fixture = TestFixture::seeded();
-    let missing = fixture.run_cli_with_env(&["context", "source"], &[("MMR_DEFAULT_SOURCE", "")]);
-    assert!(!missing.status.success());
-    assert!(
-        String::from_utf8_lossy(&missing.stderr).contains("`mmr context source` requires --source"),
-        "stderr={}",
-        String::from_utf8_lossy(&missing.stderr)
-    );
-
-    let output = fixture.run_cli(&["--source", "codex", "context", "source", "--limit", "2"]);
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["command"], "context/source");
-    assert_eq!(json["scope"], "source");
-    assert_eq!(json["source"], "codex");
-    assert!(json["project"].is_null());
-    assert_eq!(
-        rows(&json["sessions"], &["/session_id"]),
-        ["sess-codex-recent-1", "sess-codex-1", "sess-codex-2"]
-    );
-    assert_eq!(
-        rows(&json["messages"], &["/timestamp", "/role"]),
-        ["2025-01-03T00:00:01|user", "2025-01-03T00:01:00|assistant"]
-    );
-    assert_eq!(json["total_sessions"], 3);
-    assert_eq!(json["total_messages"], 8);
 }
 
 #[test]
@@ -3815,7 +2922,7 @@ fn read_project_pagination_includes_next_page_and_next_command() {
 
 #[test]
 fn read_project_next_command_quotes_project_paths_with_spaces() {
-    let fixture = RetrieveContractFixture::seeded();
+    let fixture = SpacedProjectFixture::seeded();
     let page1 = fixture.run_cli(&[
         "--source",
         "codex",
@@ -3862,85 +2969,16 @@ fn read_project_next_command_quotes_project_paths_with_spaces() {
 }
 
 #[test]
-fn read_project_remote_next_command_quotes_shell_values() {
-    let fixture = RetrieveContractFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-remote-next");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat >/dev/null
-printf '{"messages":[{"session_id":"remote-page-session","source":"codex","project_name":"%s","role":"user","content":"remote page context","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}\n' "$MMR_FAKE_PROJECT"
-"#,
-    );
-
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let page1 = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "read",
-            "project",
-            "--project",
-            fixture.project_arg(),
-            "--remote",
-            "studio",
-            "--limit",
-            "1",
-        ],
-        &[
-            ("PATH", path.as_str()),
-            ("MMR_FAKE_PROJECT", fixture.project_arg()),
-        ],
-    );
-    assert!(
-        page1.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&page1.stderr)
-    );
-
-    let page1_json = parse_stdout_json(&page1);
-    assert!(page1_json["next_page"].as_bool().unwrap());
-    let next_command = page1_json["next_command"].as_str().unwrap();
-    assert!(
-        next_command.contains("--project '"),
-        "next_command={next_command}"
-    );
-    assert!(
-        next_command.contains("--remote studio"),
-        "next_command={next_command}"
-    );
-
-    let binary_dir = Path::new(env!("CARGO_BIN_EXE_mmr"))
-        .parent()
-        .expect("mmr binary parent");
-    let shell_path = format!("{}:{path}", binary_dir.display());
-    let page2 = Command::new("zsh")
-        .arg("-fc")
-        .arg(next_command)
-        .env("PATH", shell_path)
-        .env("HOME", &fixture.home)
-        .env("XDG_DATA_HOME", &fixture.data_home)
-        .env("MMR_FAKE_PROJECT", fixture.project_arg())
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("MMR_CONFIG_FILE")
-        .current_dir(&fixture.project)
-        .output()
-        .expect("run remote next_command");
-    assert!(
-        page2.status.success(),
-        "next_command={next_command}\nstderr={}",
-        String::from_utf8_lossy(&page2.stderr)
-    );
-    let page2_json = parse_stdout_json(&page2);
-    assert_eq!(page2_json["messages"].as_array().unwrap().len(), 1);
-}
-
-#[test]
-fn read_source_pagination_no_next_command_when_all_results_fit() {
+fn read_project_pagination_no_next_command_when_all_results_fit() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "read", "source", "--limit", "100"]);
+    let output = fixture.run_cli(&[
+        "read",
+        "project",
+        "--project",
+        "/Users/test/codex-proj",
+        "--limit",
+        "100",
+    ]);
 
     assert!(
         output.status.success(),
@@ -4209,7 +3247,7 @@ fn recall_zero_with_include_newest_returns_newest() {
 
 #[test]
 fn recall_next_command_quotes_project_paths_with_spaces() {
-    let fixture = RetrieveContractFixture::seeded();
+    let fixture = SpacedProjectFixture::seeded();
     let page1 = fixture.run_cli(&[
         "--source",
         "codex",
@@ -4266,9 +3304,16 @@ fn recall_out_of_range_names_counts() {
 }
 
 #[test]
-fn read_source_omits_session_selection_field() {
+fn read_project_omits_session_selection_field() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "read", "source", "--limit", "5"]);
+    let output = fixture.run_cli(&[
+        "read",
+        "project",
+        "--project",
+        "/Users/test/codex-proj",
+        "--limit",
+        "5",
+    ]);
     assert!(
         output.status.success(),
         "stderr={}",
@@ -4426,70 +3471,7 @@ JSON
 }
 
 #[test]
-fn read_project_remote_merges_remote_messages_with_origin() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-read");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    let ssh_log = fixture.home.join("peer-read-ssh.log");
-    let request_log = fixture.home.join("peer-read-request.json");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-printf '%s\n' "$*" > "$MMR_FAKE_SSH_LOG"
-cat > "$MMR_FAKE_REQUEST_LOG"
-cat <<'JSON'
-{"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote studio context","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-"#,
-    );
-
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let output = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "read",
-            "project",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-        ],
-        &[
-            ("PATH", path.as_str()),
-            ("MMR_FAKE_SSH_LOG", ssh_log.to_str().unwrap()),
-            ("MMR_FAKE_REQUEST_LOG", request_log.to_str().unwrap()),
-        ],
-    );
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    let messages = json["messages"].as_array().expect("messages");
-    let remote = messages
-        .iter()
-        .find(|message| message["content"] == "remote studio context")
-        .expect("remote message");
-    assert_eq!(remote["origin"]["host"], "studio");
-    assert_eq!(remote["origin"]["transport"], "ssh");
-    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
-    assert_eq!(json["peer_results"][0]["host"], "studio");
-    assert_eq!(json["peer_results"][0]["remote_mmr_version"], "9.9.9");
-    let request = fs::read_to_string(&request_log).expect("request log");
-    assert!(request.contains("\"protocol_version\":1"));
-    assert!(request.contains("\"source\":\"codex\""));
-    assert!(
-        fs::read_to_string(&ssh_log)
-            .expect("ssh log")
-            .contains("mmr peer read-project --request-json -")
-    );
-}
-
-#[test]
-fn read_project_remote_ssh_failure_is_structured() {
+fn peer_status_host_ssh_failure_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-fail");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4503,7 +3485,7 @@ exit 255
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
@@ -4514,9 +3496,9 @@ exit 255
 }
 
 #[test]
-fn read_project_remote_rejects_option_like_target() {
+fn peer_status_host_rejects_option_like_target() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["read", "project", "--remote=-oProxyCommand=sh"]);
+    let output = fixture.run_cli(&["peer", "status", "--host=-oProxyCommand=sh"]);
     assert_eq!(output.status.code(), Some(2));
     let json = parse_stdout_json(&output);
     assert_eq!(json["status"], "failed");
@@ -4525,7 +3507,7 @@ fn read_project_remote_rejects_option_like_target() {
 }
 
 #[test]
-fn read_project_remote_remote_mmr_missing_is_structured() {
+fn peer_status_host_remote_mmr_missing_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-missing");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4539,7 +3521,7 @@ exit 127
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
@@ -4550,7 +3532,7 @@ exit 127
 }
 
 #[test]
-fn read_project_remote_remote_incompatible_is_structured() {
+fn peer_status_host_remote_incompatible_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-incompatible");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4564,7 +3546,7 @@ exit 1
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
@@ -4575,7 +3557,7 @@ exit 1
 }
 
 #[test]
-fn read_project_remote_remote_peer_subcommand_missing_is_structured() {
+fn peer_status_host_remote_peer_subcommand_missing_is_structured() {
     let fixture = TestFixture::seeded();
     let fake_bin = fixture.home.join("fake-bin-peer-subcommand-missing");
     fs::create_dir_all(&fake_bin).expect("fake bin");
@@ -4591,7 +3573,7 @@ exit 2
     let original_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{original_path}", fake_bin.display());
     let output = fixture.run_cli_with_env(
-        &["read", "project", "--remote", "studio"],
+        &["peer", "status", "--host", "studio"],
         &[("PATH", path.as_str())],
     );
     assert_eq!(output.status.code(), Some(3));
@@ -4621,227 +3603,6 @@ fn read_project_without_remote_omits_peer_results() {
             .expect("messages")
             .iter()
             .all(|message| message.get("origin").is_none())
-    );
-}
-
-#[test]
-fn context_project_remote_merges_remote_context() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-context");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-cat <<'JSON'
-{"command":"context/project","scope":"project","source":"codex","project":"/Users/test/codex-proj","total_sessions":1,"total_messages":1,"sessions":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","project_path":"/Users/test/codex-proj","first_timestamp":"2025-01-08T00:00:00","last_timestamp":"2025-01-08T00:00:00","message_count":1,"user_messages":1,"assistant_messages":0,"preview":"remote"}],"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote context message","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"peer_results":[{"host":"local","transport":"local","command":"context/project","status":"ok","remote_mmr_version":"9.9.9","total_messages":1,"total_sessions":1}]}
-JSON
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let output = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "context",
-            "project",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["command"], "context/project");
-    assert_eq!(json["peer_results"][0]["host"], "studio");
-    let remote = json["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["content"] == "remote context message")
-        .expect("remote context message");
-    assert_eq!(remote["origin"]["host"], "studio");
-    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
-}
-
-#[test]
-fn recall_remote_merges_remote_recall_messages() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-recall");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-cat <<'JSON'
-{"messages":[{"session_id":"remote-previous","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote previous session","model":"model","timestamp":"2025-01-02T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"session_selection":{"scope":{"project":"/Users/test/codex-proj","all":false,"source":"codex"},"axis":"session-back","total_sessions_in_scope":2,"selected":[{"age":1,"session_id":"remote-previous","source":"codex","project_name":"/Users/test/codex-proj","first_timestamp":"2025-01-02T00:00:00","last_timestamp":"2025-01-02T00:00:00","message_count":1,"equivalent_command":"mmr read session remote-previous"}],"skipped_newest":{"age":0,"session_id":"remote-current","last_timestamp":"2025-01-03T00:00:00","assumed_live":true}},"peer_results":[{"host":"local","transport":"local","command":"recall","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-    let output = fixture.run_cli_with_env(
-        &[
-            "--source",
-            "codex",
-            "recall",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-            "1",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["peer_results"][0]["host"], "studio");
-    let remote = json["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["content"] == "remote previous session")
-        .expect("remote recall message");
-    assert_eq!(remote["origin"]["host"], "studio");
-    assert_eq!(remote["origin"]["remote_mmr_version"], "9.9.9");
-}
-
-#[test]
-fn remote_list_read_and_context_surfaces_use_remote_flag() {
-    let fixture = TestFixture::seeded();
-    let fake_bin = fixture.home.join("fake-bin-peer-surfaces");
-    fs::create_dir_all(&fake_bin).expect("fake bin");
-    write_executable(
-        &fake_bin.join("ssh"),
-        r#"#!/bin/sh
-cat > /dev/null
-case "$*" in
-  *"mmr peer list-projects --request-json -"*)
-    cat <<'JSON'
-{"projects":[{"name":"/Users/test/remote-proj","source":"codex","original_path":"/Users/test/remote-proj","aliases":["remote-proj"],"session_count":1,"message_count":1,"last_activity":"2025-01-08T00:00:00"}],"total_messages":1,"total_sessions":1,"peer_results":[{"host":"local","transport":"local","command":"list/projects","status":"ok","remote_mmr_version":"9.9.9","total_messages":1,"total_sessions":1}]}
-JSON
-    ;;
-  *"mmr peer list-sessions --request-json -"*)
-    cat <<'JSON'
-{"sessions":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","project_path":"/Users/test/codex-proj","first_timestamp":"2025-01-08T00:00:00","last_timestamp":"2025-01-08T00:00:00","message_count":1,"user_messages":1,"assistant_messages":0,"preview":"remote"}],"total_sessions":1,"peer_results":[{"host":"local","transport":"local","command":"list/sessions","status":"ok","remote_mmr_version":"9.9.9","total_sessions":1}]}
-JSON
-    ;;
-  *"mmr peer read-session --request-json -"*)
-    cat <<'JSON'
-{"messages":[{"session_id":"remote-session","source":"codex","project_name":"/Users/test/codex-proj","role":"user","content":"remote explicit session","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/session","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-    ;;
-  *"mmr peer read-source --request-json -"*)
-    cat <<'JSON'
-{"messages":[{"session_id":"remote-source-session","source":"codex","project_name":"/Users/test/remote-proj","role":"user","content":"remote source message","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"total_messages":1,"next_page":false,"next_offset":1,"peer_results":[{"host":"local","transport":"local","command":"read/source","status":"ok","remote_mmr_version":"9.9.9","total_messages":1}]}
-JSON
-    ;;
-  *"mmr peer context-source --request-json -"*)
-    cat <<'JSON'
-{"command":"context/source","scope":"source","source":"codex","project":null,"total_sessions":1,"total_messages":1,"sessions":[{"session_id":"remote-source-session","source":"codex","project_name":"/Users/test/remote-proj","project_path":"/Users/test/remote-proj","first_timestamp":"2025-01-08T00:00:00","last_timestamp":"2025-01-08T00:00:00","message_count":1,"user_messages":1,"assistant_messages":0,"preview":"remote"}],"messages":[{"session_id":"remote-source-session","source":"codex","project_name":"/Users/test/remote-proj","role":"user","content":"remote context source","model":"model","timestamp":"2025-01-08T00:00:00","is_subagent":false,"msg_type":"user","input_tokens":0,"output_tokens":0}],"peer_results":[{"host":"local","transport":"local","command":"context/source","status":"ok","remote_mmr_version":"9.9.9","total_messages":1,"total_sessions":1}]}
-JSON
-    ;;
-  *)
-    echo "unexpected peer command: $*" >&2
-    exit 2
-    ;;
-esac
-"#,
-    );
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{original_path}", fake_bin.display());
-
-    let projects = fixture.run_cli_with_env(
-        &["list", "projects", "--remote", "studio"],
-        &[("PATH", path.as_str())],
-    );
-    assert!(projects.status.success());
-    let projects_json = parse_stdout_json(&projects);
-    let remote_project = projects_json["projects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|project| project["name"] == "/Users/test/remote-proj")
-        .expect("remote project");
-    assert_eq!(remote_project["origin"]["host"], "studio");
-
-    let sessions = fixture.run_cli_with_env(
-        &[
-            "list",
-            "sessions",
-            "--project",
-            "/Users/test/codex-proj",
-            "--remote",
-            "studio",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(sessions.status.success());
-    let sessions_json = parse_stdout_json(&sessions);
-    let remote_session = sessions_json["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|session| session["session_id"] == "remote-session")
-        .expect("remote session");
-    assert_eq!(remote_session["origin"]["remote_mmr_version"], "9.9.9");
-
-    let read_session = fixture.run_cli_with_env(
-        &["read", "session", "remote-session", "--remote", "studio"],
-        &[("PATH", path.as_str())],
-    );
-    assert!(read_session.status.success());
-    let read_session_json = parse_stdout_json(&read_session);
-    assert!(
-        read_session_json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|message| message["origin"]["host"] == "studio")
-    );
-
-    let read_source = fixture.run_cli_with_env(
-        &["--source", "codex", "read", "source", "--remote", "studio"],
-        &[("PATH", path.as_str())],
-    );
-    assert!(read_source.status.success());
-    let read_source_json = parse_stdout_json(&read_source);
-    assert!(
-        read_source_json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|message| message["content"] == "remote source message"
-                && message["origin"]["host"] == "studio")
-    );
-
-    let context_source = fixture.run_cli_with_env(
-        &[
-            "--source", "codex", "context", "source", "--remote", "studio",
-        ],
-        &[("PATH", path.as_str())],
-    );
-    assert!(context_source.status.success());
-    let context_json = parse_stdout_json(&context_source);
-    assert_eq!(context_json["peer_results"][0]["host"], "studio");
-    assert!(
-        context_json["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|message| message["content"] == "remote context source"
-                && message["origin"]["remote_mmr_version"] == "9.9.9")
     );
 }
 
@@ -4942,44 +3703,6 @@ fn old_top_level_import_events_is_rejected() {
         "/Users/test/codex-proj",
     ]);
     assert_eq!(output.status.code(), Some(2));
-}
-
-#[test]
-fn ingest_events_imports_source_history() {
-    let fixture = TestFixture::seeded();
-    let project = fixture.home.join("ingest-proj");
-    fs::create_dir_all(&project).expect("create ingest project");
-    write_file(
-        &fixture
-            .home
-            .join(".codex")
-            .join("sessions")
-            .join("ingest.jsonl"),
-        &format!(
-            r#"{{"type":"session_meta","timestamp":"2025-01-10T00:00:00","payload":{{"id":"ingest-session","cwd":"{}","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-10T00:00:00"}}}}
-{{"type":"event_msg","timestamp":"2025-01-10T00:00:01","payload":{{"type":"user_message","message":"ingest me"}}}}
-{{"type":"response_item","timestamp":"2025-01-10T00:01:00","payload":{{"role":"assistant","content":[{{"type":"output_text","text":"ingested"}}]}}}}"#,
-            project.display()
-        ),
-    );
-    let output = fixture.run_cli(&[
-        "--source",
-        "codex",
-        "ingest",
-        "events",
-        "--project",
-        project.to_str().expect("project path"),
-        "--source-root",
-        fixture.home.join(".codex").to_str().expect("source root"),
-    ]);
-    assert!(
-        output.status.success(),
-        "ingest stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let json = parse_stdout_json(&output);
-    assert_eq!(json["source"], "codex");
-    assert!(json["discovered_sessions"].as_u64().unwrap() >= 1);
 }
 
 #[test]
@@ -5487,5 +4210,286 @@ fn import_session_force_without_apply_is_usage_error_before_peer_access() {
     assert_eq!(
         parse_stdout_json(&output)["message"],
         "--force requires --apply"
+    );
+}
+
+#[test]
+fn remote_flag_is_rejected_on_every_command() {
+    let fixture = TestFixture::seeded();
+    let commands: &[&[&str]] = &[
+        &["list", "projects"],
+        &["list", "sessions"],
+        &["read", "project"],
+        &["read", "session", "sess-codex-1"],
+        &["context", "project"],
+        &["recall"],
+        &["summarize", "project"],
+        &["summarize", "session", "sess-codex-1"],
+        &["compact", "project"],
+        &["compact", "session", "sess-codex-1"],
+    ];
+    for command in commands {
+        let mut args = command.to_vec();
+        args.extend(["--remote", "studio"]);
+        let output = fixture.run_cli(&args);
+        assert_eq!(output.status.code(), Some(2), "args={args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unexpected argument '--remote'"),
+            "args={args:?} stderr={stderr}"
+        );
+    }
+}
+
+#[test]
+fn source_scoped_subcommands_are_rejected() {
+    let fixture = TestFixture::seeded();
+    for command in ["read", "context", "summarize", "compact"] {
+        let output = fixture.run_cli(&["--source", "codex", command, "source"]);
+        assert_eq!(output.status.code(), Some(2), "{command} source");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand 'source'"),
+            "{command} source stderr={stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{command} source stdout");
+    }
+}
+
+#[test]
+fn assimilate_command_is_rejected() {
+    let fixture = TestFixture::seeded();
+    for args in [
+        &["assimilate", "project"][..],
+        &["--source", "codex", "assimilate", "source"][..],
+    ] {
+        let output = fixture.run_cli(args);
+        assert_eq!(output.status.code(), Some(2), "args={args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand 'assimilate'"),
+            "args={args:?} stderr={stderr}"
+        );
+    }
+}
+
+#[test]
+fn store_commands_are_rejected() {
+    let fixture = TestFixture::seeded();
+    for (args, unknown) in [
+        (&["init"][..], "unrecognized subcommand 'init'"),
+        (
+            &["ingest", "events", "--project", "/tmp/p"][..],
+            "unrecognized subcommand 'ingest'",
+        ),
+        (&["note", "decision"][..], "unrecognized subcommand 'note'"),
+        (
+            &["retrieve", "retry"][..],
+            "unrecognized subcommand 'retrieve'",
+        ),
+        (&["status"][..], "unrecognized subcommand 'status'"),
+        (&["sync", "--dry-run"][..], "unrecognized subcommand 'sync'"),
+        (&["redact", "scan"][..], "unrecognized subcommand 'redact'"),
+        (&["__db-info"][..], "unrecognized subcommand '__db-info'"),
+        (
+            &["read", "session", "sess-codex-1", "--format", "tree"][..],
+            "unexpected argument '--format'",
+        ),
+        (
+            &["read", "project", "--output-dir", "/tmp/tree"][..],
+            "unexpected argument '--output-dir'",
+        ),
+    ] {
+        let output = fixture.run_cli(args);
+        assert_eq!(output.status.code(), Some(2), "args={args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(unknown), "args={args:?} stderr={stderr}");
+        assert!(output.stdout.is_empty(), "args={args:?}");
+    }
+}
+
+// --- find: raw history search, no setup ---
+
+fn run_read_command(fixture: &TestFixture, read_command: &str) -> serde_json::Value {
+    let words = read_command.split_whitespace().collect::<Vec<_>>();
+    assert_eq!(words[0], "mmr", "read_command={read_command}");
+    let output = fixture.run_cli(&words[1..]);
+    assert!(
+        output.status.success(),
+        "read_command={read_command} stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_stdout_json(&output)
+}
+
+#[test]
+fn find_searches_the_cwd_project_across_harnesses_without_setup() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let output = fixture.run_cli_in_dir_with_env(
+        &["find", "CWD"],
+        &cwd,
+        &[("MMR_AUTO_DISCOVER_PROJECT", "1")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "find");
+    assert_eq!(json["query"], "CWD");
+    assert_eq!(json["total_matches"], 4);
+    assert_eq!(
+        rows(
+            &json["matches"],
+            &["/source", "/session_id", "/role", "/snippet"]
+        ),
+        [
+            "claude|sess-cwd-claude|assistant|cwd claude answer",
+            "claude|sess-cwd-claude|user|cwd claude question",
+            "codex|sess-cwd-codex|assistant|cwd codex answer",
+            "codex|sess-cwd-codex|user|cwd codex question",
+        ]
+    );
+    assert_eq!(json["next_page"], false);
+    assert!(json["next_command"].is_null());
+
+    for found in json["matches"].as_array().unwrap() {
+        let read = run_read_command(&fixture, found["read_command"].as_str().unwrap());
+        assert!(
+            read["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message["content"] == found["snippet"]),
+            "read_command should return the matched message: {found}"
+        );
+    }
+    assert!(
+        !fixture.home.join(".local/share/mmr").exists(),
+        "find must not create a store"
+    );
+}
+
+#[test]
+fn find_scopes_to_a_project_or_every_project() {
+    let fixture = TestFixture::seeded();
+    let project = fixture.run_cli(&["find", "hello from", "--project", "/Users/test/grok-proj"]);
+    assert!(project.status.success());
+    let project = parse_stdout_json(&project);
+    assert_eq!(project["scope"]["project"], "/Users/test/grok-proj");
+    assert_eq!(rows(&project["matches"], &["/source"]), ["grok"]);
+
+    let all = fixture.run_cli(&["find", "hello from", "--all"]);
+    assert!(all.status.success());
+    let all = parse_stdout_json(&all);
+    assert_eq!(all["scope"]["all"], true);
+    let mut sources = rows(&all["matches"], &["/source"]);
+    sources.sort();
+    sources.dedup();
+    assert_eq!(sources, ["claude", "codex", "cursor", "grok", "pi"]);
+
+    let session = fixture.run_cli(&["find", "hello", "--all", "--session", "sess-pi-1"]);
+    assert!(session.status.success());
+    assert_eq!(
+        rows(&parse_stdout_json(&session)["matches"], &["/session_id"]),
+        ["sess-pi-1"]
+    );
+}
+
+#[test]
+fn find_pages_with_a_next_command() {
+    let fixture = TestFixture::seeded();
+    let first = fixture.run_cli(&["find", "hello from", "--all", "--limit", "2"]);
+    assert!(first.status.success());
+    let first = parse_stdout_json(&first);
+    assert_eq!(first["matches"].as_array().unwrap().len(), 2);
+    assert_eq!(first["next_page"], true);
+    assert_eq!(first["next_offset"], 2);
+    let next_command = first["next_command"].as_str().unwrap();
+    assert_eq!(
+        next_command,
+        "mmr find 'hello from' --all --limit 2 --offset 2"
+    );
+    let second = fixture.run_cli(&[
+        "find",
+        "hello from",
+        "--all",
+        "--limit",
+        "2",
+        "--offset",
+        "2",
+    ]);
+    let second = parse_stdout_json(&second);
+    assert_ne!(first["matches"][0], second["matches"][0]);
+    assert_eq!(first["total_matches"], second["total_matches"]);
+}
+
+#[test]
+fn find_rejects_an_empty_query() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&["find", ""]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn find_printed_commands_run_as_printed_for_a_path_with_spaces() {
+    let fixture = SpacedProjectFixture::seeded();
+    let output = fixture.run_cli(&[
+        "find",
+        "RANKING TIE",
+        "--project",
+        fixture.project_arg(),
+        "--limit",
+        "2",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let first = parse_stdout_json(&output);
+    assert_eq!(first["total_matches"], 6, "{first}");
+    let next_command = first["next_command"].as_str().unwrap();
+    assert!(next_command.contains("--project '"), "{next_command}");
+
+    let second = fixture.run_shell_command(next_command);
+    assert!(
+        second.status.success(),
+        "next_command={next_command} stderr={}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second = parse_stdout_json(&second);
+    assert_eq!(second["matches"].as_array().unwrap().len(), 2);
+    assert_eq!(second["next_offset"], 4);
+
+    let mut sources = std::collections::BTreeSet::new();
+    for page in [&first, &second] {
+        for found in page["matches"].as_array().unwrap() {
+            sources.insert(found["source"].as_str().unwrap().to_string());
+            let read_command = found["read_command"].as_str().unwrap();
+            let read = fixture.run_shell_command(read_command);
+            assert!(
+                read.status.success(),
+                "read_command={read_command} stderr={}",
+                String::from_utf8_lossy(&read.stderr)
+            );
+            let read = parse_stdout_json(&read);
+            let snippet = found["snippet"].as_str().unwrap();
+            assert!(
+                read["messages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|message| message["content"] == snippet),
+                "read_command={read_command} snippet={snippet}"
+            );
+        }
+    }
+    assert_eq!(
+        sources.into_iter().collect::<Vec<_>>(),
+        ["claude", "codex"],
+        "find should match both harnesses"
     );
 }

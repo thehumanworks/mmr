@@ -2,7 +2,7 @@
 name: docs-first-contract-change
 description: >-
   Changes mmr CLI contracts docs-first: update specs/*.md, then src/cli.rs,
-  then cli_contract and memory_fabric_contract tests, with live smoke and
+  then cli_contract tests, with live smoke and
   preserved next_command continuation semantics. Use when adding flags,
   changing JSON response shapes, or shipping retrieve/read/recall contract work.
 ---
@@ -25,7 +25,6 @@ Progress:
 - [ ] specs/*.md updated first
 - [ ] src/cli.rs implements spec
 - [ ] tests/cli_contract.rs updated
-- [ ] tests/memory_fabric_contract.rs updated (if applicable)
 - [ ] Live smoke on real/fixture history
 - [ ] next_command continuation preserved
 - [ ] Full verification loop
@@ -44,11 +43,10 @@ Then update the canonical spec **before** code:
 
 | Surface | Spec file |
 |---------|-----------|
-| Retrieve | `specs/retrieval.md` |
 | Messages/read/recall | `specs/messages.md` |
 | Session sharing | `specs/session-sharing.md` |
 
-Reference: `goals/2026-06-28-docs-first-retrieve-implementation.md`
+Find has no separate spec: `docs/mmr-command-taxonomy.md` describes it.
 
 ## 2. Implement in src/cli.rs
 
@@ -62,7 +60,6 @@ Primary gates:
 
 ```bash
 cargo test --test cli_contract <prefix>_ -- --nocapture
-cargo test --test memory_fabric_contract <prefix>_ -- --nocapture
 ```
 
 Add fixture-driven tests covering defaults, opt-in flags, filters, pagination, and errors.
@@ -72,7 +69,7 @@ Add fixture-driven tests covering defaults, opt-in flags, filters, pagination, a
 Paged commands must emit executable continuations that preserve caller intent:
 
 - `--limit` / `--offset` or pinned session identity
-- Scope flags (`--project`, `--source`, `--remote`, etc.)
+- Scope flags (`--project`, `--source`, etc.)
 - Mode flags the caller opted into
 
 ### Example: retrieve output modes
@@ -105,9 +102,8 @@ Confirm JSON parses, `next_command` executes, then run the full loop.
 ## Anti-Patterns
 
 - Code-first drift from `specs/*.md`; dropping opt-in flags on page-2 `next_command`.
-- Testing only defaults; changing `find` while implementing `retrieve` unless spec says so.
+- Testing only defaults.
 
 ## Related
 
 - `.agents/skills/mmr/SKILL.md`, `mmr-clap-colored-cli`, `.cursor/rules/cli-contract.mdc`
-- `specs/retrieval.md`, `goals/2026-06-28-retrieve-debug-and-snippet-output.md`

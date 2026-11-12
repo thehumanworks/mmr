@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::capture::CursorAdapter;
 use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{
@@ -25,7 +24,7 @@ impl TeleportProviderProfile for CursorProfile {
     }
 
     fn parser_version(&self) -> &'static str {
-        CursorAdapter::PARSER_VERSION
+        "cursor-agent-jsonl-v1"
     }
 
     fn capabilities(&self) -> Vec<String> {

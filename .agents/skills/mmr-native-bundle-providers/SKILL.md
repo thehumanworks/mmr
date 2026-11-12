@@ -14,7 +14,7 @@ description: Native mmr session bundle profiles across codex, claude, cursor, gr
 - Source-side handoff: `mmr share session ...`
 - Destination-side handoff: `mmr import session ...` and `mmr import bundle ...`
 - Provider event ingestion: `mmr --source <source> ingest events ...`
-- Peer reads: `--remote <ssh-target>` on read/query commands.
+- Peer check: `mmr peer status --host <ssh-target>`. Read/query commands are local only.
 
 Do not add compatibility aliases for removed command names or flags unless the
 maintainer explicitly asks for them.

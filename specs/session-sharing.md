@@ -1,15 +1,14 @@
-# Session Sharing And Remote Reads
+# Session Sharing
 
-This specification defines the public command contract for working with history
-on trusted SSH peers and for moving one selected native provider session between
-machines.
+This specification defines the public command contract for moving one selected
+native provider session between machines, optionally over a trusted SSH peer.
 
 ## Principles
 
 - A peer is explicit per invocation. `mmr` does not maintain a host registry,
   query `known_hosts`, inspect Tailscale, or discover peers.
-- Read/query commands should feel local: add `--remote <ssh-target>` to include
-  one or more peers.
+- Read/query commands are local only. There is no peer-read flag; history from
+  another machine arrives through `share` and `import`.
 - Directional movement is literal:
   - `share` is run on the source machine.
   - `import` is run on the destination machine.
@@ -31,43 +30,18 @@ Targets are passed directly to SSH:
 If the local SSH configuration cannot resolve or authenticate the target, the
 command fails. That failure is the expected validation path.
 
-## Remote Read Surface
+## Peer Protocol
 
-The public peer-read flag is `--remote <ssh-target>`. It is repeatable where
-implemented.
+`mmr` reaches a peer by running `ssh -o BatchMode=yes ... -- <target> mmr peer
+<command>` with one JSON request on stdin. The peer protocol version is 1.
 
-Commands:
+- `mmr peer status [--host <target>]` reports `protocol_version`, `mmr_version`,
+  `capabilities` (`["teleport-pack"]`) and `sources`.
+- `mmr peer teleport-pack` is hidden. `import session --from` calls it to
+  package one native session on the peer.
 
-- `mmr list projects --remote <target>`
-- `mmr list sessions --remote <target> [--project <path>] [--all]`
-- `mmr recall [N] --remote <target> [--project <path>]`
-- `mmr read session <session-id> --remote <target>`
-- `mmr read project --remote <target> [--project <path>]`
-- `mmr read source --source <source> --remote <target>`
-- `mmr context project --remote <target> [--project <path>]`
-- `mmr context source --source <source> --remote <target>`
-- `mmr summarize project --remote <target> [--project <path>]`
-- `mmr summarize source --source <source> --remote <target>`
-- `mmr summarize session <session-id> --remote <target>`
-
-Remote read/query responses preserve the local response shape when `--remote` is
-absent. When present, merged remote projects, sessions, and messages carry
-optional `origin` metadata:
-
-```json
-{
-  "transport": "ssh",
-  "host": "mini",
-  "remote_mmr_version": "0.2.0"
-}
-```
-
-Merged responses include `peer_results` where the response type supports it.
-Strict failure semantics apply: a failed named peer exits nonzero rather than
-silently returning partial local data.
-
-`--format tree` is not supported with `--remote` because tree output writes a
-local filesystem artifact whose source boundaries would be ambiguous.
+A peer failure is structured JSON with a nonzero exit. A peer that lacks the
+`peer` subcommand or a requested peer command reports `peer_mmr_unavailable`.
 
 ## Source-Side Sharing
 
@@ -166,7 +140,7 @@ normalized local store events. `import` is reserved for session/bundle material.
 
 The public CLI rejects:
 
-- `--host` on read/query commands.
+- `--host` and `--remote` on read/query commands.
 - the old top-level event-import argv under `import`.
 - the removed transport-name namespace and all of its subcommands.
 
@@ -180,7 +154,8 @@ Minimum checks for changes to this surface:
 
 ```bash
 cargo fmt
-cargo test --test cli_contract remote -- --nocapture
+cargo test --test peer_import_loopback_contract -- --nocapture
+cargo test --test cli_contract peer -- --nocapture
 cargo test --test cli_contract share -- --nocapture
 cargo test --test cli_contract import -- --nocapture
 cargo test
@@ -192,8 +167,7 @@ Live peer validation should use an SSH/Tailscale target with the same command
 surface installed:
 
 ```bash
-mmr list sessions --remote mini --project /Users/mish/projects/mmr --limit 3
-mmr read project --remote mini --project /Users/mish/projects/mmr --limit 3
+mmr peer status --host mini
 mmr import session --from mini --session latest --project /Users/mish/projects/mmr --read-only
 mmr share session latest --project /Users/mish/projects/mmr --to mini --dry-run
 ```

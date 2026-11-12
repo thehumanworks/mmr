@@ -253,7 +253,6 @@ impl QueryService {
                 session_count: project.session_count,
                 message_count: project.message_count,
                 last_activity: project.last_activity,
-                origin: None,
             })
             .collect::<Vec<_>>();
 
@@ -272,7 +271,6 @@ impl QueryService {
             projects,
             total_messages,
             total_sessions,
-            peer_results: None,
         }
     }
 
@@ -315,14 +313,12 @@ impl QueryService {
                 user_messages: session.user_messages,
                 assistant_messages: session.assistant_messages,
                 preview: session.preview,
-                origin: None,
             })
             .collect::<Vec<_>>();
 
         Ok(ApiSessionsResponse {
             sessions,
             total_sessions,
-            peer_results: None,
         })
     }
 
@@ -360,7 +356,6 @@ impl QueryService {
             next_offset,
             next_command: None,
             session_selection: None,
-            peer_results: None,
         })
     }
 
@@ -439,7 +434,6 @@ impl QueryService {
                 user_messages: session.user_messages,
                 assistant_messages: session.assistant_messages,
                 preview: session.preview,
-                origin: None,
             })
             .collect::<Vec<_>>();
         if let Some(session_id) = session_id {
@@ -539,7 +533,6 @@ impl QueryService {
                     selected: Vec::new(),
                     skipped_newest: None,
                 }),
-                peer_results: None,
             }));
         }
 
@@ -609,7 +602,6 @@ impl QueryService {
                 selected,
                 skipped_newest,
             }),
-            peer_results: None,
         }))
     }
 }
@@ -977,7 +969,6 @@ fn api_message_from_record(message: MessageRecord) -> ApiMessage {
         msg_type: message.msg_type,
         input_tokens: message.input_tokens,
         output_tokens: message.output_tokens,
-        origin: None,
     }
 }
 

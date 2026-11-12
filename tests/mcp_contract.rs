@@ -19,20 +19,13 @@ const EXPECTED_TOOLS: &[&str] = &[
     "mmr_list_sessions",
     "mmr_read_session",
     "mmr_read_project",
-    "mmr_read_source",
     "mmr_recall",
     "mmr_find",
     "mmr_context_project",
-    "mmr_context_source",
-    "mmr_assimilate_project",
-    "mmr_assimilate_source",
     "mmr_summarize_project",
     "mmr_summarize_session",
-    "mmr_summarize_source",
     "mmr_compact_project",
     "mmr_compact_session",
-    "mmr_compact_source",
-    "mmr_status",
     "mmr_skill_load",
 ];
 
@@ -40,7 +33,6 @@ const EXPECTED_PROMPTS: &[&str] = &[
     "mmr_recall_previous_session",
     "mmr_project_context_brief",
     "mmr_session_handoff",
-    "mmr_memory_assimilation",
     "mmr_find_then_read",
 ];
 
@@ -96,6 +88,17 @@ async fn mcp_server_initializes_with_tools_and_prompts() -> anyhow::Result<()> {
     let info = client.peer_info().expect("server initialize info");
     assert!(info.capabilities.tools.is_some());
     assert!(info.capabilities.prompts.is_some());
+    // Clients such as Claude Code defer tools behind search, so the
+    // instructions must say when to check earlier sessions.
+    let instructions = info.instructions.as_deref().expect("server instructions");
+    for trigger in [
+        "before you explain why code is the way it is",
+        "resume",
+        "before a risky step",
+        "mmr_find",
+    ] {
+        assert!(instructions.contains(trigger), "{trigger}: {instructions}");
+    }
 
     client.cancel().await?;
     server.await??;
@@ -245,26 +248,6 @@ async fn mcp_read_session_matches_cli_fixture() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn mcp_read_source_requires_explicit_source() -> anyhow::Result<()> {
-    let fixture = TestFixture::seeded();
-    let mut mcp = StdioMcp::spawn(&fixture)?;
-    let response = mcp.send_request(
-        json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "mmr_read_source",
-                "arguments": {}
-            }
-        }),
-        2,
-    )?;
-    assert_eq!(response["error"]["code"], -32602, "{response}");
-    Ok(())
-}
-
 #[test]
 fn mcp_stdio_ignores_rest_settings_and_occupied_ports() -> anyhow::Result<()> {
     let fixture = TestFixture::seeded();
@@ -339,8 +322,6 @@ fn seed_find_fixture(fixture: &TestFixture) -> anyhow::Result<()> {
             .collect::<Vec<_>>()
             .join("\n"),
     )?;
-    let init = fixture.run_cli(&["init"]);
-    assert!(init.status.success(), "{}", stderr_text(&init));
     Ok(())
 }
 
@@ -355,6 +336,18 @@ fn assert_stdio_query_contract(fixture: &TestFixture, mcp: &mut StdioMcp) -> any
     for expected in EXPECTED_TOOLS {
         assert!(tools.iter().any(|tool| tool["name"] == *expected));
     }
+    for tool in tools {
+        let properties = tool["inputSchema"]["properties"].as_object();
+        for (name, schema) in properties.into_iter().flatten() {
+            assert!(
+                schema["description"]
+                    .as_str()
+                    .is_some_and(|text| !text.is_empty()),
+                "{} parameter {name} has no description",
+                tool["name"]
+            );
+        }
+    }
     for (id, tool, arguments, cli_args) in [
         (
             3,
@@ -368,6 +361,12 @@ fn assert_stdio_query_contract(fixture: &TestFixture, mcp: &mut StdioMcp) -> any
             json!({"source":"codex", "query":"socketmarker"}),
             vec!["--source", "codex", "find", "socketmarker"],
         ),
+        (
+            5,
+            "mmr_read_session",
+            json!({"source":"claude", "session":"sess-claude-1"}),
+            vec!["--source", "claude", "read", "session", "sess-claude-1"],
+        ),
     ] {
         let cli = fixture.run_cli(&cli_args);
         assert!(cli.status.success(), "{}", stderr_text(&cli));
@@ -375,7 +374,7 @@ fn assert_stdio_query_contract(fixture: &TestFixture, mcp: &mut StdioMcp) -> any
         let actual: Value = serde_json::from_str(&tool_text(&response))?;
         assert_eq!(actual, parse_stdout_json(&cli));
         if tool == "mmr_find" {
-            assert!(!actual["results"].as_array().unwrap().is_empty());
+            assert!(!actual["matches"].as_array().unwrap().is_empty());
         }
     }
     Ok(())

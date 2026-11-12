@@ -19,16 +19,15 @@ mmr read session <session_id>   # one session in full
 
 ## Search the whole project history
 
-`mmr read project` returns every message of every session, oldest first. Filter
-it with jq instead of reading it all:
-
 ```bash
-mmr read project | jq -r '.messages[]
-  | select(.content | test("WORD|OTHER WORD"; "i"))
-  | "\(.timestamp[0:10]) \(.source) \(.session_id[0:8]) \(.role): \(.content[0:400])"'
+mmr find "WORDS"     # case-insensitive text match in every session of the project, newest first
 ```
 
-Compact one session the same way:
+Each match has a `snippet` and a `read_command` that reads its whole session.
+`--all` searches every project. `mmr read project` returns every message,
+oldest first, when you need all of it.
+
+Compact one session with jq:
 `mmr read session <id> | jq -r '.messages[] | "\(.role): \(.content)"'`.
 
 ## Rules
@@ -43,7 +42,6 @@ Compact one session the same way:
   (`--source claude|codex|cursor|grok|pi`).
 - In Claude Code sessions, tool output (file contents, logs) appears as user
   messages. Skim past it.
-- Reading needs no setup. Do not run `mmr init` to read history.
 
 ## Other commands
 
@@ -51,8 +49,6 @@ Compact one session the same way:
   bounded response.
 - `mmr share session <id> --to file:///abs/inbox` and `mmr import bundle <dir>`
   carry one session to another machine as a file.
-- `mmr summarize` and `mmr compact` send history to an external model service.
-  Use them only when the user wants that.
 - `mmr mcp --transport stdio` serves the same reads as MCP tools.
 
 For deeper analysis of long sessions, read `session-mining/SKILL.md`.
