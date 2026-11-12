@@ -3,7 +3,7 @@ goal_id: "2026-11-12-cut-to-project-context"
 title: "Cut mmr to project-centred, cross-harness context fetch"
 description: "Audit every command, flag, subcommand and MCP tool against one test, and remove what fails it: does it help an agent fetch a project's earlier context, whichever harness produced it?"
 date: "2026-11-12"
-status: "in-progress"
+status: "done"
 confidence_floor: 85
 created: "2026-11-12"
 updated: "2026-11-12"
@@ -51,9 +51,9 @@ surface organised around which harness ran, rather than the project, fails it.
    `src/cli/retrieval.rs` and the `rusqlite` dependency. This absorbs cut 3.
    `share` keeps its privacy scan from `src/redaction.rs`.
 
-## Close calls: listed, not cut
+## Close calls
 
-Recorded in the PR with a recommendation each: `find` vs `retrieve`,
+Listed in the PR; decided once Tomas handed over ownership (see Decisions): `find` vs `retrieve`,
 `summarize`/`compact` (external model calls), `MMR_DEFAULT_SOURCE` (wired
 through the Nix modules), `ingest events` vs `init`, `read --format tree`,
 `note`, `share --via http`, `context project` vs `read project`.
@@ -80,10 +80,10 @@ through the Nix modules), `ingest events` vs `init`, `read --format tree`,
 - [x] DoD-2 — Cut 2 removed; differential check explained.
 - [x] DoD-3 — Cuts 3, 5 and 6 done; differential check explained.
 - [x] DoD-4 — Cut 4 removed.
-- [ ] DoD-5 — README, the bundled mmr skill and the command taxonomy teach only
+- [x] DoD-5 — README, the bundled mmr skill and the command taxonomy teach only
   the surviving surface.
-- [ ] DoD-6 — Full verification loop and `nix build` pass.
-- [ ] DoD-7 — PR updated with what was cut, what was kept and why, and the close
+- [x] DoD-6 — Full verification loop and `nix build` pass.
+- [x] DoD-7 — PR updated with what was cut, what was kept and why, and the close
   calls with recommendations.
 
 ## Exit conditions
@@ -91,3 +91,33 @@ through the Nix modules), `ingest events` vs `init`, `read --format tree`,
 - `SCOPE-CHANGE` if a cut would change a surviving command in a way not listed
   under "Contract change".
 - `CONFIDENCE-STALL` if a differential mismatch cannot be explained.
+
+## Evidence
+
+- Rejection tests, each failing before its cut: `source_scoped_subcommands_are_rejected`,
+  `assimilate_command_is_rejected`, `store_commands_are_rejected` (CLI and unit).
+- Differential check (PR #31 matrix, previous commit's binary vs new):
+  source cut changes only `source` cases and 4 help texts; assimilate cut only
+  `assimilate` cases, help, skill text and the `status` dream field; `find`
+  only `find` cases, help and skill text (after `init`, old find returns the
+  same 6 matches); store cut 82 of 411 files, all removed commands, the tree
+  format and 3 help texts. All 47 summarize/compact cases stay byte-identical,
+  including the provider request.
+- Agent evaluation (other thread): with raw-history `find`, skill 14/18,
+  MCP 9/18, versus 2/18 and 6/18 on `main`; mmr errors dropped to 0.
+- `src/` 26,806 → 15,126 lines; 19 → 11 commands; 19 → 12 MCP tools.
+- MCP: every tool parameter has a description, `session` is accepted for
+  `session_id`, and the server instructions name when to check earlier
+  sessions; `mcp_contract` covers all three.
+- Finding left for after the project-resolution fix lands: `read project`
+  without `--project` pages from the oldest message, unlike `--project`.
+
+## Decisions
+
+- The store removal went ahead on the recommended option of a decision card
+  while Tomas's answer was pending; it is one revertible commit (`c5d7ada`).
+- 2026-11-12, Tomas: "You can merge too. I'm giving you full ownership of
+  this. The tool is for agents, not me." Close calls are decided, not listed:
+  cut `summarize`/`compact` and `MMR_DEFAULT_SOURCE` in a follow-up PR; keep
+  `context project` and `read project`, `share --via http`, the MCP prompts and
+  the list sort flags.

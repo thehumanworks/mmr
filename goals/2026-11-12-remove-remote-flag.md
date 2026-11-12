@@ -3,7 +3,7 @@ goal_id: "2026-11-12-remove-remote-flag"
 title: "Remove the --remote flag and its peer read endpoints"
 description: "Delete --remote from every read, context, recall, summarize and compact command, with the client merge code and the eight peer read endpoints behind it; keep import session --from and peer status."
 date: "2026-11-12"
-status: "in-progress"
+status: "done"
 confidence_floor: 85
 created: "2026-11-12"
 updated: "2026-11-12"
@@ -70,8 +70,8 @@ stays 1, because the `teleport-pack` request does not change.
 - [x] DoD-3 — Docs and skills no longer describe `--remote`.
 - [x] DoD-4 — Differential check: non-remote cases identical; remote cases are
   usage errors.
-- [ ] DoD-5 — Full verification loop and `nix build` pass.
-- [ ] DoD-6 — PR open for Tomas's review, with a note on what shared cloud
+- [x] DoD-5 — Full verification loop and `nix build` pass.
+- [x] DoD-6 — PR open for Tomas's review, with a note on what shared cloud
   storage would take.
 
 ## Evidence
@@ -99,3 +99,7 @@ stays 1, because the `teleport-pack` request does not change.
 - `SCOPE-CHANGE` if removing `--remote` would change any command that does not
   use it.
 - `CONFIDENCE-STALL` if a non-remote differential mismatch cannot be explained.
+- DoD-5/6: PR #32 (which also carries the cuts in
+  `goals/2026-11-12-cut-to-project-context.md`): `cargo fmt --check`, clippy
+  `-D warnings`, 278 tests, benchmarks, `cargo build --release` and
+  `nix build .#default` pass; the PR body has the shared-storage note.
