@@ -799,7 +799,10 @@ fn projects_with_source_cursor_filters() {
 #[test]
 fn messages_filtered_by_source_cursor() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "cursor", "read", "source"], &[]);
+    let output = fixture.run_cli_with_env(
+        &["--source", "cursor", "read", "session", "sess-cursor-1"],
+        &[],
+    );
 
     assert!(
         output.status.success(),
@@ -865,7 +868,8 @@ fn projects_with_source_grok_filters() {
 #[test]
 fn messages_filtered_by_source_grok() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "grok", "read", "source"], &[]);
+    let output =
+        fixture.run_cli_with_env(&["--source", "grok", "read", "session", "sess-grok-1"], &[]);
 
     assert!(
         output.status.success(),
@@ -950,7 +954,7 @@ fn projects_with_source_pi_filters() {
 #[test]
 fn messages_filtered_by_source_pi() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "pi", "read", "source"], &[]);
+    let output = fixture.run_cli_with_env(&["--source", "pi", "read", "session", "sess-pi-1"], &[]);
 
     assert!(
         output.status.success(),
@@ -1423,7 +1427,10 @@ fn read_session_is_chronological_and_paginated() {
 #[test]
 fn messages_filtered_by_source() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli_with_env(&["--source", "claude", "read", "source"], &[]);
+    let output = fixture.run_cli_with_env(
+        &["--source", "claude", "read", "session", "sess-claude-1"],
+        &[],
+    );
 
     assert!(
         output.status.success(),
@@ -1591,7 +1598,7 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
     );
 
     let override_output = fixture.run_cli_in_dir_with_env(
-        &["--source", "claude", "read", "source"],
+        &["--source", "claude", "list", "sessions", "--all"],
         &cwd,
         &[
             ("MMR_AUTO_DISCOVER_PROJECT", "1"),
@@ -1606,12 +1613,12 @@ fn default_source_env_selects_codex_and_explicit_source_overrides_it() {
     );
 
     let override_json = parse_stdout_json(&override_output);
-    let override_messages = override_json["messages"].as_array().unwrap();
-    assert_eq!(override_json["total_messages"].as_i64().unwrap(), 4);
+    let override_sessions = override_json["sessions"].as_array().unwrap();
+    assert_eq!(override_json["total_sessions"].as_i64().unwrap(), 2);
     assert!(
-        override_messages
+        override_sessions
             .iter()
-            .all(|message| message["source"].as_str().unwrap() == "claude")
+            .all(|session| session["source"].as_str().unwrap() == "claude")
     );
 }
 
@@ -3774,9 +3781,16 @@ fn read_project_next_command_quotes_project_paths_with_spaces() {
 }
 
 #[test]
-fn read_source_pagination_no_next_command_when_all_results_fit() {
+fn read_project_pagination_no_next_command_when_all_results_fit() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "read", "source", "--limit", "100"]);
+    let output = fixture.run_cli(&[
+        "read",
+        "project",
+        "--project",
+        "/Users/test/codex-proj",
+        "--limit",
+        "100",
+    ]);
 
     assert!(
         output.status.success(),
@@ -4097,9 +4111,16 @@ fn recall_out_of_range_names_counts() {
 }
 
 #[test]
-fn read_source_omits_session_selection_field() {
+fn read_project_omits_session_selection_field() {
     let fixture = TestFixture::seeded();
-    let output = fixture.run_cli(&["--source", "codex", "read", "source", "--limit", "5"]);
+    let output = fixture.run_cli(&[
+        "read",
+        "project",
+        "--project",
+        "/Users/test/codex-proj",
+        "--limit",
+        "5",
+    ]);
     assert!(
         output.status.success(),
         "stderr={}",
