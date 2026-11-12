@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -36,17 +37,77 @@ fn collect_jsonl_recursive(root: &Path, out: &mut Vec<PathBuf>) {
             continue;
         }
 
-        if entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+        if is_rollout_file(entry.path()) {
             out.push(entry.path().to_path_buf());
         }
     }
 }
 
+/// Codex writes live rollouts as `.jsonl` and, since late 2026, compresses
+/// archived ones to `.jsonl.zst`.
+fn is_rollout_file(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    name.ends_with(".jsonl") || name.ends_with(".jsonl.zst")
+}
+
+fn read_rollout(path: &Path) -> Result<Option<String>> {
+    if path.extension().and_then(|ext| ext.to_str()) != Some("zst") {
+        return fs::read_to_string(path)
+            .map(Some)
+            .with_context(|| format!("failed to read Codex session file {}", path.display()));
+    }
+    // A corrupt or partially written archive should not hide the rest of the history.
+    let decoded = fs::File::open(path).ok().and_then(|file| {
+        let mut decoder = ruzstd::decoding::StreamingDecoder::new(file).ok()?;
+        let mut text = String::new();
+        decoder.read_to_string(&mut text).ok()?;
+        Some(text)
+    });
+    Ok(decoded)
+}
+
+/// User text from an `event_msg` payload. Older Codex builds write
+/// `{"type":"user_message","message":…}`; current builds (0.164+) write only
+/// `{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"text",…}]}}`.
+/// The `response_item` user messages are not used because they also carry
+/// injected AGENTS.md and environment context.
+fn event_user_text(payload: &Value) -> Option<String> {
+    match payload.get("type").and_then(Value::as_str)? {
+        "user_message" => payload
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        "item_completed" => {
+            let item = payload.get("item")?;
+            if item.get("type").and_then(Value::as_str) != Some("UserMessage") {
+                return None;
+            }
+            let text = item
+                .get("content")
+                .and_then(Value::as_array)?
+                .iter()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(text)
+        }
+        _ => None,
+    }
+}
+
 fn parse_codex_file(path: &Path) -> Result<Vec<MessageRecord>> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read Codex session file {}", path.display()))?;
+    let Some(content) = read_rollout(path)? else {
+        return Ok(Vec::new());
+    };
 
     let mut out = Vec::new();
+    // (text, line) of the last user message, to drop the second copy when a
+    // build writes both event forms for one prompt.
+    let mut last_user: Option<(String, usize)> = None;
     let mut session_id = String::new();
     let mut cwd = String::new();
     let mut model_provider = String::new();
@@ -94,14 +155,16 @@ fn parse_codex_file(path: &Path) -> Result<Vec<MessageRecord>> {
                     Some(payload) => payload,
                     None => continue,
                 };
-                if payload.get("type").and_then(Value::as_str) != Some("user_message") {
+                let Some(text) = event_user_text(payload) else {
+                    continue;
+                };
+                if let Some((previous, previous_line)) = &last_user
+                    && *previous == text
+                    && line_index - previous_line <= 3
+                {
                     continue;
                 }
-                let text = payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
+                last_user = Some((text.clone(), line_index));
 
                 push_message(
                     &mut out,

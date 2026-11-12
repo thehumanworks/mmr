@@ -630,6 +630,18 @@ fn resolve_project(
         });
     }
 
+    // The directory the request names: the path itself, or the directory
+    // behind a provider's name for it (Claude "-Users-me-proj", Cursor
+    // "Users-me-proj", Pi "--Users-me-proj--"), as agents copy those from
+    // `list` output.
+    let request_path = if trimmed.starts_with('/') {
+        Some(trimmed.to_string())
+    } else if trimmed.contains('-') {
+        crate::source::decode_project_dir_name(trimmed)
+    } else {
+        None
+    };
+
     let mut candidates = vec![trimmed.to_string()];
     if trimmed.starts_with('/') {
         let without_leading = trimmed.trim_start_matches('/');
@@ -639,91 +651,56 @@ fn resolve_project(
     } else {
         candidates.push(format!("/{trimmed}"));
     }
+    if let Some(path) = &request_path {
+        candidates.push(path.clone());
+    }
     candidates.sort();
     candidates.dedup();
 
-    let should_search_codex = source_filter.is_none() || source_filter == Some(SourceFilter::Codex);
-    let should_search_claude =
-        source_filter.is_none() || source_filter == Some(SourceFilter::Claude);
-    let should_search_cursor =
-        source_filter.is_none() || source_filter == Some(SourceFilter::Cursor);
-    let should_search_grok = source_filter.is_none() || source_filter == Some(SourceFilter::Grok);
-    let should_search_pi = source_filter.is_none() || source_filter == Some(SourceFilter::Pi);
+    // A project is every source's view of the same directory: Codex, Grok and
+    // Pi store the path, Claude stores it with "/" -> "-" and keeps the real
+    // path in each record, Cursor stores it as a lossy slug.
+    let cursor_slug = request_path
+        .as_deref()
+        .map(crate::source::cursor_project_slug);
+    let in_scope = |item: &ProjectAggregate| matches_source_filter(item.source, source_filter);
+    let is_exact = |item: &ProjectAggregate| {
+        candidates
+            .iter()
+            .any(|candidate| item.name == *candidate || item.original_path == *candidate)
+            || (item.source == SourceKind::Cursor
+                && cursor_slug.as_deref() == Some(item.name.as_str()))
+    };
 
-    let mut matched_names = Vec::new();
-
-    if should_search_codex {
-        for candidate in &candidates {
-            if let Some(project_match) = projects
-                .iter()
-                .find(|item| {
-                    item.source == SourceKind::Codex
-                        && (item.name == *candidate || item.original_path == *candidate)
-                })
-                .filter(|m| !matched_names.contains(&m.name))
-            {
-                matched_names.push(project_match.name.clone());
-            }
+    let mut matched_names: Vec<String> = Vec::new();
+    // Directories the request names: the path itself, or the real path behind
+    // a provider directory name such as Claude's "-Users-me-proj".
+    let mut roots: Vec<String> = request_path.iter().cloned().collect();
+    for item in projects
+        .iter()
+        .filter(|item| in_scope(item) && is_exact(item))
+    {
+        if !matched_names.contains(&item.name) {
+            matched_names.push(item.name.clone());
+        }
+        if item.original_path.starts_with('/') && !roots.contains(&item.original_path) {
+            roots.push(item.original_path.clone());
         }
     }
-
-    if should_search_claude {
-        for candidate in &candidates {
-            if let Some(project_match) = projects
-                .iter()
-                .find(|item| {
-                    item.source == SourceKind::Claude
-                        && (item.name == *candidate || item.original_path == *candidate)
-                })
-                .filter(|m| !matched_names.contains(&m.name))
-            {
-                matched_names.push(project_match.name.clone());
-            }
-        }
-    }
-
-    if should_search_cursor {
-        for candidate in &candidates {
-            if let Some(project_match) = projects
-                .iter()
-                .find(|item| {
-                    item.source == SourceKind::Cursor
-                        && (item.name == *candidate || item.original_path == *candidate)
-                })
-                .filter(|m| !matched_names.contains(&m.name))
-            {
-                matched_names.push(project_match.name.clone());
-            }
-        }
-    }
-
-    if should_search_grok {
-        for candidate in &candidates {
-            if let Some(project_match) = projects
-                .iter()
-                .find(|item| {
-                    item.source == SourceKind::Grok
-                        && (item.name == *candidate || item.original_path == *candidate)
-                })
-                .filter(|m| !matched_names.contains(&m.name))
-            {
-                matched_names.push(project_match.name.clone());
-            }
-        }
-    }
-
-    if should_search_pi {
-        for candidate in &candidates {
-            if let Some(project_match) = projects
-                .iter()
-                .find(|item| {
-                    item.source == SourceKind::Pi
-                        && (item.name == *candidate || item.original_path == *candidate)
-                })
-                .filter(|m| !matched_names.contains(&m.name))
-            {
-                matched_names.push(project_match.name.clone());
-            }
+    // Sessions started in a subdirectory or a worktree inside the project
+    // (`<project>/scripts`, `<project>/.claude/worktrees/x`) belong to it too,
+    // except under the home directory or "/", which would take in everything.
+    let prefixes = roots
+        .iter()
+        .filter_map(|root| nested_project_prefix(root))
+        .collect::<Vec<_>>();
+    for item in projects.iter().filter(|item| in_scope(item)) {
+        let nested = prefixes.iter().any(|prefix| {
+            item.original_path.starts_with(prefix.as_str())
+                || item.name.starts_with(prefix.as_str())
+        });
+        if nested && !matched_names.contains(&item.name) {
+            matched_names.push(item.name.clone());
         }
     }
 
@@ -769,6 +746,21 @@ fn resolve_project(
     Ok(ResolvedProject {
         names: vec![project.to_string()],
     })
+}
+
+fn nested_project_prefix(project: &str) -> Option<String> {
+    let path = project.trim_end_matches('/');
+    if !project.starts_with('/') || path.is_empty() {
+        return None;
+    }
+    let home = crate::source::resolve_home_dir().ok();
+    if home
+        .as_deref()
+        .is_some_and(|home| home.to_string_lossy().trim_end_matches('/') == path)
+    {
+        return None;
+    }
+    Some(format!("{path}/"))
 }
 
 fn project_alias_identity(item: &ProjectAggregate) -> String {
