@@ -42,6 +42,7 @@ commit unsafe.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/chat_completions.rs`: strongly typed OpenAI-compatible Chat Completions client used by `summarize`.
 - `flake.nix`, `nix/`: Nix flake (package, overlay, dev shell), home-manager and NixOS modules in `nix/modules/`, and flake checks in `nix/tests/`. User guide: `docs/mmr-nix.md`.
+- `.github/workflows/build.yml`: release builds for Linux and macOS (x86_64 and arm64) on pushes to `main`, pull requests and `v*` tags; `v*` tags also publish the archives to the GitHub release. The tag must match the `Cargo.toml` version. Pin actions to commit SHAs and run `actionlint` after editing it.
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
