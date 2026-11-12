@@ -3,7 +3,7 @@ goal_id: "2026-11-12-github-build-workflow"
 title: "Build the mmr CLI for Linux and macOS in GitHub Actions"
 description: "Add a GitHub Actions workflow that builds release binaries of mmr for Linux and macOS on x86_64 and arm64, smoke-tests them, and publishes them as artifacts (and as release assets for v* tags)."
 date: "2026-11-12"
-status: "in-progress"
+status: "done"
 confidence_floor: 85
 created: "2026-11-12"
 updated: "2026-11-12"
@@ -56,7 +56,7 @@ the 'mmr' CLI for linux and macos") is the approval to execute.
   `minos 11.0`; verify by inspecting the downloaded files.
 - [x] DoD-5 — README tells users where to get prebuilt binaries; AGENTS.md
   lists the workflow; verify by review.
-- [ ] DoD-6 — Release `v0.2.0` exists with all assets, and the README install
+- [x] DoD-6 — Release `v0.2.0` exists with all assets, and the README install
   snippet installs a working `mmr` from it; verify by `gh release view` and
   running the snippet in a scratch directory.
 
@@ -76,7 +76,7 @@ README "Download a prebuilt binary" section and AGENTS.md structure entry.
 actionlint, local dry run of the build and package steps, GitHub run on a PR,
 artifact inspection.
 
-### T4 · Publish the first release · [ ]
+### T4 · Publish the first release · [x]
 
 User follow-up: "publish the first version when done". After the PR run is
 green, merge PR #29, tag the merge commit `v0.2.0` (the `Cargo.toml` version;
@@ -112,8 +112,27 @@ Verify by installing from the release with the README snippet.
   aarch64) whose newest glibc symbol is `GLIBC_2.34`, inside the documented
   2.35 floor. Both macOS binaries report `minos 11.0`. On this Mac the arm64
   binary and the Intel binary (under Rosetta) both printed `mmr 0.2.0`.
+- 2026-11-12 — The user merged PR #29 at 19:56 UTC as merge commit
+  `064490d` (it contains `4217e3c`; the evidence commit `d53f1ca` landed on
+  the branch after the merge and reaches `main` with this closeout). The
+  `main` push run `43295284912` on `064490d` passed.
+- 2026-11-12 — Annotated tag `v0.2.0` on `064490d`, pushed. Tag run
+  `43297057302` passed with no cache: four build jobs (2m17s to 6m10s), the
+  tag guard accepted `mmr 0.2.0`, and `Publish release` verified the checksums
+  and created the release with generated notes.
+- 2026-11-12 — `gh release view v0.2.0`: published, not draft, not
+  pre-release, marked Latest, with nine assets (four archives, four `.sha256`
+  files, `SHA256SUMS`). https://github.com/thehumanworks/mmr/releases/tag/v0.2.0
+- 2026-11-12 — Ran the README install snippet for `aarch64-apple-darwin` in a
+  scratch directory against `releases/latest/download`: checksum OK,
+  `mmr --version` printed `mmr 0.2.0`, `mmr skill load` printed the bundled
+  skill.
 
 ## Decisions
+
+- 2026-11-12 — The first release is `v0.2.0`, matching the `Cargo.toml`
+  version, tagged on the PR #29 merge commit. Its generated notes list every
+  merged PR since the repository started, because no earlier release exists.
 
 - 2026-11-12 — glibc targets on Ubuntu 22.04 instead of static musl builds.
   Native runners build and smoke-test both architectures without cross tools,
