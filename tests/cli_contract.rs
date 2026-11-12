@@ -384,7 +384,7 @@ fn skill_load_prints_bundled_skill_for_agent_context() {
     assert!(stdout.starts_with("# mmr skill bundle"));
     assert!(stdout.contains("## mmr/SKILL.md"));
     assert!(stdout.contains("name: mmr"));
-    assert!(stdout.contains("`mmr` is the local Rust CLI"));
+    assert!(stdout.contains("# mmr: the project's earlier agent sessions"));
     assert!(stdout.contains("## mmr/session-mining/SKILL.md"));
     assert!(stdout.contains("session-mining"));
     assert_dev_subskills_absent_from_text(&stdout);

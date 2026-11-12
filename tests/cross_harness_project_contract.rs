@@ -333,3 +333,19 @@ fn cursor_sessions_get_their_project_path_timestamps_and_plain_user_text() {
         "inherits the turn's time"
     );
 }
+
+#[test]
+fn skill_install_reaches_claude_code_and_the_shared_skills_directory() {
+    let world = World::new();
+    let response = world.run(&world.home, &["skill", "install"]);
+    let expected = [".agents/skills/mmr", ".claude/skills/mmr"]
+        .map(|rel| world.home.join(rel).display().to_string());
+    assert_eq!(response["paths"], json!(expected));
+    for dir in &expected {
+        let skill = fs::read_to_string(Path::new(dir).join("SKILL.md")).expect("SKILL.md");
+        assert!(
+            skill.starts_with("---\nname: mmr\n"),
+            "{dir} has the bundled skill"
+        );
+    }
+}

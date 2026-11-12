@@ -464,6 +464,7 @@ TASKS = [
         "id": "retry-history",
         "prompt": "How has the webhook retry policy changed over time, and why was each change made? Oldest first.",
         "tests": "synthesis across an archived Codex session, a Claude Code session and a Cursor session",
-        "rubric": {"started at 5 retries": r"\b5\b|five", "cut because of duplicate charges": r"duplicat", "jitter added": r"jitter", "jitter reason: thundering herd": r"herd|same (second|time)|all at once|synchroni|simultaneous"},
+        # Only facts git cannot supply: the partner behind the cut and the outage behind the jitter.
+        "rubric": {"started at 5 retries": r"\b5\b|five", "cut after Acme/billing duplicate charges": r"acme|billing", "jitter added": r"jitter", "jitter after Acme's outage": r"outage"},
     },
 ]

@@ -31,12 +31,12 @@ import scenario  # noqa: E402
 from writers import write_session  # noqa: E402
 
 REPO_ROOT = HERE.parent.parent
-CONDITIONS = ["none", "path", "shipped-skill", "skill", "told", "mcp"]
+CONDITIONS = ["none", "path", "shipped-skill", "skill", "told", "mcp", "hook"]
 TOLD_PREFIX = (
     "Note: `mmr` is installed on this machine. It reads the history of earlier AI coding "
     "sessions (Claude Code, Codex, Cursor, Grok, Pi) on this machine.\n\n"
 )
-HISTORY_DIRS = re.compile(r"\.claude/projects|\.codex/(sessions|archived)|\.cursor/projects|\.grok/sessions|\.pi/agent")
+HISTORY_DIRS = re.compile(r"\.claude/projects/[^ ]*\.jsonl|\.claude/projects/?(\s|$|\*)|\.codex/(sessions|archived)|\.cursor/projects|\.grok/sessions|\.pi/agent")
 PASS_ENV = ["ANTHROPIC_BASE_URL", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy",
             "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
 SYSTEM_PATH = "/usr/local/bin:/usr/bin:/bin"
@@ -101,8 +101,15 @@ def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path) -> tup
     if condition == "shipped-skill":
         subprocess.run([str(bin_dir / "mmr"), "skill", "install"], env={"HOME": str(home), "PATH": path},
                        check=True, stdout=subprocess.DEVNULL)
-    if condition == "skill":
+    if condition in ("skill", "hook"):
         shutil.copytree(mmr_skill_dir(mmr, run_dir.parent / "_skill"), home / ".claude" / "skills" / "mmr")
+    if condition == "hook":
+        # A SessionStart hook puts the project's recent sessions in front of the agent.
+        command = ("echo 'Earlier agent sessions in this project, newest first (from mmr; "
+                   "read one with: mmr read session <session_id>):'; mmr list sessions --limit 8")
+        settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": command}]}]}}
+        (home / ".claude").mkdir(exist_ok=True)
+        (home / ".claude" / "settings.json").write_text(json.dumps(settings))
     if condition == "mcp":
         servers["mmr"] = {"command": str(bin_dir / "mmr"), "args": ["mcp", "--transport", "stdio"]}
     mcp_config.write_text(json.dumps({"mcpServers": servers}))
@@ -359,8 +366,18 @@ def main() -> None:
     parser.add_argument("--keep", action="store_true", help="keep sandboxes for inspection")
     parser.add_argument("--selfcheck", action="store_true", help="verify the corpus and probe mmr without an agent")
     parser.add_argument("--report", metavar="DIR", help="re-render the report for a results directory")
+    parser.add_argument("--regrade", metavar="DIR", help="re-grade stored transcripts with the current rubrics, then re-render")
     args = parser.parse_args()
 
+    if args.regrade:
+        out = Path(args.regrade)
+        tasks = {t["id"]: t for t in scenario.TASKS}
+        regraded = []
+        for r in load_results(out):
+            fresh = analyse(out / "transcripts" / f"{r['run_id']}.jsonl", tasks[r["task"]])
+            regraded.append({**r, **fresh})
+        (out / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in regraded))
+        args.report = args.regrade
     if args.report:
         out = Path(args.report)
         (out / "report.md").write_text(report(out))

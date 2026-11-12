@@ -29,10 +29,10 @@ Prefer `mmr recall` when you are inside a project and want the immediate previou
 1. Retrieve the prior session into a file:
    ```bash
    # The single previous session (full content)
-   mmr recall --source claude --limit 100000 > /tmp/prior-session.json
+   mmr recall --limit 100000 > /tmp/prior-session.json
 
    # A known session ID
-   mmr read session <session-id> --source claude > /tmp/session.json
+   mmr read session <session-id> > /tmp/session.json
    ```
 
 2. Confirm you actually got the complete data (not a truncated page). Compare `total_messages` against the array length and check `next_page`:
@@ -53,7 +53,7 @@ Prefer `mmr recall` when you are inside a project and want the immediate previou
 
 4. Produce a **reminder artifact** (continuity brief, key decisions list, task inventory, etc.) that can be fed back into the current session or stored for later.
 
-5. Use the results to improve long-term agent behavior (better handoff prompts, explicit memory notes via `mmr note`, improved `mmr summarize` workflows, etc.).
+5. Use the results to improve long-term agent behavior (better handoff prompts, project docs, improved `mmr summarize` workflows, etc.).
 
 ## Why This Skill Exists
 
@@ -68,7 +68,7 @@ This skill exists to make that retrieval + analysis + reminding loop repeatable,
 - **Age 0 is dangerous by default.** The newest session is often the caller's own live/incomplete session. Use `--include-newest` only when you deliberately want it.
 - **Focus on continuity value**, not just "what happened." Ask: What would a future version of me (or a new agent) need to know that is at risk of being lost?
 - **Produce reminder artifacts** that are actually usable (structured decisions, open tasks, rationale, invariants, etc.).
-- **Update durable memory** when useful (`mmr note`, `mmr assimilate project`, project docs, etc.).
+- **Update durable memory** when useful (project docs, AGENTS.md, CLAUDE.md, etc.).
 - **Subagent delegation is encouraged** for deep analysis of large ranges.
 
 ## Common Patterns
@@ -98,7 +98,6 @@ After using the skill on a real trace, you should be able to answer:
 
 - Parent: `.agents/skills/mmr/SKILL.md`
 - `mmr summarize` — built-in continuity brief generator (this skill can feed richer input into it)
-- `mmr note` + `mmr assimilate project` — for turning analysis into durable memory
 - Other mmr siblings: `mmr-clap-colored-cli`, `mmr-native-bundle-providers`
 
 ## References

@@ -626,7 +626,7 @@ pub enum SkillCommand {
 
 #[derive(Args, Debug)]
 pub struct SkillInstallArgs {
-    /// Install into .agents/skills/mmr under the current directory instead of ~/.agents/skills/mmr
+    /// Install under the current directory (.agents/skills/mmr and .claude/skills/mmr) instead of under HOME
     #[arg(long)]
     local: bool,
 }
@@ -3084,6 +3084,9 @@ struct SkillInstallResponse {
     command: String,
     scope: String,
     path: String,
+    /// Every directory written: the shared `.agents/skills/mmr` and Claude
+    /// Code's `.claude/skills/mmr`.
+    paths: Vec<String>,
     replaced: bool,
     files: Vec<String>,
 }
@@ -3112,34 +3115,39 @@ This is the bundled `mmr` skill. Read `mmr/SKILL.md` first, then load referenced
 }
 
 fn install_bundled_mmr_skill(local: bool) -> Result<SkillInstallResponse> {
-    let target = if local {
-        std::env::current_dir()
-            .context("current_dir")?
-            .join(".agents")
-            .join("skills")
-            .join("mmr")
+    let base = if local {
+        std::env::current_dir().context("current_dir")?
     } else {
-        let home = std::env::var_os("HOME").context("HOME is not set")?;
-        PathBuf::from(home)
-            .join(".agents")
-            .join("skills")
-            .join("mmr")
+        PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
     };
-    let replaced = remove_existing_skill_target(&target)?;
-    for file in BUNDLED_MMR_SKILL_FILES {
-        let path = target.join(file.relative_path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create skill directory {}", parent.display()))?;
+    // `.agents/skills` is the shared location (Codex and other agents read it);
+    // Claude Code loads skills only from `.claude/skills`.
+    let targets = [
+        base.join(".agents").join("skills").join("mmr"),
+        base.join(".claude").join("skills").join("mmr"),
+    ];
+    let mut replaced = false;
+    for target in &targets {
+        replaced |= remove_existing_skill_target(target)?;
+        for file in BUNDLED_MMR_SKILL_FILES {
+            let path = target.join(file.relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("create skill directory {}", parent.display()))?;
+            }
+            fs::write(&path, file.contents)
+                .with_context(|| format!("write skill file {}", path.display()))?;
         }
-        fs::write(&path, file.contents)
-            .with_context(|| format!("write skill file {}", path.display()))?;
     }
 
     Ok(SkillInstallResponse {
         command: "skill/install".to_string(),
         scope: if local { "local" } else { "user" }.to_string(),
-        path: target.display().to_string(),
+        path: targets[0].display().to_string(),
+        paths: targets
+            .iter()
+            .map(|target| target.display().to_string())
+            .collect(),
         replaced,
         files: BUNDLED_MMR_SKILL_FILES
             .iter()

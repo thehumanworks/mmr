@@ -61,7 +61,7 @@ Good outputs from this skill are things like:
 - "What a New Agent Would Need to Know"
 - Updated project `CONTEXT.md` or `Handoff.md` sections
 
-Feed these back into the current session, store them with `mmr note`, or use them to improve `mmr summarize` prompts.
+Feed these back into the current session, record them in project docs, or use them to improve `mmr summarize` prompts.
 
 ## Limitations
 
