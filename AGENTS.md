@@ -41,6 +41,7 @@ commit unsafe.
 - `src/teleport/`: provider-profile native bundle pack/apply/resume/export (`provider.rs`, `providers/{codex,claude,cursor,grok,pi}.rs`); artifact paths are provider-qualified (`native/<provider>/…`); legacy flat `transcript.native.jsonl` bundles still verify on read.
 - `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/chat_completions.rs`: strongly typed OpenAI-compatible Chat Completions client used by `summarize`.
+- `flake.nix`, `nix/`: Nix flake (package, overlay, dev shell), home-manager and NixOS modules in `nix/modules/`, and flake checks in `nix/tests/`. User guide: `docs/mmr-nix.md`.
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
@@ -104,6 +105,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo test --test cli_benchmark -- --ignored --nocapture` — run benchmark contract explicitly.
 - `cargo clippy --all-targets --all-features -- -D warnings` — strict lint gate.
 - `cargo build --release` — optimized production build check.
+- `nix build` — build the Nix package (runs the Rust test suite in the sandbox).
+- `nix flake check` — package, home-manager, NixOS module and NixOS VM checks; run it after changing `flake.nix`, `nix/`, `Cargo.lock`, or files the package embeds (`.agents/skills/mmr`).
 
 ## Read and project detection
 
