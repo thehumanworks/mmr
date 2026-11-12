@@ -479,7 +479,7 @@ impl QueryService {
         let scope = SessionSelectionScope {
             project: project.map(str::to_string),
             all,
-            source: source_filter.map(|source| source_filter_kind(source).as_str().to_string()),
+            source: source_filter.map(|source| source.as_str().to_string()),
         };
 
         // A legitimately empty scope returns an empty success, distinct from out-of-range.
@@ -882,16 +882,6 @@ fn page_filtered_messages(
     let next_offset = (options.offset + page_size) as i64;
     let next_page = options.limit.is_some() && next_offset < selected_total as i64;
     (paged, next_page, next_offset)
-}
-
-fn source_filter_kind(source: SourceFilter) -> SourceKind {
-    match source {
-        SourceFilter::Claude => SourceKind::Claude,
-        SourceFilter::Codex => SourceKind::Codex,
-        SourceFilter::Cursor => SourceKind::Cursor,
-        SourceFilter::Grok => SourceKind::Grok,
-        SourceFilter::Pi => SourceKind::Pi,
-    }
 }
 
 fn build_session_message_counts(

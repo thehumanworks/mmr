@@ -11,8 +11,7 @@ use std::fs;
 use std::io::Write;
 
 use super::{
-    CliFailure, FindFormatArg, RetrieveArgs, SearchTextArgs, linked_project, serialize,
-    shell_quote, source_filter_name, source_name,
+    CliFailure, FindFormatArg, RetrieveArgs, SearchTextArgs, linked_project, serialize, shell_quote,
 };
 use crate::messages::service::{MessageQueryOptions, QueryService};
 use crate::store::{EventRecord, ProjectRecord, Store, content_hash};
@@ -102,8 +101,11 @@ fn search_project(
         bail!("search query is empty");
     }
 
-    let events =
-        store.events_for_project(&project.id, source_filter_name(source_filter), session)?;
+    let events = store.events_for_project(
+        &project.id,
+        source_filter.map(SourceFilter::as_str),
+        session,
+    )?;
     let mut results = Vec::new();
     for event in events {
         if role.is_some_and(|role| role != event.role) {
@@ -437,7 +439,7 @@ pub(super) fn retrieve_output(
     let mut ranked_sessions = Vec::new();
     for (identity, mut session_matches) in grouped {
         sort_retrieve_matches(&mut session_matches);
-        let Some(provider_source) = source_filter_from_name(identity.source.as_str()) else {
+        let Some(provider_source) = SourceFilter::from_name(identity.source.as_str()) else {
             unreadable_matches.extend(
                 session_matches
                     .iter()
@@ -481,7 +483,7 @@ pub(super) fn retrieve_output(
     let mut candidates = Vec::new();
     for ranked_session in ranked_sessions {
         let provider_messages = if args.full_message_history {
-            let provider_source = source_filter_from_name(ranked_session.identity.source.as_str())
+            let provider_source = SourceFilter::from_name(ranked_session.identity.source.as_str())
                 .expect("ranked retrieve session has supported source");
             Some(
                 retrieve_provider_messages(service, &ranked_session.identity, provider_source)
@@ -526,7 +528,7 @@ pub(super) fn retrieve_output(
             scope: RetrieveScopeOutput {
                 all_projects: args.all_projects,
                 all_sources: source_filter.is_none(),
-                source_filter: source_filter.map(source_name).map(str::to_string),
+                source_filter: source_filter.map(SourceFilter::as_str).map(str::to_string),
                 total_projects_searched: scope_projects.len(),
                 projects: scope_projects,
             },
@@ -652,7 +654,7 @@ fn parse_retrieve_pinned_sessions(
         if identity.source.trim().is_empty()
             || identity.project_name.trim().is_empty()
             || identity.source_session_id.trim().is_empty()
-            || source_filter_from_name(identity.source.as_str()).is_none()
+            || SourceFilter::from_name(identity.source.as_str()).is_none()
         {
             return Err(anyhow::Error::new(retrieve_cli_failure(
                 "invalid_pinned_session",
@@ -732,7 +734,7 @@ fn retrieve_provider_message_matches(
         &session_ids,
         None,
         source_filter,
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
+        MessageQueryOptions::new(None, 0, super::oldest_first()),
     )?;
     let matches = response
         .messages
@@ -769,7 +771,7 @@ fn retrieve_search_matches(
     for project in projects {
         let events = store.events_for_project(
             &project.id,
-            source_filter_name(source_filter),
+            source_filter.map(SourceFilter::as_str),
             args.session.as_deref(),
         )?;
         for event in events {
@@ -947,7 +949,7 @@ fn retrieve_provider_messages(
         std::slice::from_ref(&identity.source_session_id),
         Some(identity.project_name.as_str()),
         Some(source),
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
+        MessageQueryOptions::new(None, 0, super::oldest_first()),
     )?;
     Ok(response.messages)
 }
@@ -1230,7 +1232,7 @@ fn build_retrieve_next_command(
     let mut parts = vec!["mmr".to_string()];
     if let Some(source) = source_filter {
         parts.push("--source".to_string());
-        parts.push(source_name(source).to_string());
+        parts.push(source.as_str().to_string());
     }
     parts.push("retrieve".to_string());
     parts.push(shell_quote(&args.query));
@@ -1297,17 +1299,6 @@ fn build_retrieve_next_command(
     }
 
     Ok(parts.join(" "))
-}
-
-fn source_filter_from_name(source: &str) -> Option<SourceFilter> {
-    match source {
-        "claude" => Some(SourceFilter::Claude),
-        "codex" => Some(SourceFilter::Codex),
-        "cursor" => Some(SourceFilter::Cursor),
-        "grok" => Some(SourceFilter::Grok),
-        "pi" => Some(SourceFilter::Pi),
-        _ => None,
-    }
 }
 
 fn public_retrieve_event_id(event_id: &str) -> String {

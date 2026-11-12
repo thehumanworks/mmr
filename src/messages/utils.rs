@@ -65,24 +65,13 @@ fn select_sessions(sessions: &[ApiSession]) -> Vec<SessionSelection> {
     sessions
         .iter()
         .filter_map(|session| {
-            parse_source_filter(&session.source).map(|source| SessionSelection {
+            SourceFilter::from_name(&session.source).map(|source| SessionSelection {
                 session_id: session.session_id.clone(),
                 project_name: session.project_name.clone(),
                 source,
             })
         })
         .collect()
-}
-
-fn parse_source_filter(source: &str) -> Option<SourceFilter> {
-    match source {
-        "claude" => Some(SourceFilter::Claude),
-        "codex" => Some(SourceFilter::Codex),
-        "cursor" => Some(SourceFilter::Cursor),
-        "grok" => Some(SourceFilter::Grok),
-        "pi" => Some(SourceFilter::Pi),
-        _ => None,
-    }
 }
 
 pub(crate) fn format_messages_for_input(session_data: &[SessionTranscript]) -> String {

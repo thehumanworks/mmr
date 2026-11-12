@@ -12,6 +12,35 @@ pub enum SourceFilter {
     Pi,
 }
 
+impl SourceFilter {
+    /// The lowercase name used in flags, JSON and the store.
+    pub fn as_str(self) -> &'static str {
+        self.kind().as_str()
+    }
+
+    pub fn kind(self) -> SourceKind {
+        match self {
+            Self::Claude => SourceKind::Claude,
+            Self::Codex => SourceKind::Codex,
+            Self::Cursor => SourceKind::Cursor,
+            Self::Grok => SourceKind::Grok,
+            Self::Pi => SourceKind::Pi,
+        }
+    }
+
+    /// Parse a lowercase source name such as `codex`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "claude" => Some(Self::Claude),
+            "codex" => Some(Self::Codex),
+            "cursor" => Some(Self::Cursor),
+            "grok" => Some(Self::Grok),
+            "pi" => Some(Self::Pi),
+            _ => None,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[clap(rename_all = "kebab-case")]
 #[serde(rename_all = "kebab-case")]

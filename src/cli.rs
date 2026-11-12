@@ -1062,131 +1062,57 @@ impl From<BundleOutputFormatArg> for TeleportOutputFormat {
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
     let source_filter = effective_source(cli.source);
-    if let Commands::Mcp(args) = &cli.command {
-        return crate::mcp::run_mcp(args, cli.pretty).await;
-    }
-    if let Commands::Note { text } = &cli.command {
-        return serialize(&note_response(text.clone())?, cli.pretty);
-    }
-    if let Commands::Find(args) = &cli.command {
-        return find_output(args, source_filter, cli.pretty);
-    }
-    if let Commands::Assimilate(args) = &cli.command {
-        return serialize(&assimilate_response(args, cli.source)?, cli.pretty);
-    }
-    if let Commands::Skill(args) = &cli.command {
-        return skill_command_response(args, cli.pretty);
-    }
-    if let Commands::Import(args) = &cli.command {
-        return import_command_response(args, source_filter, cli.pretty);
-    }
-    if let Commands::Ingest(args) = &cli.command {
-        return ingest_command_response(args, source_filter, cli.pretty);
-    }
-    if let Commands::Share(args) = &cli.command {
-        return share_command_response(args, source_filter, cli.pretty);
-    }
-    if let Commands::Init(args) = &cli.command {
-        return serialize(&init_response(args, source_filter)?, cli.pretty);
-    }
-    if let Commands::Redact(args) = &cli.command {
-        return serialize(&redact_response(args, source_filter)?, cli.pretty);
-    }
-    if let Commands::Sync(args) = &cli.command {
-        return serialize(&sync_response(args, source_filter)?, cli.pretty);
-    }
-    if let Commands::Status(args) = &cli.command {
-        return serialize(&status_response(args, source_filter)?, cli.pretty);
-    }
-    if let Commands::DbInfo {
-        project,
-        smoke_event,
-    } = &cli.command
-    {
-        return serialize(
-            &db_info_response(project.clone(), *smoke_event)?,
-            cli.pretty,
-        );
-    }
-    if let Commands::Peer(args) = &cli.command {
-        return peer_command_response(args, source_filter, cli.pretty);
-    }
-
-    let provider_load_filter = match &cli.command {
-        Commands::Retrieve(args) if args.all_sources && cli.source.is_none() => None,
-        _ => source_filter,
-    };
-    let service = QueryService::load_filtered(provider_load_filter)?;
-
-    let response = match cli.command {
-        Commands::List(args) => list_command_response(&service, args, source_filter, cli.pretty)?,
-        Commands::Retrieve(args) => {
-            retrieve_output(&args, &service, cli.source, source_filter, cli.pretty)?
-        }
-        Commands::Recall(args) => {
-            let options = MessageQueryOptions::new(
-                Some(args.limit),
-                args.offset,
-                SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-            );
-            if args.remotes.is_empty() {
-                run_session_axis(
-                    &service,
-                    cli.source,
-                    source_filter,
-                    cli.pretty,
-                    args.project,
-                    args.all,
-                    args.n,
-                    args.include_newest,
-                    options,
-                )?
-            } else {
-                recall_with_remotes_response(
-                    &service,
-                    args,
-                    cli.source,
-                    source_filter,
-                    cli.pretty,
-                    options,
-                )?
-            }
-        }
-        Commands::Read(args) => {
-            read_command_response(&service, args, cli.source, source_filter, cli.pretty)?
-        }
-        Commands::Context(args) => {
-            context_command_response(&service, args, cli.source, source_filter, cli.pretty)?
-        }
-        Commands::Summarize(args) => {
-            summarize_command_response(&service, args, cli.source, source_filter, cli.pretty)
-                .await?
-        }
-        Commands::Compact(args) => {
-            compact_command_response(&service, args, cli.source, source_filter, cli.pretty).await?
-        }
-        Commands::Import(_) => unreachable!("import handled before QueryService load"),
-        Commands::Ingest(_) => unreachable!("ingest handled before QueryService load"),
-        Commands::Share(_) => unreachable!("share handled before QueryService load"),
-        Commands::Note { text } => serialize(&note_response(text)?, cli.pretty)?,
-        Commands::Find(args) => find_output(&args, source_filter, cli.pretty)?,
-        Commands::Assimilate(args) => {
-            serialize(&assimilate_response(&args, cli.source)?, cli.pretty)?
-        }
-        Commands::Skill(args) => skill_command_response(&args, cli.pretty)?,
-        Commands::Init(args) => serialize(&init_response(&args, source_filter)?, cli.pretty)?,
-        Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, cli.pretty)?,
-        Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, cli.pretty)?,
-        Commands::Status(args) => serialize(&status_response(&args, source_filter)?, cli.pretty)?,
-        Commands::Mcp(_) => unreachable!("mcp handled before QueryService load"),
+    let pretty = cli.pretty;
+    let load_service = || QueryService::load_filtered(source_filter);
+    match cli.command {
+        Commands::Mcp(args) => crate::mcp::run_mcp(&args, pretty).await,
+        Commands::Note { text } => serialize(&note_response(text)?, pretty),
+        Commands::Find(args) => find_output(&args, source_filter, pretty),
+        Commands::Assimilate(args) => serialize(&assimilate_response(&args, cli.source)?, pretty),
+        Commands::Skill(args) => skill_command_response(&args, pretty),
+        Commands::Import(args) => import_command_response(&args, source_filter, pretty),
+        Commands::Ingest(args) => ingest_command_response(&args, source_filter, pretty),
+        Commands::Share(args) => share_command_response(&args, source_filter, pretty),
+        Commands::Init(args) => serialize(&init_response(&args, source_filter)?, pretty),
+        Commands::Redact(args) => serialize(&redact_response(&args, source_filter)?, pretty),
+        Commands::Sync(args) => serialize(&sync_response(&args, source_filter)?, pretty),
+        Commands::Status(args) => serialize(&status_response(&args, source_filter)?, pretty),
         Commands::DbInfo {
             project,
             smoke_event,
-        } => serialize(&db_info_response(project, smoke_event)?, cli.pretty)?,
-        Commands::Peer(_) => unreachable!("peer handled before QueryService load"),
-    };
-
-    Ok(response)
+        } => serialize(&db_info_response(project, smoke_event)?, pretty),
+        Commands::Peer(args) => peer_command_response(&args, source_filter, pretty),
+        Commands::List(args) => {
+            list_command_response(&load_service()?, args, source_filter, pretty)
+        }
+        Commands::Retrieve(args) => {
+            // `--all-sources` without an explicit `--source` ignores MMR_DEFAULT_SOURCE.
+            let load_filter = if args.all_sources && cli.source.is_none() {
+                None
+            } else {
+                source_filter
+            };
+            let service = QueryService::load_filtered(load_filter)?;
+            retrieve_output(&args, &service, cli.source, source_filter, pretty)
+        }
+        Commands::Recall(args) => {
+            recall_response(&load_service()?, args, cli.source, source_filter, pretty)
+        }
+        Commands::Read(args) => {
+            read_command_response(&load_service()?, args, cli.source, source_filter, pretty)
+        }
+        Commands::Context(args) => {
+            context_command_response(&load_service()?, args, cli.source, source_filter, pretty)
+        }
+        Commands::Summarize(args) => {
+            let service = load_service()?;
+            summarize_command_response(&service, args, cli.source, source_filter, pretty).await
+        }
+        Commands::Compact(args) => {
+            let service = load_service()?;
+            compact_command_response(&service, args, cli.source, source_filter, pretty).await
+        }
+    }
 }
 
 fn list_command_response(
@@ -1246,32 +1172,28 @@ fn list_projects_with_remotes_response(
     let request = PeerListProjectsRequest {
         protocol_version: PEER_PROTOCOL_VERSION,
         source: source_filter,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
+        limits: PeerRequestLimits::default(),
         sort_by: args.sort_by,
         order: args.order,
     };
-    for remote in &args.remotes {
-        let mut response = peer_list_projects(remote, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&response.peer_results);
-        annotate_peer_projects(&mut response.projects, remote, remote_mmr_version.clone());
-        peer_results.push(ApiPeerResult {
-            host: remote.to_string(),
-            transport: "ssh".to_string(),
-            command: "list/projects".to_string(),
-            status: "ok".to_string(),
-            remote_mmr_version,
-            total_messages: Some(response.total_messages),
-            total_sessions: Some(response.total_sessions),
-        });
+    for host in &args.remotes {
+        let mut response: ApiProjectsResponse = call_peer(host, "list/projects", &request, pretty)?;
+        let origin = peer_origin(host, &response.peer_results);
+        for project in &mut response.projects {
+            project.origin = Some(origin.clone());
+        }
+        peer_results.push(remote_peer_result(
+            &origin,
+            "list/projects",
+            Some(response.total_messages),
+            Some(response.total_sessions),
+        ));
         local.total_messages += response.total_messages;
         local.total_sessions += response.total_sessions;
         local.projects.extend(response.projects);
     }
     sort_api_projects(&mut local.projects, args.sort_by, args.order);
-    local.projects = apply_generic_pagination(local.projects, Some(args.limit), args.offset);
+    local.projects = paginate(local.projects, Some(args.limit), args.offset);
     local.peer_results = Some(peer_results);
     serialize(&local, pretty)
 }
@@ -1290,38 +1212,33 @@ fn list_sessions_with_remotes_response(
         0,
         SortOptions::new(args.sort_by, args.order),
     )?;
-    let project_for_identity = project_identity_input(project_scope.as_deref())?;
     let request = PeerListSessionsRequest {
         protocol_version: PEER_PROTOCOL_VERSION,
-        project: build_peer_project_identity(&project_for_identity),
+        project: peer_project_identity(project_scope.as_deref())?,
         source: source_filter,
         all: args.all,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
+        limits: PeerRequestLimits::default(),
         sort_by: args.sort_by,
         order: args.order,
     };
     let mut peer_results = Vec::new();
-    for remote in &args.remotes {
-        let mut response = peer_list_sessions(remote, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&response.peer_results);
-        annotate_peer_sessions(&mut response.sessions, remote, remote_mmr_version.clone());
-        peer_results.push(ApiPeerResult {
-            host: remote.to_string(),
-            transport: "ssh".to_string(),
-            command: "list/sessions".to_string(),
-            status: "ok".to_string(),
-            remote_mmr_version,
-            total_messages: None,
-            total_sessions: Some(response.total_sessions),
-        });
+    for host in &args.remotes {
+        let mut response: ApiSessionsResponse = call_peer(host, "list/sessions", &request, pretty)?;
+        let origin = peer_origin(host, &response.peer_results);
+        for session in &mut response.sessions {
+            session.origin = Some(origin.clone());
+        }
+        peer_results.push(remote_peer_result(
+            &origin,
+            "list/sessions",
+            None,
+            Some(response.total_sessions),
+        ));
         local.sessions.extend(response.sessions);
     }
     sort_api_sessions(&mut local.sessions, args.sort_by, args.order);
     local.total_sessions = local.sessions.len() as i64;
-    local.sessions = apply_generic_pagination(local.sessions, Some(args.limit), args.offset);
+    local.sessions = paginate(local.sessions, Some(args.limit), args.offset);
     local.peer_results = Some(peer_results);
     serialize(&local, pretty)
 }
@@ -1350,13 +1267,26 @@ fn read_session_response(
     pretty: bool,
 ) -> Result<String> {
     if !args.remotes.is_empty() {
-        return read_session_with_remotes_response(service, args, source_filter, pretty);
+        let scope = MessageScope::Session {
+            session_id: &args.session_id,
+            project: args.project.as_deref(),
+        };
+        return read_with_remotes_response(
+            service,
+            scope,
+            args.format,
+            source_filter,
+            &args.remotes,
+            args.limit,
+            args.offset,
+            pretty,
+        );
     }
 
     if args.format == ReadFormatArg::Tree {
         let store = Store::open_default()?;
-        let events =
-            store.events_for_source_session(&args.session_id, source_filter_name(source_filter))?;
+        let events = store
+            .events_for_source_session(&args.session_id, source_filter.map(SourceFilter::as_str))?;
         let response = export_tree_events_response(events, args.output_dir, "session")?;
         return serialize(&response, pretty);
     }
@@ -1368,11 +1298,7 @@ fn read_session_response(
         &[args.session_id],
         args.project.as_deref(),
         source_filter,
-        MessageQueryOptions::new(
-            args.limit,
-            args.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
+        MessageQueryOptions::new(args.limit, args.offset, oldest_first()),
     )?;
     serialize(&response, pretty)
 }
@@ -1384,7 +1310,16 @@ fn read_project_response(
     pretty: bool,
 ) -> Result<String> {
     if !args.remotes.is_empty() {
-        return read_project_with_remotes_response(service, args, source_filter, pretty);
+        return read_with_remotes_response(
+            service,
+            MessageScope::Project(args.project.as_deref()),
+            args.format,
+            source_filter,
+            &args.remotes,
+            args.limit,
+            args.offset,
+            pretty,
+        );
     }
 
     if args.format == ReadFormatArg::Tree {
@@ -1392,31 +1327,20 @@ fn read_project_response(
         return serialize(&response, pretty);
     }
 
-    let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
-    if let Some(project) = args.project {
-        let response = service.messages(
+    let mut response = match args.project.as_deref() {
+        Some(project) => service.messages(
             &[],
-            Some(project.as_str()),
+            Some(project),
             source_filter,
-            MessageQueryOptions::new(args.limit, args.offset, sort),
-        )?;
-        let mut response = response;
-        if response.next_page {
-            response.next_command = Some(build_next_read_project_command(
-                source_filter,
-                Some(project.as_str()),
-                args.limit,
-                response.next_offset as usize,
-            ));
-        }
-        return serialize(&response, pretty);
-    }
-
-    let mut response = read_cwd_project_messages(service, source_filter, args.limit, args.offset)?;
+            MessageQueryOptions::new(args.limit, args.offset, oldest_first()),
+        )?,
+        None => read_cwd_project_messages(service, source_filter, args.limit, args.offset)?,
+    };
     if response.next_page {
         response.next_command = Some(build_next_read_project_command(
             source_filter,
-            None,
+            args.project.as_deref(),
+            &[],
             args.limit,
             response.next_offset as usize,
         ));
@@ -1431,12 +1355,21 @@ fn read_source_response(
     pretty: bool,
 ) -> Result<String> {
     if !args.remotes.is_empty() {
-        return read_source_with_remotes_response(service, args, source, pretty);
+        return read_with_remotes_response(
+            service,
+            MessageScope::Source(source),
+            args.format,
+            Some(source),
+            &args.remotes,
+            args.limit,
+            args.offset,
+            pretty,
+        );
     }
 
     if args.format == ReadFormatArg::Tree {
         let store = Store::open_default()?;
-        let events = store.events_for_source(source_name(source), None, None)?;
+        let events = store.events_for_source(source.as_str(), None, None)?;
         let response = export_tree_events_response(events, args.output_dir, "source")?;
         return serialize(&response, pretty);
     }
@@ -1445,11 +1378,7 @@ fn read_source_response(
         &[],
         None,
         Some(source),
-        MessageQueryOptions::new(
-            args.limit,
-            args.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
+        MessageQueryOptions::new(args.limit, args.offset, oldest_first()),
     )?;
     serialize(&response, pretty)
 }
@@ -1460,7 +1389,6 @@ fn read_cwd_project_messages(
     limit: Option<usize>,
     offset: usize,
 ) -> Result<ApiMessagesResponse> {
-    let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
     let (codex_path, claude_name) =
         resolve_project_from_cwd().context("could not get current directory")?;
     let cursor_name = claude_name.clone();
@@ -1478,7 +1406,7 @@ fn read_cwd_project_messages(
                 &[],
                 Some(project),
                 Some(source),
-                MessageQueryOptions::new(None, 0, sort),
+                MessageQueryOptions::new(None, 0, oldest_first()),
             )?;
             total_messages += response.total_messages;
             messages.extend(response.messages);
@@ -1491,7 +1419,7 @@ fn read_cwd_project_messages(
     });
 
     let total = messages.len();
-    let paged = apply_message_output_pagination(messages, limit, offset);
+    let paged = paginate(messages, limit, offset);
     let next_offset = offset.saturating_add(paged.len()) as i64;
     Ok(ApiMessagesResponse {
         messages: paged,
@@ -1504,411 +1432,234 @@ fn read_cwd_project_messages(
     })
 }
 
-fn read_project_with_remotes_response(
+/// The messages that one `read`, `summarize` or `compact` target covers. The same
+/// scope is read locally and on every `--remote`.
+#[derive(Clone, Copy)]
+enum MessageScope<'a> {
+    /// A project; `None` is the project of the current directory.
+    Project(Option<&'a str>),
+    Session {
+        session_id: &'a str,
+        project: Option<&'a str>,
+    },
+    Source(SourceFilter),
+}
+
+impl MessageScope<'_> {
+    /// The command name in failures and `peer_results`.
+    fn command(self) -> &'static str {
+        match self {
+            Self::Project(_) => "read/project",
+            Self::Session { .. } => "read/session",
+            Self::Source(_) => "read/source",
+        }
+    }
+
+    /// Every local message in scope, oldest first.
+    fn local_messages(
+        self,
+        service: &QueryService,
+        source_filter: Option<SourceFilter>,
+    ) -> Result<Vec<ApiMessage>> {
+        let unpaged = MessageQueryOptions::new(None, 0, oldest_first());
+        let response = match self {
+            Self::Project(Some(project)) => {
+                service.messages(&[], Some(project), source_filter, unpaged)?
+            }
+            Self::Project(None) => read_cwd_project_messages(service, source_filter, None, 0)?,
+            Self::Session {
+                session_id,
+                project,
+            } => service.messages(&[session_id.to_string()], project, source_filter, unpaged)?,
+            Self::Source(source) => service.messages(&[], None, Some(source), unpaged)?,
+        };
+        Ok(response.messages)
+    }
+}
+
+/// Read `scope` locally and from each `--remote`, then merge the two: remote messages
+/// carry their origin, duplicates are dropped, and the result is oldest first.
+fn merged_scope_messages(
     service: &QueryService,
-    args: ReadProjectArgs,
+    scope: MessageScope,
     source_filter: Option<SourceFilter>,
+    remotes: &[String],
+    pretty: bool,
+) -> Result<(Vec<ApiMessage>, Vec<ApiPeerResult>)> {
+    let command = scope.command();
+    let limits = PeerRequestLimits::default();
+    let (local, (remote, peer_results)) = match scope {
+        MessageScope::Project(project) => {
+            let request = PeerProjectRequest {
+                protocol_version: PEER_PROTOCOL_VERSION,
+                project: peer_project_identity(project)?,
+                source: source_filter,
+                all: false,
+                limits,
+                recall: None,
+            };
+            (
+                scope.local_messages(service, source_filter)?,
+                remote_messages(remotes, command, &request, pretty)?,
+            )
+        }
+        MessageScope::Session {
+            session_id,
+            project,
+        } => {
+            let local = scope.local_messages(service, source_filter)?;
+            let request = PeerReadSessionRequest {
+                protocol_version: PEER_PROTOCOL_VERSION,
+                session_id: session_id.to_string(),
+                project: peer_project_identity(project)?,
+                source: source_filter,
+                limits,
+            };
+            (local, remote_messages(remotes, command, &request, pretty)?)
+        }
+        MessageScope::Source(source) => {
+            let request = PeerReadSourceRequest {
+                protocol_version: PEER_PROTOCOL_VERSION,
+                source,
+                limits,
+            };
+            (
+                scope.local_messages(service, source_filter)?,
+                remote_messages(remotes, command, &request, pretty)?,
+            )
+        }
+    };
+    Ok((merge_messages(local, remote), peer_results))
+}
+
+/// The messages `summarize` and `compact` send: local only, or merged with each `--remote`.
+fn transcript_messages(
+    service: &QueryService,
+    scope: MessageScope,
+    source_filter: Option<SourceFilter>,
+    remotes: &[String],
+    pretty: bool,
+) -> Result<Vec<ApiMessage>> {
+    if remotes.is_empty() {
+        scope.local_messages(service, source_filter)
+    } else {
+        Ok(merged_scope_messages(service, scope, source_filter, remotes, pretty)?.0)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_with_remotes_response(
+    service: &QueryService,
+    scope: MessageScope,
+    format: ReadFormatArg,
+    source_filter: Option<SourceFilter>,
+    remotes: &[String],
+    limit: Option<usize>,
+    offset: usize,
     pretty: bool,
 ) -> Result<String> {
-    if args.format == ReadFormatArg::Tree {
+    if format == ReadFormatArg::Tree {
         return Err(anyhow::Error::new(peer_cli_failure(
-            "read/project",
+            scope.command(),
             "peer_unsupported_format",
             None,
             "--remote is not supported with --format tree",
             pretty,
         )?));
     }
-
-    let project_for_identity = project_identity_input(args.project.as_deref())?;
-    let request = PeerProjectRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
-        project: build_peer_project_identity(&project_for_identity),
-        source: source_filter,
-        all: false,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-        recall: None,
-    };
-
-    let mut local =
-        local_project_messages_unpaged(service, args.project.as_deref(), source_filter)?;
-    let mut peer_results = Vec::new();
-    for remote_name in &args.remotes {
-        let mut remote = peer_read_project(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote
-            .peer_results
-            .as_ref()
-            .and_then(|items| items.first())
-            .and_then(|item| item.remote_mmr_version.clone());
-        annotate_peer_messages(
-            &mut remote.messages,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        peer_results.push(peer_result_for_messages(
-            remote_name,
-            "read/project",
-            remote.total_messages,
-            remote_mmr_version,
-        ));
-        local.messages.extend(remote.messages);
-    }
-
-    let mut messages = dedup_api_messages(local.messages);
-    sort_api_messages_chronological(&mut messages);
-    let total = messages.len() as i64;
-    let paged = apply_message_output_pagination(messages, args.limit, args.offset);
-    let next_offset = args.offset.saturating_add(paged.len()) as i64;
-    let next_page = args.limit.is_some() && next_offset < total;
-
-    let mut response = ApiMessagesResponse {
-        messages: paged,
-        total_messages: total,
-        next_page,
-        next_offset,
-        next_command: None,
-        session_selection: None,
-        peer_results: Some(peer_results),
-    };
-    if response.next_page {
-        response.next_command = Some(build_next_read_project_command_with_remotes(
+    let (messages, peer_results) =
+        merged_scope_messages(service, scope, source_filter, remotes, pretty)?;
+    let mut response = merged_messages_page(messages, limit, offset, None, peer_results);
+    if let MessageScope::Project(project) = scope
+        && response.next_page
+    {
+        response.next_command = Some(build_next_read_project_command(
             source_filter,
-            args.project.as_deref(),
-            &args.remotes,
-            args.limit,
+            project,
+            remotes,
+            limit,
             response.next_offset as usize,
         ));
     }
     serialize(&response, pretty)
 }
 
-fn local_project_messages_unpaged(
-    service: &QueryService,
-    project: Option<&str>,
-    source_filter: Option<SourceFilter>,
-) -> Result<ApiMessagesResponse> {
-    let sort = SortOptions::new(SortBy::Timestamp, SortOrder::Asc);
-    if let Some(project) = project {
-        service.messages(
-            &[],
-            Some(project),
-            source_filter,
-            MessageQueryOptions::new(None, 0, sort),
-        )
-    } else {
-        read_cwd_project_messages(service, source_filter, None, 0)
-    }
-}
-
-fn read_session_with_remotes_response(
-    service: &QueryService,
-    args: ReadSessionArgs,
-    source_filter: Option<SourceFilter>,
-    pretty: bool,
-) -> Result<String> {
-    if args.format == ReadFormatArg::Tree {
-        return Err(anyhow::Error::new(peer_cli_failure(
-            "read/session",
-            "peer_unsupported_format",
-            None,
-            "--remote is not supported with --format tree",
-            pretty,
-        )?));
-    }
-
-    let mut local = service.messages(
-        std::slice::from_ref(&args.session_id),
-        args.project.as_deref(),
-        source_filter,
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-    )?;
-    let project_for_identity = project_identity_input(args.project.as_deref())?;
-    let request = PeerReadSessionRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
-        session_id: args.session_id.clone(),
-        project: build_peer_project_identity(&project_for_identity),
-        source: source_filter,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-    };
-
-    let mut peer_results = Vec::new();
-    for remote_name in &args.remotes {
-        let mut remote = peer_read_session(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&remote.peer_results);
-        annotate_peer_messages(
-            &mut remote.messages,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        peer_results.push(peer_result_for_messages(
-            remote_name,
-            "read/session",
-            remote.total_messages,
-            remote_mmr_version,
-        ));
-        local.messages.extend(remote.messages);
-    }
-
-    let mut messages = dedup_api_messages(local.messages);
-    sort_api_messages_chronological(&mut messages);
-    let total = messages.len() as i64;
-    let paged = apply_message_output_pagination(messages, args.limit, args.offset);
-    let next_offset = args.offset.saturating_add(paged.len()) as i64;
-    let next_page = args.limit.is_some() && next_offset < total;
-    let response = ApiMessagesResponse {
-        messages: paged,
-        total_messages: total,
-        next_page,
-        next_offset,
-        next_command: None,
-        session_selection: None,
-        peer_results: Some(peer_results),
-    };
-    serialize(&response, pretty)
-}
-
-fn read_source_with_remotes_response(
-    service: &QueryService,
-    args: ReadSourceArgs,
-    source: SourceFilter,
-    pretty: bool,
-) -> Result<String> {
-    if args.format == ReadFormatArg::Tree {
-        return Err(anyhow::Error::new(peer_cli_failure(
-            "read/source",
-            "peer_unsupported_format",
-            None,
-            "--remote is not supported with --format tree",
-            pretty,
-        )?));
-    }
-
-    let mut local = service.messages(
-        &[],
-        None,
-        Some(source),
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-    )?;
-    let request = PeerReadSourceRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
-        source,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-    };
-    let mut peer_results = Vec::new();
-    for remote_name in &args.remotes {
-        let mut remote = peer_read_source(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&remote.peer_results);
-        annotate_peer_messages(
-            &mut remote.messages,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        peer_results.push(peer_result_for_messages(
-            remote_name,
-            "read/source",
-            remote.total_messages,
-            remote_mmr_version,
-        ));
-        local.messages.extend(remote.messages);
-    }
-    let mut messages = dedup_api_messages(local.messages);
-    sort_api_messages_chronological(&mut messages);
-    let total = messages.len() as i64;
-    let paged = apply_message_output_pagination(messages, args.limit, args.offset);
-    let next_offset = args.offset.saturating_add(paged.len()) as i64;
-    let next_page = args.limit.is_some() && next_offset < total;
-    let response = ApiMessagesResponse {
-        messages: paged,
-        total_messages: total,
-        next_page,
-        next_offset,
-        next_command: None,
-        session_selection: None,
-        peer_results: Some(peer_results),
-    };
-    serialize(&response, pretty)
-}
-
-fn peer_read_project(
-    host: &str,
-    request: &PeerProjectRequest,
-    pretty: bool,
-) -> Result<ApiMessagesResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "read-project", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("read/project", error, pretty))
-}
-
-fn peer_list_projects(
-    host: &str,
-    request: &PeerListProjectsRequest,
-    pretty: bool,
-) -> Result<ApiProjectsResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "list-projects", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("list/projects", error, pretty))
-}
-
-fn peer_list_sessions(
-    host: &str,
-    request: &PeerListSessionsRequest,
-    pretty: bool,
-) -> Result<ApiSessionsResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "list-sessions", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("list/sessions", error, pretty))
-}
-
-fn peer_read_session(
-    host: &str,
-    request: &PeerReadSessionRequest,
-    pretty: bool,
-) -> Result<ApiMessagesResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "read-session", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("read/session", error, pretty))
-}
-
-fn peer_read_source(
-    host: &str,
-    request: &PeerReadSourceRequest,
-    pretty: bool,
-) -> Result<ApiMessagesResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "read-source", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("read/source", error, pretty))
-}
-
-fn peer_context_project(
-    host: &str,
-    request: &PeerProjectRequest,
-    pretty: bool,
-) -> Result<ContextResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "context-project", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("context/project", error, pretty))
-}
-
-fn peer_context_source(
-    host: &str,
-    request: &PeerReadSourceRequest,
-    pretty: bool,
-) -> Result<ContextResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "context-source", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("context/source", error, pretty))
-}
-
-fn peer_recall(
-    host: &str,
-    request: &PeerProjectRequest,
-    pretty: bool,
-) -> Result<ApiMessagesResponse> {
-    run_peer_json(
-        host,
-        &["mmr", "peer", "recall", "--request-json", "-"],
-        Some(request),
-    )
-    .map_err(|error| peer_anyhow_error("recall", error, pretty))
-}
-
-fn annotate_peer_messages(
-    messages: &mut [ApiMessage],
-    host: &str,
-    remote_mmr_version: Option<String>,
-) {
-    for message in messages {
-        message.origin = Some(ApiMessageOrigin {
-            host: host.to_string(),
-            transport: "ssh".to_string(),
-            remote_mmr_version: remote_mmr_version.clone(),
-        });
-    }
-}
-
-fn annotate_peer_projects(
-    projects: &mut [ApiProject],
-    host: &str,
-    remote_mmr_version: Option<String>,
-) {
-    for project in projects {
-        project.origin = Some(ApiMessageOrigin {
-            host: host.to_string(),
-            transport: "ssh".to_string(),
-            remote_mmr_version: remote_mmr_version.clone(),
-        });
-    }
-}
-
-fn annotate_peer_sessions(
-    sessions: &mut [ApiSession],
-    host: &str,
-    remote_mmr_version: Option<String>,
-) {
-    for session in sessions {
-        session.origin = Some(ApiMessageOrigin {
-            host: host.to_string(),
-            transport: "ssh".to_string(),
-            remote_mmr_version: remote_mmr_version.clone(),
-        });
-    }
-}
-
-fn remote_version_from_peer_results(peer_results: &Option<Vec<ApiPeerResult>>) -> Option<String> {
-    peer_results
-        .as_ref()
-        .and_then(|items| items.first())
-        .and_then(|item| item.remote_mmr_version.clone())
-}
-
-fn peer_result_for_messages(
+/// Call `mmr peer <command>` on `host`, where `command` is the slash-separated
+/// name (`read/project` runs `mmr peer read-project`). A failure becomes the
+/// structured CLI failure for `command`.
+fn call_peer<Req: Serialize, Resp: for<'de> Deserialize<'de>>(
     host: &str,
     command: &str,
-    total_messages: i64,
-    remote_mmr_version: Option<String>,
-) -> ApiPeerResult {
-    ApiPeerResult {
+    request: &Req,
+    pretty: bool,
+) -> Result<Resp> {
+    let subcommand = command.replace('/', "-");
+    run_peer_json(
+        host,
+        &["mmr", "peer", &subcommand, "--request-json", "-"],
+        Some(request),
+    )
+    .map_err(|error| peer_anyhow_error(command, error, pretty))
+}
+
+/// Call `mmr peer <command>` on each remote in turn and tag every returned message
+/// with the remote it came from.
+fn remote_messages<Req: Serialize>(
+    remotes: &[String],
+    command: &str,
+    request: &Req,
+    pretty: bool,
+) -> Result<(Vec<ApiMessage>, Vec<ApiPeerResult>)> {
+    let mut messages = Vec::new();
+    let mut peer_results = Vec::new();
+    for host in remotes {
+        let mut response: ApiMessagesResponse = call_peer(host, command, request, pretty)?;
+        let origin = peer_origin(host, &response.peer_results);
+        for message in &mut response.messages {
+            message.origin = Some(origin.clone());
+        }
+        peer_results.push(remote_peer_result(
+            &origin,
+            command,
+            Some(response.total_messages),
+            None,
+        ));
+        messages.extend(response.messages);
+    }
+    Ok((messages, peer_results))
+}
+
+/// The origin to tag a remote's items with. The remote reports its version in its
+/// own first `peer_results` entry.
+fn peer_origin(host: &str, peer_results: &Option<Vec<ApiPeerResult>>) -> ApiMessageOrigin {
+    ApiMessageOrigin {
         host: host.to_string(),
         transport: "ssh".to_string(),
-        command: command.to_string(),
-        status: "ok".to_string(),
-        remote_mmr_version,
-        total_messages: Some(total_messages),
-        total_sessions: None,
+        remote_mmr_version: peer_results
+            .as_ref()
+            .and_then(|items| items.first())
+            .and_then(|item| item.remote_mmr_version.clone()),
     }
 }
 
-fn apply_generic_pagination<T>(items: Vec<T>, limit: Option<usize>, offset: usize) -> Vec<T> {
+fn remote_peer_result(
+    origin: &ApiMessageOrigin,
+    command: &str,
+    total_messages: Option<i64>,
+    total_sessions: Option<i64>,
+) -> ApiPeerResult {
+    ApiPeerResult {
+        host: origin.host.clone(),
+        transport: origin.transport.clone(),
+        command: command.to_string(),
+        status: "ok".to_string(),
+        remote_mmr_version: origin.remote_mmr_version.clone(),
+        total_messages,
+        total_sessions,
+    }
+}
+
+fn paginate<T>(items: Vec<T>, limit: Option<usize>, offset: usize) -> Vec<T> {
     let iter = items.into_iter().skip(offset);
     match limit {
         Some(limit) => iter.take(limit).collect(),
@@ -1997,60 +1748,58 @@ fn newest_window_api_messages(mut messages: Vec<ApiMessage>, limit: usize) -> Ve
     window
 }
 
-fn apply_message_output_pagination(
+fn oldest_first() -> SortOptions {
+    SortOptions::new(SortBy::Timestamp, SortOrder::Asc)
+}
+
+/// Join local and remote messages, drop duplicates, and sort oldest first.
+fn merge_messages(mut local: Vec<ApiMessage>, remote: Vec<ApiMessage>) -> Vec<ApiMessage> {
+    local.extend(remote);
+    let mut messages = dedup_api_messages(local);
+    sort_api_messages_chronological(&mut messages);
+    messages
+}
+
+/// Page merged messages forward from the oldest, as every `--remote` read does.
+fn merged_messages_page(
     messages: Vec<ApiMessage>,
     limit: Option<usize>,
     offset: usize,
-) -> Vec<ApiMessage> {
-    let iter = messages.into_iter().skip(offset);
-    match limit {
-        Some(limit) => iter.take(limit).collect(),
-        None => iter.collect(),
+    session_selection: Option<crate::types::api::SessionSelection>,
+    peer_results: Vec<ApiPeerResult>,
+) -> ApiMessagesResponse {
+    let total = messages.len() as i64;
+    let paged = paginate(messages, limit, offset);
+    let next_offset = offset.saturating_add(paged.len()) as i64;
+    ApiMessagesResponse {
+        messages: paged,
+        total_messages: total,
+        next_page: limit.is_some() && next_offset < total,
+        next_offset,
+        next_command: None,
+        session_selection,
+        peer_results: Some(peer_results),
     }
 }
 
-fn apply_message_page_to_response(
-    mut response: ApiMessagesResponse,
+/// Keep one page counted back from the newest message, returned oldest first.
+/// With no `--limit` and no `--offset`, keep every message in its current order.
+fn newest_page(
+    mut messages: Vec<ApiMessage>,
     limit: Option<usize>,
     offset: usize,
-) -> ApiMessagesResponse {
-    let total = response.messages.len() as i64;
+) -> Vec<ApiMessage> {
     if limit.is_none() && offset == 0 {
-        response.total_messages = total;
-        return response;
+        return messages;
     }
-    sort_api_messages_chronological(&mut response.messages);
-    let descending = response.messages.into_iter().rev().collect::<Vec<_>>();
-    let mut paged = apply_message_output_pagination(descending, limit, offset);
-    paged.reverse();
-    response.messages = paged;
-    response.total_messages = total;
-    response
+    sort_api_messages_chronological(&mut messages);
+    messages.reverse();
+    let mut page = paginate(messages, limit, offset);
+    page.reverse();
+    page
 }
 
 fn build_next_read_project_command(
-    source_filter: Option<SourceFilter>,
-    project: Option<&str>,
-    limit: Option<usize>,
-    next_offset: usize,
-) -> String {
-    let mut parts = vec!["mmr".to_string()];
-    if let Some(source) = source_filter {
-        parts.push(format!("--source {}", source_name(source)));
-    }
-    parts.push("read project".to_string());
-    if let Some(project) = project {
-        parts.push("--project".to_string());
-        parts.push(shell_quote(project));
-    }
-    if let Some(limit) = limit {
-        parts.push(format!("--limit {limit}"));
-    }
-    parts.push(format!("--offset {next_offset}"));
-    parts.join(" ")
-}
-
-fn build_next_read_project_command_with_remotes(
     source_filter: Option<SourceFilter>,
     project: Option<&str>,
     remotes: &[String],
@@ -2059,7 +1808,7 @@ fn build_next_read_project_command_with_remotes(
 ) -> String {
     let mut parts = vec!["mmr".to_string()];
     if let Some(source) = source_filter {
-        parts.push(format!("--source {}", source_name(source)));
+        parts.push(format!("--source {}", source.as_str()));
     }
     parts.push("read project".to_string());
     if let Some(project) = project {
@@ -2098,371 +1847,139 @@ fn context_command_response(
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
-    match args.command {
+    let response = match args.command {
         ContextCommand::Project(args) => {
-            if !args.remotes.is_empty() {
-                return context_project_with_remotes_response(service, args, source_filter, pretty);
-            }
             let project = args
                 .project
                 .or_else(|| effective_project_scope(None, false));
-            let sessions = service.sessions(
-                project.as_deref(),
-                source_filter,
-                None,
-                0,
-                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-            )?;
-            let messages = service.messages(
-                &[],
-                project.as_deref(),
-                source_filter,
-                MessageQueryOptions::new(
+            if args.remotes.is_empty() {
+                local_context(
+                    service,
+                    "project",
+                    project,
+                    source_filter,
                     Some(args.limit),
                     0,
-                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                ),
-            )?;
-            serialize(
-                &ContextResponse {
-                    command: "context/project".to_string(),
-                    scope: "project".to_string(),
-                    source: source_filter.map(source_name).map(str::to_string),
-                    project,
-                    total_sessions: sessions.total_sessions,
-                    total_messages: messages.total_messages,
-                    sessions: sessions.sessions,
-                    messages: messages.messages,
-                    peer_results: None,
-                },
-                pretty,
-            )
+                )?
+            } else {
+                let request = PeerProjectRequest {
+                    protocol_version: PEER_PROTOCOL_VERSION,
+                    project: peer_project_identity(project.as_deref())?,
+                    source: source_filter,
+                    all: false,
+                    limits: PeerRequestLimits::default(),
+                    recall: None,
+                };
+                let local = local_context(service, "project", project, source_filter, None, 0)?;
+                context_with_remotes(local, &args.remotes, &request, args.limit, pretty)?
+            }
         }
         ContextCommand::Source(args) => {
             let source = require_explicit_source(cli_source, "context source")?;
-            if !args.remotes.is_empty() {
-                return context_source_with_remotes_response(service, args, source, pretty);
+            if args.remotes.is_empty() {
+                local_context(service, "source", None, Some(source), Some(args.limit), 0)?
+            } else {
+                let local = local_context(service, "source", None, Some(source), None, 0)?;
+                let request = PeerReadSourceRequest {
+                    protocol_version: PEER_PROTOCOL_VERSION,
+                    source,
+                    limits: PeerRequestLimits::default(),
+                };
+                context_with_remotes(local, &args.remotes, &request, args.limit, pretty)?
             }
-            let sessions = service.sessions(
-                None,
-                Some(source),
-                None,
-                0,
-                SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-            )?;
-            let messages = service.messages(
-                &[],
-                None,
-                Some(source),
-                MessageQueryOptions::new(
-                    Some(args.limit),
-                    0,
-                    SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                ),
-            )?;
-            serialize(
-                &ContextResponse {
-                    command: "context/source".to_string(),
-                    scope: "source".to_string(),
-                    source: Some(source_name(source).to_string()),
-                    project: None,
-                    total_sessions: sessions.total_sessions,
-                    total_messages: messages.total_messages,
-                    sessions: sessions.sessions,
-                    messages: messages.messages,
-                    peer_results: None,
-                },
-                pretty,
-            )
         }
-    }
-}
-
-fn context_project_with_remotes_response(
-    service: &QueryService,
-    args: ContextProjectArgs,
-    source_filter: Option<SourceFilter>,
-    pretty: bool,
-) -> Result<String> {
-    let project = args
-        .project
-        .clone()
-        .or_else(|| effective_project_scope(None, false));
-    let project_for_identity = project_identity_input(project.as_deref())?;
-    let request = PeerProjectRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
-        project: build_peer_project_identity(&project_for_identity),
-        source: source_filter,
-        all: false,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-        recall: None,
     };
-
-    let sessions = service.sessions(
-        project.as_deref(),
-        source_filter,
-        None,
-        0,
-        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-    )?;
-    let local_messages = service.messages(
-        &[],
-        project.as_deref(),
-        source_filter,
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-    )?;
-    let local_total_messages = local_messages.total_messages;
-
-    let mut all_sessions = sessions.sessions;
-    let mut all_messages = local_messages.messages;
-    let mut peer_results = Vec::new();
-
-    for remote_name in &args.remotes {
-        let mut remote = peer_context_project(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote
-            .peer_results
-            .as_ref()
-            .and_then(|items| items.first())
-            .and_then(|item| item.remote_mmr_version.clone());
-        annotate_peer_messages(
-            &mut remote.messages,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        annotate_peer_sessions(
-            &mut remote.sessions,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        peer_results.push(ApiPeerResult {
-            host: remote_name.to_string(),
-            transport: "ssh".to_string(),
-            command: "context/project".to_string(),
-            status: "ok".to_string(),
-            remote_mmr_version,
-            total_messages: Some(remote.total_messages),
-            total_sessions: Some(remote.total_sessions),
-        });
-        all_sessions.extend(remote.sessions);
-        all_messages.extend(remote.messages);
-    }
-
-    all_messages = dedup_api_messages(all_messages);
-    let messages = newest_window_api_messages(all_messages, args.limit);
-    all_sessions.sort_by(|a, b| {
-        b.last_timestamp
-            .cmp(&a.last_timestamp)
-            .then_with(|| a.session_id.cmp(&b.session_id))
-            .then_with(|| a.source.cmp(&b.source))
-    });
-    all_sessions.dedup_by(|a, b| {
-        a.source == b.source && a.project_name == b.project_name && a.session_id == b.session_id
-    });
-
-    serialize(
-        &ContextResponse {
-            command: "context/project".to_string(),
-            scope: "project".to_string(),
-            source: source_filter.map(source_name).map(str::to_string),
-            project,
-            total_sessions: all_sessions.len() as i64,
-            total_messages: local_total_messages
-                + peer_results
-                    .iter()
-                    .filter_map(|result| result.total_messages)
-                    .sum::<i64>(),
-            sessions: all_sessions,
-            messages,
-            peer_results: Some(peer_results),
-        },
-        pretty,
-    )
+    serialize(&response, pretty)
 }
 
-fn context_source_with_remotes_response(
+/// `context` for one machine: every session in scope, newest first, and one page of
+/// messages, oldest first. `scope` is `project` or `source`.
+fn local_context(
     service: &QueryService,
-    args: ContextSourceArgs,
-    source: SourceFilter,
-    pretty: bool,
-) -> Result<String> {
+    scope: &str,
+    project: Option<String>,
+    source: Option<SourceFilter>,
+    limit: Option<usize>,
+    offset: usize,
+) -> Result<ContextResponse> {
     let sessions = service.sessions(
-        None,
-        Some(source),
-        None,
-        0,
-        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-    )?;
-    let local_messages = service.messages(
-        &[],
-        None,
-        Some(source),
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-    )?;
-    let local_total_messages = local_messages.total_messages;
-    let request = PeerReadSourceRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
+        project.as_deref(),
         source,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-    };
-
-    let mut all_sessions = sessions.sessions;
-    let mut all_messages = local_messages.messages;
-    let mut peer_results = Vec::new();
-    for remote_name in &args.remotes {
-        let mut remote = peer_context_source(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&remote.peer_results);
-        annotate_peer_messages(
-            &mut remote.messages,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        annotate_peer_sessions(
-            &mut remote.sessions,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        peer_results.push(ApiPeerResult {
-            host: remote_name.to_string(),
-            transport: "ssh".to_string(),
-            command: "context/source".to_string(),
-            status: "ok".to_string(),
-            remote_mmr_version,
-            total_messages: Some(remote.total_messages),
-            total_sessions: Some(remote.total_sessions),
-        });
-        all_sessions.extend(remote.sessions);
-        all_messages.extend(remote.messages);
-    }
-
-    all_messages = dedup_api_messages(all_messages);
-    let messages = newest_window_api_messages(all_messages, args.limit);
-    sort_api_sessions(&mut all_sessions, SortBy::Timestamp, SortOrder::Desc);
-
-    serialize(
-        &ContextResponse {
-            command: "context/source".to_string(),
-            scope: "source".to_string(),
-            source: Some(source_name(source).to_string()),
-            project: None,
-            total_sessions: all_sessions.len() as i64,
-            total_messages: local_total_messages
-                + peer_results
-                    .iter()
-                    .filter_map(|result| result.total_messages)
-                    .sum::<i64>(),
-            sessions: all_sessions,
-            messages,
-            peer_results: Some(peer_results),
-        },
-        pretty,
-    )
-}
-
-fn project_messages_with_remotes_for_summary(
-    service: &QueryService,
-    project: Option<&str>,
-    source_filter: Option<SourceFilter>,
-    remotes: &[String],
-    pretty: bool,
-) -> Result<ApiMessagesResponse> {
-    let mut local = local_project_messages_unpaged(service, project, source_filter)?;
-    let project_for_identity = project_identity_input(project)?;
-    let request = PeerProjectRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
-        project: build_peer_project_identity(&project_for_identity),
-        source: source_filter,
-        all: false,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-        recall: None,
-    };
-    for remote_name in remotes {
-        let mut remote = peer_read_project(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&remote.peer_results);
-        annotate_peer_messages(&mut remote.messages, remote_name, remote_mmr_version);
-        local.messages.extend(remote.messages);
-    }
-    local.messages = dedup_api_messages(local.messages);
-    sort_api_messages_chronological(&mut local.messages);
-    local.total_messages = local.messages.len() as i64;
-    Ok(local)
-}
-
-fn session_messages_with_remotes_for_summary(
-    service: &QueryService,
-    session_id: &str,
-    project: Option<&str>,
-    source_filter: Option<SourceFilter>,
-    remotes: &[String],
-    pretty: bool,
-) -> Result<ApiMessagesResponse> {
-    let mut local = service.messages(
-        &[session_id.to_string()],
+        None,
+        0,
+        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+    )?;
+    let messages = service.messages(
+        &[],
+        project.as_deref(),
+        source,
+        MessageQueryOptions::new(limit, offset, oldest_first()),
+    )?;
+    Ok(ContextResponse {
+        command: format!("context/{scope}"),
+        scope: scope.to_string(),
+        source: source.map(SourceFilter::as_str).map(str::to_string),
         project,
-        source_filter,
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-    )?;
-    let project_for_identity = project_identity_input(project)?;
-    let request = PeerReadSessionRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
-        session_id: session_id.to_string(),
-        project: build_peer_project_identity(&project_for_identity),
-        source: source_filter,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-    };
-    for remote_name in remotes {
-        let mut remote = peer_read_session(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&remote.peer_results);
-        annotate_peer_messages(&mut remote.messages, remote_name, remote_mmr_version);
-        local.messages.extend(remote.messages);
-    }
-    local.messages = dedup_api_messages(local.messages);
-    sort_api_messages_chronological(&mut local.messages);
-    local.total_messages = local.messages.len() as i64;
-    Ok(local)
+        total_sessions: sessions.total_sessions,
+        total_messages: messages.total_messages,
+        sessions: sessions.sessions,
+        messages: messages.messages,
+        peer_results: None,
+    })
 }
 
-fn source_messages_with_remotes_for_summary(
-    service: &QueryService,
-    source: SourceFilter,
+/// Merge each `--remote`'s `context` into the local one. Messages are deduplicated
+/// and the newest `limit` kept. `total_messages` adds each remote's own total.
+/// `context project` also drops sessions found on more than one machine.
+fn context_with_remotes<Req: Serialize>(
+    mut context: ContextResponse,
     remotes: &[String],
+    request: &Req,
+    limit: usize,
     pretty: bool,
-) -> Result<ApiMessagesResponse> {
-    let mut local = service.messages(
-        &[],
-        None,
-        Some(source),
-        MessageQueryOptions::new(None, 0, SortOptions::new(SortBy::Timestamp, SortOrder::Asc)),
-    )?;
-    let request = PeerReadSourceRequest {
-        protocol_version: PEER_PROTOCOL_VERSION,
-        source,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-    };
-    for remote_name in remotes {
-        let mut remote = peer_read_source(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote_version_from_peer_results(&remote.peer_results);
-        annotate_peer_messages(&mut remote.messages, remote_name, remote_mmr_version);
-        local.messages.extend(remote.messages);
+) -> Result<ContextResponse> {
+    let mut peer_results = Vec::new();
+    for host in remotes {
+        let mut remote: ContextResponse = call_peer(host, &context.command, request, pretty)?;
+        let origin = peer_origin(host, &remote.peer_results);
+        for message in &mut remote.messages {
+            message.origin = Some(origin.clone());
+        }
+        for session in &mut remote.sessions {
+            session.origin = Some(origin.clone());
+        }
+        peer_results.push(remote_peer_result(
+            &origin,
+            &context.command,
+            Some(remote.total_messages),
+            Some(remote.total_sessions),
+        ));
+        context.sessions.extend(remote.sessions);
+        context.messages.extend(remote.messages);
     }
-    local.messages = dedup_api_messages(local.messages);
-    sort_api_messages_chronological(&mut local.messages);
-    local.total_messages = local.messages.len() as i64;
-    Ok(local)
+
+    let messages = dedup_api_messages(std::mem::take(&mut context.messages));
+    context.messages = newest_window_api_messages(messages, limit);
+    if context.scope == "project" {
+        context.sessions.sort_by(|a, b| {
+            b.last_timestamp
+                .cmp(&a.last_timestamp)
+                .then_with(|| a.session_id.cmp(&b.session_id))
+                .then_with(|| a.source.cmp(&b.source))
+        });
+        context.sessions.dedup_by(|a, b| {
+            a.source == b.source && a.project_name == b.project_name && a.session_id == b.session_id
+        });
+    } else {
+        sort_api_sessions(&mut context.sessions, SortBy::Timestamp, SortOrder::Desc);
+    }
+    context.total_sessions = context.sessions.len() as i64;
+    context.total_messages += peer_results
+        .iter()
+        .filter_map(|result| result.total_messages)
+        .sum::<i64>();
+    context.peer_results = Some(peer_results);
+    Ok(context)
 }
 
 async fn summarize_command_response(
@@ -2477,102 +1994,57 @@ async fn summarize_command_response(
             let project = args
                 .project
                 .unwrap_or(current_dir_project().context("could not resolve current directory")?);
-            let model = effective_summariser_model(args.runner.model.as_deref());
-            let page = args.limit.is_some() || args.offset > 0;
-            if !args.remotes.is_empty() || page {
-                let messages = if !args.remotes.is_empty() {
-                    project_messages_with_remotes_for_summary(
-                        service,
-                        Some(project.as_str()),
-                        source_filter,
-                        &args.remotes,
-                        pretty,
-                    )?
-                } else {
-                    local_project_messages_unpaged(service, Some(project.as_str()), source_filter)?
-                };
-                let messages = apply_message_page_to_response(messages, args.limit, args.offset);
-                let formatted = format_messages_as_transcript_input(&messages.messages);
-                let response = ai::summarize_formatted_messages(
-                    args.runner.instructions.as_deref(),
-                    &model,
-                    &formatted,
+            if args.remotes.is_empty() && args.limit.is_none() && args.offset == 0 {
+                let model = effective_summariser_model(args.runner.model.as_deref());
+                let response = ai::remember(
+                    service,
+                    RememberRequest {
+                        project: project.as_str(),
+                        source: source_filter,
+                        instructions: args.runner.instructions.as_deref(),
+                        model: &model,
+                    },
                 )
                 .await?;
                 return format_remember_response(&response, args.runner.output_format, pretty);
             }
-            let response = ai::remember(
-                service,
-                RememberRequest {
-                    project: project.as_str(),
-                    source: source_filter,
-                    instructions: args.runner.instructions.as_deref(),
-                    model: &model,
-                },
-            )
-            .await?;
-            format_remember_response(&response, args.runner.output_format, pretty)
+            let scope = MessageScope::Project(Some(project.as_str()));
+            let messages =
+                transcript_messages(service, scope, source_filter, &args.remotes, pretty)?;
+            let messages = newest_page(messages, args.limit, args.offset);
+            summarize_transcript(&args.runner, &messages, pretty).await
         }
         SummarizeCommand::Session(args) => {
-            let messages = if args.remotes.is_empty() {
-                service.messages(
-                    std::slice::from_ref(&args.session_id),
-                    args.project.as_deref(),
-                    source_filter,
-                    MessageQueryOptions::new(
-                        None,
-                        0,
-                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                    ),
-                )?
-            } else {
-                session_messages_with_remotes_for_summary(
-                    service,
-                    &args.session_id,
-                    args.project.as_deref(),
-                    source_filter,
-                    &args.remotes,
-                    pretty,
-                )?
+            let scope = MessageScope::Session {
+                session_id: &args.session_id,
+                project: args.project.as_deref(),
             };
-            let messages = apply_message_page_to_response(messages, args.limit, args.offset);
-            let formatted = format_messages_as_transcript_input(&messages.messages);
-            let model = effective_summariser_model(args.runner.model.as_deref());
-            let response = ai::summarize_formatted_messages(
-                args.runner.instructions.as_deref(),
-                &model,
-                &formatted,
-            )
-            .await?;
-            format_remember_response(&response, args.runner.output_format, pretty)
+            let messages =
+                transcript_messages(service, scope, source_filter, &args.remotes, pretty)?;
+            let messages = newest_page(messages, args.limit, args.offset);
+            summarize_transcript(&args.runner, &messages, pretty).await
         }
         SummarizeCommand::Source(args) => {
             let source = require_explicit_source(cli_source, "summarize source")?;
-            let messages = if args.remotes.is_empty() {
-                service.messages(
-                    &[],
-                    None,
-                    Some(source),
-                    MessageQueryOptions::new(
-                        None,
-                        0,
-                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                    ),
-                )?
-            } else {
-                source_messages_with_remotes_for_summary(service, source, &args.remotes, pretty)?
-            };
-            let formatted = format_messages_as_transcript_input(&messages.messages);
-            let model = effective_summariser_model(args.runner.model.as_deref());
-            let response = ai::summarize_formatted_messages(
-                args.runner.instructions.as_deref(),
-                &model,
-                &formatted,
-            )
-            .await?;
-            format_remember_response(&response, args.runner.output_format, pretty)
+            let scope = MessageScope::Source(source);
+            let messages =
+                transcript_messages(service, scope, Some(source), &args.remotes, pretty)?;
+            summarize_transcript(&args.runner, &messages, pretty).await
         }
     }
+}
+
+async fn summarize_transcript(
+    runner: &SummaryRunnerArgs,
+    messages: &[ApiMessage],
+    pretty: bool,
+) -> Result<String> {
+    let model = effective_summariser_model(runner.model.as_deref());
+    let formatted = format_messages_as_transcript_input(messages);
+    let response =
+        ai::summarize_formatted_messages(runner.instructions.as_deref(), &model, &formatted)
+            .await?;
+    format_remember_response(&response, runner.output_format, pretty)
 }
 
 async fn compact_command_response(
@@ -2582,82 +2054,39 @@ async fn compact_command_response(
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
-    match args.command {
+    let (messages, runner) = match args.command {
         CompactCommand::Project(args) => {
             let project = args
                 .project
                 .unwrap_or(current_dir_project().context("could not resolve current directory")?);
-            let messages = if args.remotes.is_empty() {
-                service.messages(
-                    &[],
-                    Some(project.as_str()),
-                    source_filter,
-                    MessageQueryOptions::new(
-                        None,
-                        0,
-                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                    ),
-                )?
-            } else {
-                project_messages_with_remotes_for_summary(
-                    service,
-                    Some(project.as_str()),
-                    source_filter,
-                    &args.remotes,
-                    pretty,
-                )?
-            };
-            let formatted = format_messages_as_transcript_input(&messages.messages);
-            let response = compact_formatted_messages(&args.runner, &formatted).await?;
-            format_compact_response(&response, args.runner.output_format, pretty)
+            let scope = MessageScope::Project(Some(project.as_str()));
+            (
+                transcript_messages(service, scope, source_filter, &args.remotes, pretty)?,
+                args.runner,
+            )
         }
         CompactCommand::Session(args) => {
-            let messages = if args.remotes.is_empty() {
-                service.messages(
-                    std::slice::from_ref(&args.session_id),
-                    args.project.as_deref(),
-                    source_filter,
-                    MessageQueryOptions::new(
-                        None,
-                        0,
-                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                    ),
-                )?
-            } else {
-                session_messages_with_remotes_for_summary(
-                    service,
-                    &args.session_id,
-                    args.project.as_deref(),
-                    source_filter,
-                    &args.remotes,
-                    pretty,
-                )?
+            let scope = MessageScope::Session {
+                session_id: &args.session_id,
+                project: args.project.as_deref(),
             };
-            let formatted = format_messages_as_transcript_input(&messages.messages);
-            let response = compact_formatted_messages(&args.runner, &formatted).await?;
-            format_compact_response(&response, args.runner.output_format, pretty)
+            (
+                transcript_messages(service, scope, source_filter, &args.remotes, pretty)?,
+                args.runner,
+            )
         }
         CompactCommand::Source(args) => {
             let source = require_explicit_source(cli_source, "compact source")?;
-            let messages = if args.remotes.is_empty() {
-                service.messages(
-                    &[],
-                    None,
-                    Some(source),
-                    MessageQueryOptions::new(
-                        None,
-                        0,
-                        SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-                    ),
-                )?
-            } else {
-                source_messages_with_remotes_for_summary(service, source, &args.remotes, pretty)?
-            };
-            let formatted = format_messages_as_transcript_input(&messages.messages);
-            let response = compact_formatted_messages(&args.runner, &formatted).await?;
-            format_compact_response(&response, args.runner.output_format, pretty)
+            let scope = MessageScope::Source(source);
+            (
+                transcript_messages(service, scope, Some(source), &args.remotes, pretty)?,
+                args.runner,
+            )
         }
-    }
+    };
+    let formatted = format_messages_as_transcript_input(&messages);
+    let response = compact_formatted_messages(&runner, &formatted).await?;
+    format_compact_response(&response, runner.output_format, pretty)
 }
 
 async fn compact_formatted_messages(
@@ -2730,14 +2159,12 @@ fn import_command_response(
     pretty: bool,
 ) -> Result<String> {
     match &args.command {
-        ImportCommand::Session(args) => {
-            match import_session_response(args, source_filter, pretty) {
-                Ok(response) => serialize(&response, pretty),
-                Err(failure) => {
-                    teleport_fail(rebrand_teleport_failure(failure, "import/session"), pretty)
-                }
+        ImportCommand::Session(args) => match import_session_response(args, source_filter) {
+            Ok(response) => serialize(&response, pretty),
+            Err(failure) => {
+                teleport_fail(rebrand_teleport_failure(failure, "import/session"), pretty)
             }
-        }
+        },
         ImportCommand::Bundle(args) => import_bundle_response(args, pretty),
     }
 }
@@ -3167,7 +2594,6 @@ fn read_note_text(text: Vec<String>) -> Result<String> {
 fn import_session_response(
     pull: &ImportSessionArgs,
     source_filter: Option<SourceFilter>,
-    pretty: bool,
 ) -> std::result::Result<ImportSessionResponse, TeleportFailure> {
     if pull.session.is_some() && pull.latest {
         return Err(TeleportFailure::usage(
@@ -3195,7 +2621,7 @@ fn import_session_response(
         &["mmr", "peer", "teleport-pack", "--request-json", "-"],
         Some(&request),
     )
-    .map_err(|error| peer_error_to_teleport_failure("import/session", error, pretty))?;
+    .map_err(|error| peer_error_to_teleport_failure("import/session", error))?;
 
     verify_artifact_hashes(&remote.bundle)
         .map_err(|error| TeleportFailure::runtime("import/session", error.to_string()))?;
@@ -3300,7 +2726,6 @@ fn teleport_pull_cache_path(bundle_id: &str) -> Result<PathBuf> {
 fn peer_error_to_teleport_failure(
     command: &'static str,
     error: crate::peer::PeerCommandError,
-    _pretty: bool,
 ) -> TeleportFailure {
     let exit_code = if error.error_kind == "peer_target_invalid" {
         2
@@ -3333,60 +2758,61 @@ fn peer_command_response(
             serialize(&peer_status(), pretty)
         }
         PeerCommand::ListProjects(args) => {
-            let request: PeerListProjectsRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_list_projects_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_list_projects_local_response(service, request, source_filter)
+            })
         }
         PeerCommand::ListSessions(args) => {
-            let request: PeerListSessionsRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_list_sessions_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_list_sessions_local_response(service, request, source_filter)
+            })
         }
         PeerCommand::ReadSession(args) => {
-            let request: PeerReadSessionRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_read_session_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_read_session_local_response(service, request, source_filter)
+            })
         }
         PeerCommand::ReadProject(args) => {
-            let request: PeerProjectRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_read_project_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_read_project_local_response(service, request, source_filter)
+            })
         }
         PeerCommand::ReadSource(args) => {
-            let request: PeerReadSourceRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_read_source_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_read_source_local_response(service, request, source_filter)
+            })
         }
         PeerCommand::ContextProject(args) => {
-            let request: PeerProjectRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_context_project_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_context_project_local_response(service, request, source_filter)
+            })
         }
         PeerCommand::ContextSource(args) => {
-            let request: PeerReadSourceRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_context_source_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_context_source_local_response(service, request, source_filter)
+            })
         }
-        PeerCommand::Recall(args) => {
-            let request: PeerProjectRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_recall_local_response(&service, request, source_filter, pretty)?;
-            serialize(&response, pretty)
-        }
+        PeerCommand::Recall(args) => serve_peer(&args.request_json, pretty, |service, request| {
+            peer_recall_local_response(service, request, source_filter, pretty)
+        }),
         PeerCommand::TeleportPack(args) => {
-            let request: PeerTeleportPackRequest = read_peer_request(&args.request_json)?;
-            let service = QueryService::load()?;
-            let response = peer_teleport_pack_local_response(&service, request, source_filter)?;
-            serialize(&response, pretty)
+            serve_peer(&args.request_json, pretty, |service, request| {
+                peer_teleport_pack_local_response(service, request, source_filter)
+            })
         }
     }
+}
+
+/// Answer one `mmr peer <command> --request-json -` call on this machine.
+fn serve_peer<Req, Resp, F>(locator: &str, pretty: bool, respond: F) -> Result<String>
+where
+    Req: for<'de> Deserialize<'de>,
+    Resp: Serialize,
+    F: FnOnce(&QueryService, Req) -> Result<Resp>,
+{
+    let request: Req = read_peer_request(locator)?;
+    let service = QueryService::load()?;
+    serialize(&respond(&service, request)?, pretty)
 }
 
 fn read_peer_request<T: for<'de> Deserialize<'de>>(locator: &str) -> Result<T> {
@@ -3460,11 +2886,7 @@ fn peer_read_session_local_response(
         &[request.session_id],
         project.as_deref(),
         source,
-        MessageQueryOptions::new(
-            request.limits.limit,
-            request.limits.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
+        MessageQueryOptions::new(request.limits.limit, request.limits.offset, oldest_first()),
     )?;
     response.peer_results = Some(vec![local_peer_result(
         "read/session",
@@ -3485,11 +2907,7 @@ fn peer_read_source_local_response(
         &[],
         None,
         Some(source),
-        MessageQueryOptions::new(
-            request.limits.limit,
-            request.limits.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
+        MessageQueryOptions::new(request.limits.limit, request.limits.offset, oldest_first()),
     )?;
     response.peer_results = Some(vec![local_peer_result(
         "read/source",
@@ -3511,11 +2929,7 @@ fn peer_read_project_local_response(
         &[],
         project.as_deref(),
         source,
-        MessageQueryOptions::new(
-            request.limits.limit,
-            request.limits.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
+        MessageQueryOptions::new(request.limits.limit, request.limits.offset, oldest_first()),
     )?;
     response.peer_results = Some(vec![local_peer_result(
         "read/project",
@@ -3533,38 +2947,15 @@ fn peer_context_project_local_response(
     validate_peer_protocol(request.protocol_version)?;
     let source = request.source.or(cli_source_filter);
     let project = resolve_peer_project(service, &request.project, source)?;
-    let sessions = service.sessions(
-        project.as_deref(),
-        source,
-        None,
-        0,
-        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
-    )?;
-    let messages = service.messages(
-        &[],
-        project.as_deref(),
-        source,
-        MessageQueryOptions::new(
-            request.limits.limit,
-            request.limits.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
-    )?;
-    Ok(ContextResponse {
-        command: "context/project".to_string(),
-        scope: "project".to_string(),
-        source: source.map(source_name).map(str::to_string),
+    let context = local_context(
+        service,
+        "project",
         project,
-        total_sessions: sessions.total_sessions,
-        total_messages: messages.total_messages,
-        sessions: sessions.sessions,
-        messages: messages.messages,
-        peer_results: Some(vec![local_peer_result(
-            "context/project",
-            Some(messages.total_messages),
-            Some(sessions.total_sessions),
-        )]),
-    })
+        source,
+        request.limits.limit,
+        request.limits.offset,
+    )?;
+    Ok(with_local_context_peer_result(context))
 }
 
 fn peer_context_source_local_response(
@@ -3574,38 +2965,24 @@ fn peer_context_source_local_response(
 ) -> Result<ContextResponse> {
     validate_peer_protocol(request.protocol_version)?;
     let source = cli_source_filter.unwrap_or(request.source);
-    let sessions = service.sessions(
+    let context = local_context(
+        service,
+        "source",
         None,
         Some(source),
-        None,
-        0,
-        SortOptions::new(SortBy::Timestamp, SortOrder::Desc),
+        request.limits.limit,
+        request.limits.offset,
     )?;
-    let messages = service.messages(
-        &[],
-        None,
-        Some(source),
-        MessageQueryOptions::new(
-            request.limits.limit,
-            request.limits.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
-    )?;
-    Ok(ContextResponse {
-        command: "context/source".to_string(),
-        scope: "source".to_string(),
-        source: Some(source_name(source).to_string()),
-        project: None,
-        total_sessions: sessions.total_sessions,
-        total_messages: messages.total_messages,
-        sessions: sessions.sessions,
-        messages: messages.messages,
-        peer_results: Some(vec![local_peer_result(
-            "context/source",
-            Some(messages.total_messages),
-            Some(sessions.total_sessions),
-        )]),
-    })
+    Ok(with_local_context_peer_result(context))
+}
+
+fn with_local_context_peer_result(mut context: ContextResponse) -> ContextResponse {
+    context.peer_results = Some(vec![local_peer_result(
+        &context.command,
+        Some(context.total_messages),
+        Some(context.total_sessions),
+    )]);
+    context
 }
 
 fn peer_recall_local_response(
@@ -3624,26 +3001,15 @@ fn peer_recall_local_response(
     } else {
         resolve_peer_project(service, &request.project, source)?
     };
-    let outcome = service.messages_by_session_age(
+    let mut response = recall_session_messages(
+        service,
         project.as_deref(),
         request.all,
         source,
-        recall.n,
-        recall.include_newest,
-        MessageQueryOptions::new(
-            request.limits.limit,
-            request.limits.offset,
-            SortOptions::new(SortBy::Timestamp, SortOrder::Asc),
-        ),
+        &recall,
+        MessageQueryOptions::new(request.limits.limit, request.limits.offset, oldest_first()),
+        pretty,
     )?;
-    let mut response = match outcome {
-        Ok(response) => response,
-        Err(error) => {
-            return Err(anyhow::Error::new(session_selection_cli_failure(
-                error, pretty,
-            )?));
-        }
-    };
     response.peer_results = Some(vec![local_peer_result(
         "recall",
         Some(response.total_messages),
@@ -3949,7 +3315,7 @@ fn init_response(args: &InitArgs, source_filter: Option<SourceFilter>) -> Result
             &mut store,
             &project,
             &remote,
-            source_filter_name(source_filter),
+            source_filter.map(SourceFilter::as_str),
         )?
     } else {
         remote_pending_sync_report(&store, &project, &remote, source_filter)?
@@ -3974,10 +3340,7 @@ fn init_response(args: &InitArgs, source_filter: Option<SourceFilter>) -> Result
 
 fn suggested_import_commands(source_filter: Option<SourceFilter>) -> Vec<String> {
     match source_filter {
-        Some(source) => vec![format!(
-            "mmr --source {} ingest events",
-            source_filter_name(Some(source)).expect("source name")
-        )],
+        Some(source) => vec![format!("mmr --source {} ingest events", source.as_str())],
         None => ["codex", "claude", "cursor"]
             .iter()
             .map(|source| format!("mmr --source {source} ingest events"))
@@ -3991,7 +3354,8 @@ fn remote_pending_sync_report(
     remote: &crate::sync::FakeGithubRemote,
     source_filter: Option<SourceFilter>,
 ) -> Result<SyncReport> {
-    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    let events =
+        store.events_for_project(&project.id, source_filter.map(SourceFilter::as_str), None)?;
     Ok(SyncReport {
         status: "remote_pending".to_string(),
         remote: remote.summary(),
@@ -4234,7 +3598,7 @@ fn status_source_diagnostic(
     source: SourceFilter,
     source_counts: &BTreeMap<String, usize>,
 ) -> Result<StatusSourceDiagnostic> {
-    let source_name = source_filter_name(Some(source)).unwrap_or("unknown");
+    let source_name = source.as_str();
     let event_count = *source_counts.get(source_name).unwrap_or(&0);
     if matches!(source, SourceFilter::Grok | SourceFilter::Pi) {
         return Ok(StatusSourceDiagnostic {
@@ -4352,7 +3716,7 @@ fn reconcile_default_sources(
     };
     let mut reports = Vec::new();
     for source in sources {
-        let source_name = source_filter_name(Some(source)).unwrap_or("unknown");
+        let source_name = source.as_str();
         let Some(source_root) = default_source_root_for(source)? else {
             reports.push(SourceImportStatus {
                 source: source_name.to_string(),
@@ -4436,7 +3800,8 @@ fn rebuild_search_documents(
     project: &ProjectRecord,
     source_filter: Option<SourceFilter>,
 ) -> Result<usize> {
-    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    let events =
+        store.events_for_project(&project.id, source_filter.map(SourceFilter::as_str), None)?;
     for event in &events {
         store.upsert_search_document(event)?;
     }
@@ -4724,7 +4089,7 @@ fn assimilate_source_response(
     }
     let bundle = build_source_evidence_bundle(
         &store,
-        source_name(source),
+        source.as_str(),
         evidence_mode.clone(),
         args.since.as_deref(),
         Some(args.per_project_limit),
@@ -4739,7 +4104,7 @@ fn assimilate_source_response(
         mode: "prompt_runbook".to_string(),
         scope: "source".to_string(),
         project_id: None,
-        source: Some(source_name(source).to_string()),
+        source: Some(source.as_str().to_string()),
         per_project_limit: Some(args.per_project_limit),
         since: args.since.clone(),
         evidence: dream_evidence_response(bundle, evidence_mode),
@@ -4910,7 +4275,7 @@ fn assimilate_project_suggested_commands(project: &ProjectRecord) -> Vec<String>
 }
 
 fn source_assimilation_system_prompt(source: SourceFilter) -> String {
-    let source = source_name(source);
+    let source = source.as_str();
     [
         format!("You are a Memory Assimilation Agent improving the {source} coding-agent harness across projects."),
         "Your job is to turn the supplied source-wide evidence bundle into durable, evidence-cited harness knowledge.".to_string(),
@@ -4947,7 +4312,7 @@ fn source_assimilation_guardrails() -> Vec<String> {
 }
 
 fn source_assimilation_suggested_commands(source: SourceFilter) -> Vec<String> {
-    let source = source_name(source);
+    let source = source.as_str();
     vec![
         format!("mmr find --source {source} <query> --pretty"),
         format!("mmr context source --source {source} --pretty"),
@@ -4988,7 +4353,8 @@ fn export_tree_project_response(
     let store = Store::open_default()?;
     let project_path = project.as_deref().map(PathBuf::from);
     let project = linked_project(&store, project_path.as_deref())?;
-    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    let events =
+        store.events_for_project(&project.id, source_filter.map(SourceFilter::as_str), None)?;
     export_tree_events_response(events, output_dir, &project.id)
 }
 
@@ -5189,12 +4555,13 @@ fn sync_response(
             &mut store,
             &project,
             &remote,
-            source_filter_name(source_filter),
+            source_filter.map(SourceFilter::as_str),
         )?;
         return serde_json::to_value(response).context("serialize sync response");
     }
 
-    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    let events =
+        store.events_for_project(&project.id, source_filter.map(SourceFilter::as_str), None)?;
 
     let mut sync_events = Vec::new();
     let mut syncable_events = 0;
@@ -5264,7 +4631,8 @@ fn scan_project_response(
     project: &ProjectRecord,
     source_filter: Option<SourceFilter>,
 ) -> Result<RedactScanResponse> {
-    let events = store.events_for_project(&project.id, source_filter_name(source_filter), None)?;
+    let events =
+        store.events_for_project(&project.id, source_filter.map(SourceFilter::as_str), None)?;
     let mut summaries = Vec::with_capacity(events.len());
     let mut passed = 0;
     let mut blocked = 0;
@@ -5298,21 +4666,6 @@ fn scan_project_response(
         pii_coverage: pii_coverage.unwrap_or_else(|| scan_text("").pii_coverage),
         events: summaries,
     })
-}
-
-fn source_filter_name(source_filter: Option<SourceFilter>) -> Option<&'static str> {
-    match source_filter {
-        Some(SourceFilter::Claude) => Some("claude"),
-        Some(SourceFilter::Codex) => Some("codex"),
-        Some(SourceFilter::Cursor) => Some("cursor"),
-        Some(SourceFilter::Grok) => Some("grok"),
-        Some(SourceFilter::Pi) => Some("pi"),
-        None => None,
-    }
-}
-
-fn source_name(source: SourceFilter) -> &'static str {
-    source_filter_name(Some(source)).expect("source name")
 }
 
 fn require_explicit_source(source: Option<SourceFilter>, command: &str) -> Result<SourceFilter> {
@@ -5466,15 +4819,7 @@ fn default_source_from_env() -> Option<SourceFilter> {
 }
 
 fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "" => None,
-        "claude" => Some(SourceFilter::Claude),
-        "codex" => Some(SourceFilter::Codex),
-        "cursor" => Some(SourceFilter::Cursor),
-        "grok" => Some(SourceFilter::Grok),
-        "pi" => Some(SourceFilter::Pi),
-        _ => None,
-    }
+    SourceFilter::from_name(value.trim().to_ascii_lowercase().as_str())
 }
 
 fn effective_summariser_model(cli_model: Option<&str>) -> String {
@@ -5590,6 +4935,14 @@ fn project_identity_input(project: Option<&str>) -> Result<String> {
         Some(project) => Ok(project.to_string()),
         None => current_dir_project(),
     }
+}
+
+/// The identity a peer uses to find the same project on its own machine. `None` is
+/// the current directory.
+fn peer_project_identity(project: Option<&str>) -> Result<PeerProjectIdentity> {
+    Ok(build_peer_project_identity(&project_identity_input(
+        project,
+    )?))
 }
 
 fn build_peer_project_identity(project: &str) -> PeerProjectIdentity {
@@ -5779,65 +5132,6 @@ fn normalize_git_remotes(remotes: &[String]) -> Vec<String> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_next_messages_command(
-    source: Option<SourceFilter>,
-    pretty: bool,
-    session: &[String],
-    project: Option<&str>,
-    all: bool,
-    limit: usize,
-    next_offset: usize,
-    sort_by: SortBy,
-    order: SortOrder,
-) -> String {
-    let mut parts = vec!["mmr".to_string()];
-
-    if pretty {
-        parts.push("--pretty".to_string());
-    }
-    if let Some(s) = source {
-        let name = match s {
-            SourceFilter::Claude => "claude",
-            SourceFilter::Codex => "codex",
-            SourceFilter::Cursor => "cursor",
-            SourceFilter::Grok => "grok",
-            SourceFilter::Pi => "pi",
-        };
-        parts.push(format!("--source {name}"));
-    }
-
-    if session.len() == 1 {
-        parts.push("read session".to_string());
-        parts.push(shell_quote(&session[0]));
-    } else {
-        parts.push("read project".to_string());
-    }
-    if let Some(proj) = project {
-        parts.push("--project".to_string());
-        parts.push(shell_quote(proj));
-    }
-    if all {
-        parts.push("--all".to_string());
-    }
-
-    parts.push(format!("--limit {limit}"));
-    parts.push(format!("--offset {next_offset}"));
-
-    if sort_by != SortBy::Timestamp {
-        let name = match sort_by {
-            SortBy::Timestamp => "timestamp",
-            SortBy::MessageCount => "message-count",
-        };
-        parts.push(format!("--sort-by {name}"));
-    }
-    if order != SortOrder::Asc {
-        parts.push("--order desc".to_string());
-    }
-
-    parts.join(" ")
-}
-
-#[allow(clippy::too_many_arguments)]
 fn build_next_recall_command_with_remotes(
     source: Option<SourceFilter>,
     pretty: bool,
@@ -5854,7 +5148,7 @@ fn build_next_recall_command_with_remotes(
         parts.push("--pretty".to_string());
     }
     if let Some(source) = source {
-        parts.push(format!("--source {}", source_name(source)));
+        parts.push(format!("--source {}", source.as_str()));
     }
     parts.push("recall".to_string());
     if let Some(project) = project {
@@ -5879,165 +5173,85 @@ fn build_next_recall_command_with_remotes(
 
 /// Resolve and serialize `recall N`: the session N sessions back from the newest in scope.
 ///
-/// Recency-derived ages are unstable across time, so a paged result pins `next_command` to the
-/// concrete resolved session id(s) rather than echoing the age-based selector; a session landing
-/// between calls then cannot shift the window.
-#[allow(clippy::too_many_arguments)]
-fn run_session_axis(
-    service: &QueryService,
-    cli_source: Option<SourceFilter>,
-    source_filter: Option<SourceFilter>,
-    pretty: bool,
-    project: Option<String>,
-    all: bool,
-    age: u32,
-    include_newest: bool,
-    options: MessageQueryOptions,
-) -> Result<String> {
-    // Fail fast on the age-0 rule (out-of-range needs the scope count and is enforced below).
-    if let Err(error) = validate_session_back(age, include_newest) {
-        return Err(anyhow::Error::new(session_selection_cli_failure(
-            error, pretty,
-        )?));
-    }
-
-    let project_scope = effective_project_scope(project, all);
-    let outcome = service.messages_by_session_age(
-        project_scope.as_deref(),
-        all,
-        source_filter,
-        age,
-        include_newest,
-        options,
-    )?;
-    let mut response = match outcome {
-        Ok(response) => response,
-        Err(error) => {
-            return Err(anyhow::Error::new(session_selection_cli_failure(
-                error, pretty,
-            )?));
-        }
-    };
-
-    if response.next_page {
-        let session_ids = response
-            .session_selection
-            .as_ref()
-            .map(|selection| {
-                selection
-                    .selected
-                    .iter()
-                    .map(|selected| selected.session_id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        response.next_command = Some(build_next_messages_command(
-            cli_source,
-            pretty,
-            &session_ids,
-            project_scope.as_deref(),
-            all,
-            options.limit.unwrap_or(0),
-            response.next_offset as usize,
-            options.sort.by,
-            options.sort.order,
-        ));
-    }
-
-    serialize(&response, pretty)
-}
-
-fn recall_with_remotes_response(
+/// Recency-derived ages are unstable across time, so a local paged result pins
+/// `next_command` to the resolved session id rather than echoing the age; a session
+/// landing between calls then cannot shift the window. With `--remote`, each machine
+/// resolves the age on its own history and the results are merged.
+fn recall_response(
     service: &QueryService,
     args: RecallArgs,
     cli_source: Option<SourceFilter>,
     source_filter: Option<SourceFilter>,
     pretty: bool,
-    options: MessageQueryOptions,
 ) -> Result<String> {
+    // Fail fast on the age-0 rule (out-of-range needs the scope count and fails in the service).
     if let Err(error) = validate_session_back(args.n, args.include_newest) {
         return Err(anyhow::Error::new(session_selection_cli_failure(
             error, pretty,
         )?));
     }
+    let project_scope = effective_project_scope(args.project, args.all);
+    let recall = PeerRecallRequest {
+        n: args.n,
+        include_newest: args.include_newest,
+    };
 
-    let project_scope = effective_project_scope(args.project.clone(), args.all);
-    let unpaged_options = MessageQueryOptions::new(
-        None,
-        0,
-        SortOptions::new(options.sort.by, options.sort.order),
-    );
-    let local = service.messages_by_session_age(
+    if args.remotes.is_empty() {
+        let options = MessageQueryOptions::new(Some(args.limit), args.offset, oldest_first());
+        let mut response = recall_session_messages(
+            service,
+            project_scope.as_deref(),
+            args.all,
+            source_filter,
+            &recall,
+            options,
+            pretty,
+        )?;
+        if response.next_page {
+            let session_id = response
+                .session_selection
+                .as_ref()
+                .and_then(|selection| selection.selected.first())
+                .map(|selected| selected.session_id.as_str());
+            response.next_command = Some(build_next_recall_read_command(
+                cli_source,
+                pretty,
+                session_id,
+                project_scope.as_deref(),
+                args.all,
+                args.limit,
+                response.next_offset as usize,
+            ));
+        }
+        return serialize(&response, pretty);
+    }
+
+    let local = recall_session_messages(
+        service,
         project_scope.as_deref(),
         args.all,
         source_filter,
-        args.n,
-        args.include_newest,
-        unpaged_options,
+        &recall,
+        MessageQueryOptions::new(None, 0, oldest_first()),
+        pretty,
     )?;
-    let mut local = match local {
-        Ok(response) => response,
-        Err(error) => {
-            return Err(anyhow::Error::new(session_selection_cli_failure(
-                error, pretty,
-            )?));
-        }
-    };
-
-    let project_for_identity = project_identity_input(project_scope.as_deref())?;
     let request = PeerProjectRequest {
         protocol_version: PEER_PROTOCOL_VERSION,
-        project: build_peer_project_identity(&project_for_identity),
+        project: peer_project_identity(project_scope.as_deref())?,
         source: source_filter,
         all: args.all,
-        limits: PeerRequestLimits {
-            limit: None,
-            offset: 0,
-        },
-        recall: Some(PeerRecallRequest {
-            n: args.n,
-            include_newest: args.include_newest,
-        }),
+        limits: PeerRequestLimits::default(),
+        recall: Some(recall),
     };
-
-    let mut peer_results = Vec::new();
-    for remote_name in &args.remotes {
-        let mut remote = peer_recall(remote_name, &request, pretty)?;
-        let remote_mmr_version = remote
-            .peer_results
-            .as_ref()
-            .and_then(|items| items.first())
-            .and_then(|item| item.remote_mmr_version.clone());
-        annotate_peer_messages(
-            &mut remote.messages,
-            remote_name,
-            remote_mmr_version.clone(),
-        );
-        peer_results.push(peer_result_for_messages(
-            remote_name,
-            "recall",
-            remote.total_messages,
-            remote_mmr_version,
-        ));
-        local.messages.extend(remote.messages);
-    }
-
-    let session_selection = local.session_selection;
-    let mut messages = dedup_api_messages(local.messages);
-    sort_api_messages_chronological(&mut messages);
-    let total = messages.len() as i64;
-    let paged = apply_message_output_pagination(messages, options.limit, options.offset);
-    let next_offset = options.offset.saturating_add(paged.len()) as i64;
-    let next_page = options.limit.is_some() && next_offset < total;
-    let mut response = ApiMessagesResponse {
-        messages: paged,
-        total_messages: total,
-        next_page,
-        next_offset,
-        next_command: None,
-        session_selection,
-        peer_results: Some(peer_results),
-    };
+    let (remote, peer_results) = remote_messages(&args.remotes, "recall", &request, pretty)?;
+    let messages = merge_messages(local.messages, remote);
+    let mut response = merged_messages_page(
+        messages,
+        Some(args.limit),
+        args.offset,
+        local.session_selection,
+        peer_results,
+    );
     if response.next_page {
         response.next_command = Some(build_next_recall_command_with_remotes(
             cli_source,
@@ -6047,11 +5261,74 @@ fn recall_with_remotes_response(
             &args.remotes,
             args.n,
             args.include_newest,
-            options.limit.unwrap_or(0),
+            args.limit,
             response.next_offset as usize,
         ));
     }
     serialize(&response, pretty)
+}
+
+/// Select the session `recall.n` back in scope and read its messages. A selection
+/// error becomes the structured CLI failure.
+fn recall_session_messages(
+    service: &QueryService,
+    project: Option<&str>,
+    all: bool,
+    source_filter: Option<SourceFilter>,
+    recall: &PeerRecallRequest,
+    options: MessageQueryOptions,
+    pretty: bool,
+) -> Result<ApiMessagesResponse> {
+    let outcome = service.messages_by_session_age(
+        project,
+        all,
+        source_filter,
+        recall.n,
+        recall.include_newest,
+        options,
+    )?;
+    match outcome {
+        Ok(response) => Ok(response),
+        Err(error) => Err(anyhow::Error::new(session_selection_cli_failure(
+            error, pretty,
+        )?)),
+    }
+}
+
+/// The `read session` command for the next page of a local `recall`.
+fn build_next_recall_read_command(
+    source: Option<SourceFilter>,
+    pretty: bool,
+    session_id: Option<&str>,
+    project: Option<&str>,
+    all: bool,
+    limit: usize,
+    next_offset: usize,
+) -> String {
+    let mut parts = vec!["mmr".to_string()];
+    if pretty {
+        parts.push("--pretty".to_string());
+    }
+    if let Some(source) = source {
+        parts.push(format!("--source {}", source.as_str()));
+    }
+    match session_id {
+        Some(session_id) => {
+            parts.push("read session".to_string());
+            parts.push(shell_quote(session_id));
+        }
+        None => parts.push("read project".to_string()),
+    }
+    if let Some(project) = project {
+        parts.push("--project".to_string());
+        parts.push(shell_quote(project));
+    }
+    if all {
+        parts.push("--all".to_string());
+    }
+    parts.push(format!("--limit {limit}"));
+    parts.push(format!("--offset {next_offset}"));
+    parts.join(" ")
 }
 
 /// Build the structured CLI failure (machine JSON on stdout, message on stderr, exit 2) for an

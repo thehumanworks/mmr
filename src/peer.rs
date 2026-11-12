@@ -28,7 +28,7 @@ pub struct PeerProjectIdentity {
     pub repo_fingerprint: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerRequestLimits {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
