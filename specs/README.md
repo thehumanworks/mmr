@@ -28,4 +28,3 @@ When implementing or reviewing behavior:
 - [Codex importer](../docs/mmr-codex-importer.md)
 - [Claude importer](../docs/mmr-claude-importer.md)
 - [Cursor importer](../docs/mmr-cursor-importer.md)
-- [Assimilation prompt/runbook handoff](../docs/mmr-dream-runner.md)

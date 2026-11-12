@@ -47,10 +47,6 @@
   Compact. This removes low-relevance lines without paraphrasing surviving
   content. Set `MORPHLLM_API_KEY`; optionally set `MORPHLLM_BASE_URL` and
   `MMR_COMPACT_MODEL`, or pass `--model`.
-- `mmr assimilate project` returns a prompt, runbook, output contract, and
-  evidence bundle for project memory deduplication and generalisation.
-- `mmr assimilate source --source <source>` returns the source-wide equivalent,
-  using a bounded per-project evidence window.
 - `mmr skill load` prints the bundled mmr agent skill to stdout for immediate
   agent context.
 - `mmr skill install` replaces `~/.agents/skills/mmr` with the bundled skill;
@@ -71,7 +67,7 @@
 | `mmr export` | `mmr read project` |
 | `mmr export --format tree` | `mmr read project --format tree` |
 | `mmr summary` / `mmr remember` | `mmr summarize project/session/source` |
-| `mmr dream` | `mmr assimilate project` |
+| `mmr dream`, `mmr assimilate` | none |
 | `mmr search` / `mmr rg` | `mmr find` |
 | `mmr link` | `mmr init` |
 

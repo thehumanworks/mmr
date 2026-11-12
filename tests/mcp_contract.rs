@@ -22,8 +22,6 @@ const EXPECTED_TOOLS: &[&str] = &[
     "mmr_recall",
     "mmr_find",
     "mmr_context_project",
-    "mmr_assimilate_project",
-    "mmr_assimilate_source",
     "mmr_summarize_project",
     "mmr_summarize_session",
     "mmr_compact_project",
@@ -36,7 +34,6 @@ const EXPECTED_PROMPTS: &[&str] = &[
     "mmr_recall_previous_session",
     "mmr_project_context_brief",
     "mmr_session_handoff",
-    "mmr_memory_assimilation",
     "mmr_find_then_read",
 ];
 

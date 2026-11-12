@@ -92,8 +92,6 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- summarize session <session-id>` — generate a stateless summary over one session.
 - `cargo run -- compact project --project /path/to/proj --query "current task"` — compact project history through Morph Compact without paraphrasing surviving lines.
 - `cargo run -- compact session <session-id> -O md` — compact one session and print the compacted transcript text.
-- `cargo run -- assimilate project` — return the project memory deduplication/generalization prompt, runbook, output contract, and evidence bundle.
-- `cargo run -- --source codex assimilate source` — return the harness-wide assimilation prompt, runbook, output contract, and evidence bundle.
 - `cargo run -- skill load` — print the bundled mmr agent skill to stdout for immediate agent context.
 - `cargo run -- skill install` — replace `~/.agents/skills/mmr` with the bundled mmr skill.
 - `cargo run -- skill install --local` — replace `.agents/skills/mmr` under the current project with the bundled mmr skill.
@@ -186,7 +184,6 @@ it for one command.
 - Expect `mmr teleport read` to print session messages on stdout (JSON `messages` array; `-O md` for readable text); caching must not require a separate export step.
 - Prefer stateless one-shot CLI flows for `summarize` (no continuation or follow-up parameters).
 - For GitHub-backed mmr features, use standard `GITHUB_TOKEN` or `GH_TOKEN` plus gh user config rather than `MMR_`-prefixed credential env vars.
-- `mmr assimilate` should return a prompt, runbook, output contract, and evidence bundle; it must not launch an agent as a side effect.
 
 ## Learned Workspace Facts
 

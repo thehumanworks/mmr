@@ -2,11 +2,7 @@ use mmr::capture::{
     ClaudeAdapter, CodexAdapter, CursorAdapter, EventBoundary, FileWatcher, WatchState,
     event_hash_set, parse_claude_jsonl, parse_codex_jsonl, parse_cursor_jsonl, parse_fixture_jsonl,
 };
-use mmr::dream::{
-    DreamEvidenceMode, DreamObservationStatus, DreamRunner, DreamRunnerConfig, EvidenceAccess,
-    MockDreamRunner, build_evidence_bundle, build_evidence_request,
-};
-use mmr::store::{LATEST_SCHEMA_VERSION, NewDreamCandidate, NewLearnedMemory, Store};
+use mmr::store::{LATEST_SCHEMA_VERSION, Store};
 #[allow(dead_code)]
 mod common;
 use common::RetrieveContractFixture;
@@ -1159,10 +1155,6 @@ fn status_diagnostics_contract_is_implemented() {
         "degraded"
     );
     assert_eq!(
-        status_json["diagnostics"]["dream_runner"]["status"],
-        "not_required"
-    );
-    assert_eq!(
         status_json["diagnostics"]["summary_runner"]["status"],
         "missing_api_key"
     );
@@ -1174,10 +1166,6 @@ fn status_diagnostics_contract_is_implemented() {
         status_json["diagnostics"]["summary_runner"]["config_file"]
             .as_str()
             .is_some_and(|path| path.contains("config.json"))
-    );
-    assert_eq!(
-        status_json["diagnostics"]["dream_runner"]["command_env"],
-        ""
     );
 
     let actions = status_json["diagnostics"]["actions"]
@@ -1242,15 +1230,7 @@ fn cli_help_contract_is_lean_and_actionable() {
         .expect("top-level help");
     assert_success_ref(&help);
     let help_text = String::from_utf8(help.stdout).expect("help UTF-8");
-    for command in [
-        "init",
-        "sync",
-        "status",
-        "note",
-        "find",
-        "summarize",
-        "assimilate",
-    ] {
+    for command in ["init", "sync", "status", "note", "find", "summarize"] {
         assert!(
             help_text.contains(command),
             "top-level help should include public command {command}"
@@ -1264,7 +1244,6 @@ fn cli_help_contract_is_lean_and_actionable() {
     }
     assert!(help_text.contains("mmr init"));
     assert!(help_text.contains("mmr status --pretty"));
-    assert!(help_text.contains("mmr assimilate project --pretty"));
 
     let status_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
         .args(["status", "--help"])
@@ -1275,19 +1254,6 @@ fn cli_help_contract_is_lean_and_actionable() {
     assert!(status_help_text.contains("db_path"));
     assert!(status_help_text.contains("schema_version"));
     assert!(status_help_text.contains("diagnostics"));
-
-    let dream_help = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["assimilate", "project", "--help"])
-        .output()
-        .expect("dream help");
-    assert_success_ref(&dream_help);
-    let dream_help_text = String::from_utf8(dream_help.stdout).expect("dream help UTF-8");
-    assert!(dream_help_text.contains("prompt"));
-    assert!(dream_help_text.contains("runbook"));
-    assert!(!dream_help_text.contains("--dry-run"));
-    assert!(dream_help_text.contains("--review"));
-    assert!(dream_help_text.contains("never execute or install"));
-    assert!(!dream_help_text.contains("MMR_DREAM_COMMAND"));
 }
 
 #[test]
@@ -1333,29 +1299,6 @@ fn mvp_quickstart_flow_smoke_test() {
         serde_json::from_slice(&search.stdout).expect("quickstart search JSON");
     assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
 
-    let dream = base_command("assimilate project")
-        .args(["--pretty"])
-        .output()
-        .expect("quickstart dream");
-    assert_success_ref(&dream);
-    let dream_json: serde_json::Value =
-        serde_json::from_slice(&dream.stdout).expect("quickstart dream JSON");
-    assert_eq!(dream_json["command"], "assimilate/project");
-    assert_eq!(dream_json["mode"], "prompt_runbook");
-    assert!(
-        dream_json["system_prompt"]
-            .as_str()
-            .unwrap()
-            .contains("Memory Assimilation Agent")
-    );
-    assert!(
-        dream_json["runbook"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step["step"] == "deduplicate")
-    );
-
     let sync = base_command("sync")
         .args(["--pretty"])
         .output()
@@ -1373,10 +1316,6 @@ fn mvp_quickstart_flow_smoke_test() {
     let status_json: serde_json::Value =
         serde_json::from_slice(&status.stdout).expect("quickstart status JSON");
     assert_eq!(status_json["status"]["sync_status"], "synced");
-    assert_eq!(
-        status_json["diagnostics"]["dream_runner"]["status"],
-        "not_required"
-    );
 
     for command in ["list projects", "list sessions", "read project"] {
         let output = base_command(command)
@@ -1811,36 +1750,6 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         "unsafe note secret should be blocked before sync"
     );
 
-    let dream = command("assimilate project", &data_home, &project)
-        .env(
-            "MMR_DREAM_MOCK_OUTPUT",
-            dream_output_json(
-                &evidence_ref,
-                "Ignored because public dream no longer runs mock output.",
-                0.94,
-                "",
-            ),
-        )
-        .output()
-        .expect("release dream guide");
-    assert_success_ref(&dream);
-    let dream_json: serde_json::Value = serde_json::from_slice(&dream.stdout).expect("dream JSON");
-    assert_eq!(dream_json["mode"], "prompt_runbook");
-    assert!(
-        dream_json["evidence"]["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|event| event["evidence_ref"] == evidence_ref),
-        "dream evidence should include the searched event ref"
-    );
-    assert!(
-        dream_json["system_prompt"]
-            .as_str()
-            .unwrap()
-            .contains("Perform memory deduplication")
-    );
-
     let learned_search = command("find", &data_home, &project)
         .arg("release-gate evidence checks")
         .output()
@@ -1923,12 +1832,6 @@ fn mvp_release_gate_e2e_fixture_scenario() {
             .unwrap(),
         1
     );
-    let fresh_evidence_ref = format!(
-        "mmr://event/{}",
-        hydrated_event_search_json["results"][0]["event_id"]
-            .as_str()
-            .expect("hydrated event id")
-    );
 
     let fresh_store = Store::open(fresh_data_home.join("mmr").join("mmr.db")).expect("fresh store");
     let fresh_project_record = fresh_store
@@ -1949,22 +1852,6 @@ fn mvp_release_gate_e2e_fixture_scenario() {
         .learned_memory_for_project(&fresh_project_record.id)
         .expect("fresh learned memory");
     assert!(fresh_memory.is_empty());
-
-    let fresh_dream = fresh_command("assimilate project")
-        .output()
-        .expect("fresh release dream");
-    assert_success_ref(&fresh_dream);
-    let fresh_dream_json: serde_json::Value =
-        serde_json::from_slice(&fresh_dream.stdout).expect("fresh dream JSON");
-    assert_eq!(fresh_dream_json["mode"], "prompt_runbook");
-    assert!(
-        fresh_dream_json["evidence"]["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|event| event["evidence_ref"] == fresh_evidence_ref),
-        "fresh dream evidence should include the hydrated searched event ref"
-    );
 }
 
 #[test]
@@ -2629,299 +2516,6 @@ fn summary_cli_contract_is_implemented() {
         String::from_utf8(session_help.stdout).expect("summarize session help UTF-8");
     assert!(session_help_text.contains("--limit"));
     assert!(session_help_text.contains("--offset"));
-}
-
-#[test]
-fn dream_runner_contract_is_implemented() {
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let project_dir = tmp.path().join("dream-project");
-    std::fs::create_dir_all(&project_dir).expect("project dir");
-    let mut store = Store::open_in_memory().expect("store");
-    let project = store.ensure_project_link(&project_dir).expect("project");
-    let event = store
-        .insert_event(
-            &project.id,
-            &mmr::store::NewEvent::new(
-                "note",
-                "notes",
-                "message",
-                "user",
-                "2026-05-24T15:00:00Z",
-                "Email person@example.com and prefer fixture-driven tests.",
-                "note-v1",
-            ),
-        )
-        .expect("dream evidence event");
-    store
-        .insert_event(
-            &project.id,
-            &mmr::store::NewEvent::new(
-                "note",
-                "notes",
-                "message",
-                "user",
-                "2026-05-24T15:01:00Z",
-                "API_KEY=sk-test-secret",
-                "note-v1",
-            ),
-        )
-        .expect("blocked dream evidence event");
-
-    let config = DreamRunnerConfig {
-        runner: "mock".to_string(),
-        model: Some("mock-v1".to_string()),
-        evidence_access: EvidenceAccess::SharedSafe,
-        allow_raw_evidence: false,
-        best_of: 1,
-        retries: 0,
-    };
-    let request = build_evidence_request(&store, &project, &config).expect("dream request");
-    assert_eq!(request.evidence.len(), 1);
-    assert!(
-        !request.evidence[0]
-            .content_text
-            .contains("person@example.com")
-    );
-    let bundle =
-        build_evidence_bundle(&store, &project, DreamEvidenceMode::SharedSafe).expect("bundle");
-    assert_eq!(
-        bundle.omitted_events.len(),
-        1,
-        "secret-bearing evidence is not sent to shared-safe runners"
-    );
-
-    let event_ref = format!("mmr://event/{}", event.id);
-    let runner = MockDreamRunner::returning_json(dream_observation_json(&event_ref, 0.91));
-    let output = runner.run(&request).expect("valid dream output");
-    assert_eq!(
-        output.observations[0].status,
-        DreamObservationStatus::Active
-    );
-
-    let invalid_runner = MockDreamRunner::returning_json(dream_observation_json(
-        &bundle.omitted_events[0].evidence_ref,
-        0.91,
-    ));
-    let err = invalid_runner
-        .run(&request)
-        .expect_err("omitted evidence ref should fail");
-    assert!(err.to_string().contains("missing evidence"));
-
-    let pending_runner = MockDreamRunner::returning_json(dream_observation_json(&event_ref, 0.42));
-    let pending = pending_runner.run(&request).expect("pending dream");
-    assert_eq!(
-        pending.observations[0].status,
-        DreamObservationStatus::Pending
-    );
-}
-
-#[test]
-fn dream_cli_contract_is_implemented() {
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let home = tmp.path().join("home");
-    let data_home = tmp.path().join("data");
-    let data_home_fresh = tmp.path().join("data-fresh");
-    let project = tmp.path().join("dream-project");
-    let fresh_project = tmp.path().join("fresh-dream-project");
-    let remote = tmp.path().join("fake-github");
-    std::fs::create_dir_all(&home).expect("create HOME");
-    std::fs::create_dir_all(&project).expect("create project");
-    std::fs::create_dir_all(&fresh_project).expect("create fresh project");
-
-    assert_success(
-        Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .arg("init")
-            .env("HOME", &home)
-            .env("XDG_DATA_HOME", &data_home)
-            .env("MMR_FAKE_REMOTE_DIR", &remote)
-            .env("MMR_GITHUB_USER", "fixture-user")
-            .current_dir(&project)
-            .output()
-            .expect("link before dream"),
-    );
-    let note = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args([
-            "note",
-            "Email",
-            "person@example.com",
-            "while",
-            "discussing",
-            "durable",
-            "assimilation",
-            "evidence.",
-        ])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("add dream evidence note");
-    assert_success_ref(&note);
-    let note = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["find", "durable assimilation evidence"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("find note evidence");
-    assert_success_ref(&note);
-    let note_json: serde_json::Value =
-        serde_json::from_slice(&note.stdout).expect("note search stdout JSON");
-    let evidence_event_id = note_json["results"][0]["event_id"]
-        .as_str()
-        .expect("evidence event id")
-        .to_string();
-    let evidence_ref = format!("mmr://event/{evidence_event_id}");
-    let ignored_runner_output = dream_output_json(
-        &evidence_ref,
-        "Prefer durable assimilation checks.",
-        0.93,
-        "",
-    );
-    let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["assimilate", "project"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_DREAM_MOCK_OUTPUT", &ignored_runner_output)
-        .env("MMR_DEFAULT_DREAM_RUNNER", "unsupported")
-        .env("MMR_DREAM_COMMAND", "false")
-        .current_dir(&project)
-        .output()
-        .expect("dream guide");
-    assert_success_ref(&dream);
-    let dream_json: serde_json::Value =
-        serde_json::from_slice(&dream.stdout).expect("dream stdout JSON");
-    assert_eq!(dream_json["command"], "assimilate/project");
-    assert_eq!(dream_json["mode"], "prompt_runbook");
-    assert_eq!(
-        dream_json["evidence"]["included_events"].as_u64().unwrap(),
-        1
-    );
-    assert_eq!(
-        dream_json["evidence"]["events"][0]["evidence_ref"],
-        evidence_ref
-    );
-    assert!(
-        dream_json["system_prompt"]
-            .as_str()
-            .unwrap()
-            .contains("knowledge assimilation")
-    );
-    assert!(
-        dream_json["runbook"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|step| step["step"] == "generalise")
-    );
-    {
-        let store = Store::open(data_home.join("mmr").join("mmr.db")).expect("store");
-        let project_record = store
-            .project_by_path(&project)
-            .expect("project lookup")
-            .expect("project");
-        assert!(
-            store
-                .learned_memory_for_project(&project_record.id)
-                .expect("learned memory")
-                .is_empty()
-        );
-    }
-
-    let legacy_dry_run = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["assimilate", "project", "--dry-run"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("dream dry-run legacy flag");
-    assert!(!legacy_dry_run.status.success());
-    assert!(
-        String::from_utf8_lossy(&legacy_dry_run.stderr).contains("unexpected argument"),
-        "stderr={}",
-        String::from_utf8_lossy(&legacy_dry_run.stderr)
-    );
-
-    let legacy_runner = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["assimilate", "project", "--runner", "command"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("dream runner legacy flag");
-    assert!(!legacy_runner.status.success());
-
-    let search = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["find", "durable assimilation checks"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("search learned memory");
-    assert_success_ref(&search);
-    let search_json: serde_json::Value =
-        serde_json::from_slice(&search.stdout).expect("search JSON");
-    assert_eq!(search_json["total_results"].as_u64().unwrap(), 0);
-
-    let reserved_flag = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["assimilate", "project", "--best-of", "2"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .current_dir(&project)
-        .output()
-        .expect("dream reserved flag");
-    assert!(!reserved_flag.status.success());
-    assert!(
-        String::from_utf8_lossy(&reserved_flag.stderr).contains("unexpected argument"),
-        "stderr={}",
-        String::from_utf8_lossy(&reserved_flag.stderr)
-    );
-
-    assert_success(
-        Command::new(env!("CARGO_BIN_EXE_mmr"))
-            .arg("sync")
-            .env("HOME", &home)
-            .env("XDG_DATA_HOME", &data_home)
-            .env("MMR_FAKE_REMOTE_DIR", &remote)
-            .env("MMR_GITHUB_USER", "fixture-user")
-            .current_dir(&project)
-            .output()
-            .expect("sync dream evidence"),
-    );
-    let remote_text = remote_file_text(&remote);
-    assert!(!remote_text.contains("person@example.com"));
-    assert!(!remote_text.contains(&evidence_event_id));
-    assert!(remote_text.contains("[REDACTED:private_email]"));
-    assert!(!remote_text.contains("Prefer durable assimilation checks."));
-
-    let hydrate = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("init")
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home_fresh)
-        .env("MMR_FAKE_REMOTE_DIR", &remote)
-        .env("MMR_GITHUB_USER", "fixture-user")
-        .current_dir(&fresh_project)
-        .output()
-        .expect("hydrate dream evidence");
-    assert_success_ref(&hydrate);
-    let hydrate_json: serde_json::Value =
-        serde_json::from_slice(&hydrate.stdout).expect("hydrate JSON");
-    assert_eq!(
-        hydrate_json["hydration"]["inserted_learned_memory"]
-            .as_u64()
-            .unwrap(),
-        0
-    );
-    let hydrated_search = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["find", "durable assimilation checks"])
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", &data_home_fresh)
-        .current_dir(&fresh_project)
-        .output()
-        .expect("search hydrated learned memory");
-    assert_success_ref(&hydrated_search);
-    let hydrated_search_json: serde_json::Value =
-        serde_json::from_slice(&hydrated_search.stdout).expect("hydrated search JSON");
-    assert_eq!(hydrated_search_json["total_results"].as_u64().unwrap(), 0);
 }
 
 #[test]
@@ -4137,250 +3731,6 @@ fn optional_external_summary_provider_smoke_is_gated() {
 }
 
 #[test]
-fn optional_external_dream_command_smoke_is_gated() {
-    if std::env::var("MMR_RUN_EXTERNAL_DREAM_SMOKE")
-        .ok()
-        .as_deref()
-        != Some("1")
-    {
-        return;
-    }
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let home = tmp.path().join("home");
-    let data_home = tmp.path().join("data");
-    let project = tmp.path().join("external-dream-project");
-    let remote = tmp.path().join("fake-github");
-    std::fs::create_dir_all(&home).expect("create HOME");
-    std::fs::create_dir_all(&project).expect("create project");
-    let project = std::fs::canonicalize(&project).expect("canonical project");
-    seed_release_gate_sources(&home, &project);
-
-    let link = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .arg("init")
-        .env("HOME", &home)
-        .env("SIMPLEMMR_HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_FAKE_REMOTE_DIR", &remote)
-        .env("MMR_GITHUB_USER", "fixture-user")
-        .current_dir(&project)
-        .output()
-        .expect("external dream link");
-    assert_success_ref(&link);
-
-    let dream = Command::new(env!("CARGO_BIN_EXE_mmr"))
-        .args(["assimilate", "project"])
-        .env("HOME", &home)
-        .env("SIMPLEMMR_HOME", &home)
-        .env("XDG_DATA_HOME", &data_home)
-        .env("MMR_DREAM_COMMAND", "false")
-        .current_dir(&project)
-        .output()
-        .expect("external dream guide smoke");
-    assert_success_ref(&dream);
-    let json: serde_json::Value =
-        serde_json::from_slice(&dream.stdout).expect("external dream JSON");
-    assert_eq!(json["command"], "assimilate/project");
-    assert_eq!(json["mode"], "prompt_runbook");
-    assert!(json["evidence"]["included_events"].as_u64().unwrap() > 0);
-    assert!(
-        json["system_prompt"]
-            .as_str()
-            .unwrap()
-            .contains("deduplication"),
-        "dream should return guidance for the calling agent"
-    );
-}
-
-#[test]
-fn dream_assimilation_contract_is_implemented() {
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let project_dir = tmp.path().join("dream-assimilation");
-    std::fs::create_dir_all(&project_dir).expect("project dir");
-    let mut store = Store::open_in_memory().expect("store");
-    let project = store.ensure_project_link(&project_dir).expect("project");
-    let event = store
-        .insert_event(
-            &project.id,
-            &mmr::store::NewEvent::new(
-                "note",
-                "notes",
-                "note",
-                "user",
-                "2026-05-24T16:00:00Z",
-                "durable dream evidence",
-                "note-v1",
-            )
-            .with_source_event_id("dream-assimilation-evidence"),
-        )
-        .expect("evidence event");
-    let evidence_ref = format!("mmr://event/{}", event.id);
-    let run = store
-        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence")
-        .expect("start dream run");
-    let persisted = store
-        .complete_dream_run(
-            &run.id,
-            "sha256:output",
-            &[NewDreamCandidate {
-                kind: "preference".to_string(),
-                claim: "Prefer durable assimilation checks.".to_string(),
-                confidence: 0.93,
-                evidence_refs: vec![evidence_ref.clone()],
-                counterevidence_refs: Vec::new(),
-                status: "accepted".to_string(),
-            }],
-            &[NewLearnedMemory {
-                kind: "preference".to_string(),
-                claim: "Prefer durable assimilation checks.".to_string(),
-                confidence: 0.93,
-                evidence_refs: vec![evidence_ref.clone()],
-                counterevidence_refs: Vec::new(),
-                status: "active".to_string(),
-            }],
-        )
-        .expect("complete dream run");
-    assert_eq!(persisted.run.status, "completed");
-    assert_eq!(persisted.candidates[0].status, "accepted");
-    assert_eq!(persisted.learned_memory[0].status, "active");
-    assert_eq!(
-        persisted.learned_memory[0].evidence_refs,
-        vec![evidence_ref]
-    );
-    let original_memory = persisted.learned_memory[0].clone();
-
-    let duplicate = store
-        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-duplicate")
-        .expect("start duplicate dream run");
-    let duplicate_persisted = store
-        .complete_dream_run(
-            &duplicate.id,
-            "sha256:duplicate-output",
-            &[],
-            &[NewLearnedMemory {
-                kind: original_memory.kind.clone(),
-                claim: original_memory.claim.clone(),
-                confidence: 0.99,
-                evidence_refs: original_memory.evidence_refs.clone(),
-                counterevidence_refs: original_memory.counterevidence_refs.clone(),
-                status: "active".to_string(),
-            }],
-        )
-        .expect("complete duplicate dream run");
-    assert!(
-        duplicate_persisted.learned_memory.is_empty(),
-        "duplicate learned memory must not silently overwrite the original row"
-    );
-    let preserved = store
-        .learned_memory_by_id(&original_memory.id)
-        .expect("original learned memory preserved");
-    assert_eq!(preserved.dream_run_id.as_deref(), Some(run.id.as_str()));
-    assert_eq!(preserved.confidence, 0.93);
-
-    let second = store
-        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-2")
-        .expect("start second dream run");
-    let err = store
-        .complete_dream_run(
-            &second.id,
-            "sha256:bad-output",
-            &[],
-            &[NewLearnedMemory {
-                kind: "preference".to_string(),
-                claim: "Missing evidence should not persist.".to_string(),
-                confidence: 0.91,
-                evidence_refs: Vec::new(),
-                counterevidence_refs: Vec::new(),
-                status: "active".to_string(),
-            }],
-        )
-        .expect_err("missing evidence refs should fail atomically");
-    assert!(
-        err.to_string()
-            .contains("requires at least one evidence ref")
-    );
-    assert!(
-        store
-            .learned_memory_for_dream_run(&second.id)
-            .expect("failed run learned memory")
-            .is_empty()
-    );
-    let failed = store
-        .fail_dream_run(&second.id, Some("sha256:bad-output"))
-        .expect("mark failed");
-    assert_eq!(failed.status, "failed");
-
-    let other_project_dir = tmp.path().join("other-dream-project");
-    std::fs::create_dir_all(&other_project_dir).expect("other project dir");
-    let other_project = store
-        .ensure_project_link(&other_project_dir)
-        .expect("other project");
-    let other_event = store
-        .insert_event(
-            &other_project.id,
-            &mmr::store::NewEvent::new(
-                "note",
-                "notes",
-                "note",
-                "user",
-                "2026-05-24T16:01:00Z",
-                "other project evidence",
-                "note-v1",
-            )
-            .with_source_event_id("other-dream-evidence"),
-        )
-        .expect("other evidence event");
-    let cross_project = store
-        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-cross")
-        .expect("start cross-project dream run");
-    let err = store
-        .complete_dream_run(
-            &cross_project.id,
-            "sha256:cross-output",
-            &[],
-            &[NewLearnedMemory {
-                kind: "preference".to_string(),
-                claim: "Cross-project evidence must not persist.".to_string(),
-                confidence: 0.91,
-                evidence_refs: vec![format!("mmr://event/{}", other_event.id)],
-                counterevidence_refs: Vec::new(),
-                status: "active".to_string(),
-            }],
-        )
-        .expect_err("cross-project evidence refs should fail atomically");
-    assert!(err.to_string().contains("missing evidence"), "err={err}");
-    store
-        .fail_dream_run(&cross_project.id, Some("sha256:cross-output"))
-        .expect("mark cross-project run failed");
-
-    let third = store
-        .start_dream_run(&project.id, "mock", "mock", "sha256:evidence-3")
-        .expect("start third dream run");
-    assert!(
-        store
-            .complete_dream_run(
-                &third.id,
-                "sha256:output-3",
-                &[NewDreamCandidate {
-                    kind: "pattern".to_string(),
-                    claim: "Queued memories remain internal.".to_string(),
-                    confidence: 0.42,
-                    evidence_refs: vec![format!("mmr://event/{}", event.id)],
-                    counterevidence_refs: Vec::new(),
-                    status: "pending".to_string(),
-                }],
-                &[],
-            )
-            .expect("complete pending run")
-            .learned_memory
-            .is_empty()
-    );
-    let pending_candidates = store
-        .dream_candidates_for_run(&third.id)
-        .expect("pending candidates");
-    assert_eq!(pending_candidates[0].status, "pending");
-}
-
-#[test]
 fn sync_manifest_contract_is_implemented() {
     let tmp = tempfile::tempdir().expect("temp dir");
     let home = tmp.path().join("home");
@@ -4496,53 +3846,6 @@ fn sync_manifest_contract_is_implemented() {
         serde_json::from_slice(&search.stdout).expect("search stdout JSON");
     assert_eq!(search_json["total_results"].as_u64().unwrap(), 1);
     assert_eq!(remote_event_file_count(&remote), 1);
-}
-
-fn dream_observation_json(evidence_ref: &str, confidence: f64) -> String {
-    dream_output_json(
-        evidence_ref,
-        "Prefer fixture-driven tests.",
-        confidence,
-        r#""patterns": ["evidence-linked memory"],
-      "open_loops": [],
-      "counterevidence_refs": [],"#,
-    )
-}
-
-fn dream_output_json(
-    evidence_ref: &str,
-    claim: &str,
-    confidence: f64,
-    extra_fields: &str,
-) -> String {
-    let extra_fields = if extra_fields.trim().is_empty() {
-        String::new()
-    } else {
-        format!("{extra_fields}\n      ")
-    };
-    format!(
-        r#"{{
-  "observations": [
-    {{
-      "kind": "preference",
-      "claim": "{claim}",
-      "confidence": {confidence},
-      "scope": "project",
-      "recommended_action": "Keep evidence refs attached.",
-      {extra_fields}
-      "evidence_refs": ["{evidence_ref}"]
-    }}
-  ],
-  "learned_memory_updates": [
-    {{
-      "kind": "preference",
-      "claim": "{claim}",
-      "confidence": {confidence},
-      "evidence_refs": ["{evidence_ref}"]
-    }}
-  ]
-}}"#
-    )
 }
 
 fn assert_success(output: std::process::Output) {

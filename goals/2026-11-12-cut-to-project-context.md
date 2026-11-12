@@ -65,7 +65,7 @@ through the Nix modules), `ingest events` vs `init`, `read --format tree`,
 ## Definition of Done
 
 - [x] DoD-1 — Cut 1 removed; differential check shows only source cases change.
-- [ ] DoD-2 — Cut 2 removed; differential check explained.
+- [x] DoD-2 — Cut 2 removed; differential check explained.
 - [ ] DoD-3 — Cut 3 removed; differential check explained.
 - [x] DoD-4 — Cut 4 removed.
 - [ ] DoD-5 — README, the bundled mmr skill and the command taxonomy teach only

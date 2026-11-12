@@ -5000,3 +5000,20 @@ fn source_scoped_subcommands_are_rejected() {
         assert!(output.stdout.is_empty(), "{command} source stdout");
     }
 }
+
+#[test]
+fn assimilate_command_is_rejected() {
+    let fixture = TestFixture::seeded();
+    for args in [
+        &["assimilate", "project"][..],
+        &["--source", "codex", "assimilate", "source"][..],
+    ] {
+        let output = fixture.run_cli(args);
+        assert_eq!(output.status.code(), Some(2), "args={args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand 'assimilate'"),
+            "args={args:?} stderr={stderr}"
+        );
+    }
+}

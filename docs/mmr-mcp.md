@@ -31,7 +31,7 @@ Expected output:
 
 ```text
 Stdio initialized with unusable REST settings; no REST server needed.
-Listed 15 MCP tools.
+Listed 13 MCP tools.
 user: Keep the retry limit at three.
 assistant: Noted for the next session.
 Protocol stdout was JSON only; native histories unchanged; clean EOF shutdown.

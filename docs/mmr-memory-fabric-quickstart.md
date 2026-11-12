@@ -4,7 +4,7 @@ Status: implemented through NHL-281. See
 `docs/mmr-memory-fabric-release-gate.md` for final release evidence.
 
 This guide covers the lean MVP flow from a blank non-Git directory to linked,
-synced, searchable, and assimilation-ready local memory.
+synced and searchable local memory.
 
 ## One-Time Setup
 
@@ -70,13 +70,12 @@ Key fields:
 - `diagnostics.remote`: remote availability and auth state.
 - `diagnostics.summary_runner`: continuity brief provider availability for
   `summarize`.
-- `diagnostics.dream_runner`: reports that no assimilation runner is required.
 - `diagnostics.actions`: concrete recovery commands or environment fixes.
 
 ## Add Local Notes
 
 Notes are first-class events and are searchable, redacted, synced, summarized,
-and assimilated through the same pipeline as imported agent events.
+and searched through the same pipeline as imported agent events.
 
 ```bash
 mmr note "Decision: keep the migration append-only and cover it with fixtures."
@@ -119,9 +118,7 @@ compatible proxy, and set `MMR_SUMMARISER_MODEL` or pass `--model`.
 `mmr status --pretty` reports `diagnostics.summary_runner` so missing API
 configuration is visible before you run a summary.
 
-`summarize` and `assimilate` are stateless: they do not write active learned
-memory. Use `mmr assimilate` to generate a prompt, runbook, output contract, and
-cited evidence bundle for the calling AI agent.
+`summarize` is stateless: it does not write learned memory.
 
 ## Compact
 
@@ -142,26 +139,6 @@ configuration:
 - `--compression-ratio` controls the fraction to keep.
 - `--preserve-recent` keeps the last N messages intact.
 - `--no-markers` and `--no-line-ranges` disable Morph's marker/range outputs.
-
-## Assimilate
-
-Generate the memory assimilation prompt and runbook:
-
-```bash
-mmr assimilate project --pretty
-mmr --source codex assimilate source --pretty
-```
-
-`mmr assimilate` does not run an AI provider and does not write learned memory.
-The JSON response includes:
-
-- `system_prompt`: role and guardrails for the calling AI agent.
-- `runbook`: ordered steps for deduplication, assimilation, and generalisation.
-- `output_contract`: the shape the agent should return after analysis.
-- `evidence.events`: shared-safe evidence with `mmr://event/...` refs.
-
-Shared-safe evidence is the default: deterministic local PII is redacted and
-secret-bearing events are omitted before being returned.
 
 ## Sync
 
@@ -276,6 +253,3 @@ mmr status --pretty
 
 Back up the database shown in `store.db_path`, update `mmr`, and rerun the
 command so migrations can complete.
-
-`mmr assimilate` does not require `MMR_DREAM_COMMAND` or a configured local
-runner.

@@ -194,26 +194,6 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Return the project memory-assimilation prompt, runbook, output contract, and evidence.
-    /// Use when consolidating a project's session history into durable, learned memory.
-    #[tool(name = "mmr_assimilate_project")]
-    async fn assimilate_project(
-        &self,
-        Parameters(args): Parameters<AssimilateProjectToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
-    /// Return the source memory-assimilation prompt, runbook, output contract, and evidence.
-    /// Use when consolidating one tool's session history into durable, learned memory.
-    #[tool(name = "mmr_assimilate_source")]
-    async fn assimilate_source(
-        &self,
-        Parameters(args): Parameters<AssimilateSourceToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
     /// Summarize project history through the configured OpenAI-compatible provider. Use for
     /// a continuity brief when the raw history is too large to read directly.
     #[tool(name = "mmr_summarize_project")]
@@ -325,23 +305,6 @@ impl MmrMcpServer {
             session_id = args.session_id,
             source = display_opt(args.source.as_deref()),
             project = display_opt(args.project.as_deref())
-        ))
-    }
-
-    /// Run the assimilation handoff and produce evidence-backed memory candidates.
-    #[prompt(name = "mmr_memory_assimilation")]
-    async fn memory_assimilation(
-        &self,
-        Parameters(args): Parameters<MemoryAssimilationPromptArgs>,
-    ) -> GetPromptResult {
-        prompt_result(format!(
-            "Use `mmr_assimilate_project` for project={project}, source={source}, \
-             evidence_mode={evidence_mode}. Convert the returned evidence bundle into \
-             stable, non-sensitive memory candidates. Preserve citations and reject \
-             unsupported claims.",
-            project = display_opt(args.project.as_deref()),
-            source = display_opt(args.source.as_deref()),
-            evidence_mode = args.evidence_mode.as_deref().unwrap_or("shared-safe")
         ))
     }
 
@@ -555,50 +518,6 @@ impl ContextProjectToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct AssimilateProjectToolArgs {
-    source: Option<String>,
-    project: Option<PathBuf>,
-    evidence_mode: Option<String>,
-    #[serde(default)]
-    allow_raw_evidence: bool,
-}
-
-impl AssimilateProjectToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, self.source);
-        args.extend(["assimilate".to_string(), "project".to_string()]);
-        push_opt(&mut args, "--project", self.project.map(path_to_string));
-        push_opt(&mut args, "--evidence-mode", self.evidence_mode);
-        push_flag(&mut args, "--allow-raw-evidence", self.allow_raw_evidence);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct AssimilateSourceToolArgs {
-    source: String,
-    evidence_mode: Option<String>,
-    #[serde(default)]
-    allow_raw_evidence: bool,
-    per_project_limit: Option<usize>,
-    since: Option<String>,
-}
-
-impl AssimilateSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["assimilate".to_string(), "source".to_string()]);
-        push_opt(&mut args, "--evidence-mode", self.evidence_mode);
-        push_flag(&mut args, "--allow-raw-evidence", self.allow_raw_evidence);
-        push_opt(&mut args, "--per-project-limit", self.per_project_limit);
-        push_opt(&mut args, "--since", self.since);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct SummarizeProjectToolArgs {
     source: Option<String>,
     project: Option<String>,
@@ -775,13 +694,6 @@ struct SessionHandoffPromptArgs {
     session_id: String,
     source: Option<String>,
     project: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct MemoryAssimilationPromptArgs {
-    project: Option<String>,
-    source: Option<String>,
-    evidence_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
