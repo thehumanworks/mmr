@@ -39,6 +39,18 @@ surface organised around which harness ran, rather than the project, fails it.
    generator and the docs server describe 24 REST operations that the binary
    no longer serves (removed 2026-10-22).
 
+5. **Raw-history `find`** (added 2026-11-12 after the baseline from the "Prove
+   mmr useful to agents" thread: `find` failed in all 35 agent calls because it
+   needed `init`). `find` scans native history across every harness with no
+   setup, newest first, and each match carries a `read_command`.
+6. **The store stack** (added 2026-11-12; recommended on a decision card while
+   Tomas's answer was pending, revertible as one commit). With `find` on raw
+   history, nothing needs the SQLite store: `init`, `ingest events`, `note`,
+   `retrieve`, `status`, `sync`, `redact`, `read --format tree`, the hidden
+   `__db-info`, the MCP tool `mmr_status`, `src/{store,capture,sync}.rs`,
+   `src/cli/retrieval.rs` and the `rusqlite` dependency. This absorbs cut 3.
+   `share` keeps its privacy scan from `src/redaction.rs`.
+
 ## Close calls: listed, not cut
 
 Recorded in the PR with a recommendation each: `find` vs `retrieve`,
@@ -49,9 +61,9 @@ through the Nix modules), `ingest events` vs `init`, `read --format tree`,
 ## Contract change
 
 - Each removed command becomes a clap usage error (exit 2).
-- Every surviving command keeps byte-identical output, except where a cut
-  removes fields from it (cut 3: the `remote`, `hydration` and `sync` blocks of
-  `init`, and the sync, redaction and dream diagnostics of `status`).
+- Every surviving command keeps byte-identical output, except: `find` (cut 5,
+  new output), help texts that list removed commands, and `status` losing its
+  dream diagnostics (cut 2) before `status` itself goes (cut 6).
 
 ## Validation plan
 
@@ -66,7 +78,7 @@ through the Nix modules), `ingest events` vs `init`, `read --format tree`,
 
 - [x] DoD-1 — Cut 1 removed; differential check shows only source cases change.
 - [x] DoD-2 — Cut 2 removed; differential check explained.
-- [ ] DoD-3 — Cut 3 removed; differential check explained.
+- [x] DoD-3 — Cuts 3, 5 and 6 done; differential check explained.
 - [x] DoD-4 — Cut 4 removed.
 - [ ] DoD-5 — README, the bundled mmr skill and the command taxonomy teach only
   the surviving surface.

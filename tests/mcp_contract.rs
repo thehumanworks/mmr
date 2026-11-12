@@ -26,7 +26,6 @@ const EXPECTED_TOOLS: &[&str] = &[
     "mmr_summarize_session",
     "mmr_compact_project",
     "mmr_compact_session",
-    "mmr_status",
     "mmr_skill_load",
 ];
 

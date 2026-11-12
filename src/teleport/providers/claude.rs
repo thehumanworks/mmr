@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::capture::ClaudeAdapter;
 use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{
@@ -25,7 +24,7 @@ impl TeleportProviderProfile for ClaudeProfile {
     }
 
     fn parser_version(&self) -> &'static str {
-        ClaudeAdapter::PARSER_VERSION
+        "claude-code-jsonl-v1"
     }
 
     fn capabilities(&self) -> Vec<String> {

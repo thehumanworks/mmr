@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -221,16 +220,6 @@ impl MmrMcpServer {
         Parameters(args): Parameters<CompactSessionToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
-    }
-
-    /// Inspect local project, redaction, source, and sync state. Use to troubleshoot mmr
-    /// setup or linking before concluding that history is missing.
-    #[tool(name = "mmr_status")]
-    async fn status(
-        &self,
-        Parameters(args): Parameters<StatusToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
     }
 
     /// Return the bundled mmr agent skill as JSON text. Use to load full mmr usage guidance
@@ -646,22 +635,6 @@ struct CompactRunnerToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct StatusToolArgs {
-    source: Option<String>,
-    project: Option<PathBuf>,
-}
-
-impl StatusToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, self.source);
-        args.push("status".to_string());
-        push_opt(&mut args, "--project", self.project.map(path_to_string));
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct RecallPreviousSessionPromptArgs {
     project: Option<String>,
     source: Option<String>,
@@ -807,10 +780,6 @@ fn push_compact_runner(args: &mut Vec<String>, runner: CompactRunnerToolArgs) {
         "--output-format",
         Some(runner.output_format.unwrap_or_else(|| "json".to_string())),
     );
-}
-
-fn path_to_string(path: PathBuf) -> String {
-    path.to_string_lossy().into_owned()
 }
 
 fn display_opt(value: Option<&str>) -> &str {

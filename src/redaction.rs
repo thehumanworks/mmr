@@ -25,7 +25,6 @@ pub struct PiiCoverage {
 #[serde(rename_all = "snake_case")]
 pub enum PiiCoverageStatus {
     Available,
-    Degraded,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -39,23 +38,6 @@ pub struct RedactionOutcome {
 pub trait PrivacyDetector {
     fn detect(&self, text: &str) -> Vec<RedactionFinding>;
     fn coverage(&self) -> PiiCoverage;
-}
-
-#[derive(Debug, Default)]
-pub struct UnavailablePrivacyDetector;
-
-impl PrivacyDetector for UnavailablePrivacyDetector {
-    fn detect(&self, _text: &str) -> Vec<RedactionFinding> {
-        Vec::new()
-    }
-
-    fn coverage(&self) -> PiiCoverage {
-        PiiCoverage {
-            status: PiiCoverageStatus::Degraded,
-            detector: "openai/privacy-filter".to_string(),
-            reason: "optional privacy-filter detector is not configured; deterministic secret and coarse PII rules applied".to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -73,10 +55,6 @@ impl PrivacyDetector for DeterministicPrivacyDetector {
             reason: "local deterministic PII detector enabled".to_string(),
         }
     }
-}
-
-pub fn scan_text(text: &str) -> RedactionOutcome {
-    scan_text_with_detector(text, &UnavailablePrivacyDetector)
 }
 
 pub fn scan_text_with_detector(text: &str, detector: &dyn PrivacyDetector) -> RedactionOutcome {
@@ -380,6 +358,10 @@ fn address_regex() -> &'static Regex {
 mod tests {
     use super::*;
 
+    fn scan_text(text: &str) -> RedactionOutcome {
+        scan_text_with_detector(text, &DeterministicPrivacyDetector)
+    }
+
     #[test]
     fn deterministic_secret_findings_block_sync_and_redact_value() {
         let outcome =
@@ -403,7 +385,7 @@ mod tests {
         assert!(!outcome.blocks_sync);
         assert!(outcome.redacted_text.contains("[REDACTED:private_email]"));
         assert!(outcome.redacted_text.contains("[REDACTED:private_phone]"));
-        assert_eq!(outcome.pii_coverage.status, PiiCoverageStatus::Degraded);
+        assert_eq!(outcome.pii_coverage.status, PiiCoverageStatus::Available);
     }
 
     #[test]

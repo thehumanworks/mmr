@@ -1,82 +1,83 @@
 # mmr command taxonomy
 
-`mmr` uses intent-first commands. Historical top-level commands such as
-`projects`, `sessions`, `messages`, `export`, `prev`, `summary`, `remember`,
-`dream`, `search`, `rg`, and `link` are removed.
+`mmr` helps an agent fetch a project's earlier context, whichever harness
+produced it: Claude Code, Codex, Cursor, Grok or Pi. Every command reads each
+harness's own history files on this machine. Nothing needs to be set up, and no
+read command writes anything.
 
-## Commands
+## Scope
 
-- `mmr init` sets up or repairs the local store for the current project and
-  ingests available source history by default. Use `--link-only` to skip
-  ingestion and receive suggested `mmr --source <source> ingest events`
-  commands.
-- `mmr status` reports store, project, privacy, sync, and provider readiness.
-- `mmr sync` reconciles redacted project memory with the configured file-backed
-  remote simulation; it is not a hosted GitHub sync service.
-- `mmr ingest events` ingests provider history into normalized local events.
-- `mmr import session` pulls one selected native provider session bundle from an
-  explicit SSH peer; it reads by default and restores native files with `--apply`.
-- `mmr import bundle` reads an existing bundle by default; `--apply` explicitly
-  restores native files. `--force` requires `--apply`.
-- `mmr share session` shares one selected native provider session from the
-  source machine.
-- `mmr note` adds a human-authored project event.
-- `mmr list projects` lists known projects with source and recency metadata.
-- `mmr list sessions` lists sessions, defaulting to the cwd project unless
-  `--all` or an explicit project/source scope is used.
-- `mmr find` searches normalized events and learned memory. JSON is the default;
-  `--format line` emits tab-delimited `citation`, `line`, `source`, `snippet`.
-- `mmr retrieve "query" --max-sessions 1` ranks readable sessions for a match.
-  For phrase → session → context, run `init`, then `find` for lines/citations,
-  then `retrieve`. Pass its `selected_sessions` fields `source`,
-  `source_session_id`, and `project_name` to
-  `mmr --source <source> read session <source_session_id> --project <project_name>`;
-  `find`'s `session_id` is an internal store ID. A known native session can be
-  read without `init`.
-- `mmr recall` retrieves the previous stable session in scope. `mmr recall 2`
-  reads two sessions back; age 0 remains held back unless `--include-newest` is
-  passed.
-- `mmr read session <session-id>` reads one explicit session.
-- `mmr read project` reads project-scoped history across sources, defaulting to
-  cwd. Use `--format tree --output-dir <dir>` for an on-disk event tree.
-- `mmr context project` returns project-specific context across sources.
-  `--limit 20` bounds the returned raw messages; it does not call a model.
-- `mmr summarize project` and `mmr summarize session <session-id>` run
-  stateless summaries.
-- `mmr compact project` and `mmr compact session <session-id>` send selected transcript history to Morph
-  Compact. This removes low-relevance lines without paraphrasing surviving
-  content. Set `MORPHLLM_API_KEY`; optionally set `MORPHLLM_BASE_URL` and
-  `MMR_COMPACT_MODEL`, or pass `--model`.
-- `mmr skill load` prints the bundled mmr agent skill to stdout for immediate
-  agent context.
-- `mmr skill install` replaces `~/.agents/skills/mmr` with the bundled skill;
-  `--local` targets `.agents/skills/mmr` under the current project.
-- `mmr redact scan` and `mmr redact explain` inspect privacy policy outcomes.
+- Project commands use the current directory's project unless you pass
+  `--project <name-or-path>`, or `--all` where the command offers it.
+- The global `--source <source>` flag narrows any command to one harness.
+  Without it, commands read every harness (or `MMR_DEFAULT_SOURCE` when set).
+- Output is JSON on stdout. Diagnostics go to stderr. `--pretty` indents JSON.
+- Paged commands return `next_page`, `next_offset` and a shell-quoted
+  `next_command` that runs as printed.
 
-## Replacement Map
+## Fetch context
 
-| Removed | Replacement |
+- `mmr find <text>` searches message content, case-insensitive, newest first.
+  `--project`, `--all` and `--session` change the scope; `--limit` and
+  `--offset` page. Each match has `session_id`, `source`, `project_name`,
+  `timestamp`, `role`, a `snippet` around the first hit, and a `read_command`
+  that reads its session.
+- `mmr list sessions` lists the project's sessions, newest first.
+  `mmr list projects` lists every project with source and recency metadata.
+- `mmr recall` reads the previous stable session in the project. `mmr recall 2`
+  reads two sessions back. The newest session is assumed live and held back
+  unless `--include-newest` is passed.
+- `mmr read session <session-id>` reads one session. `--project` narrows the
+  lookup when the same id exists in several projects.
+- `mmr read project` reads the project's history across harnesses in time
+  order. Page it with `--limit` and `--offset`.
+- `mmr context project` returns the project's session list and a bounded array
+  of its newest messages in one call. `--limit` bounds the messages. It does
+  not call a model.
+
+## Condense context with a model
+
+These commands send history to an external model and need an API key.
+
+- `mmr summarize project` and `mmr summarize session <session-id>` run a
+  stateless summary. Markdown is the default; `-O json` returns JSON.
+- `mmr compact project` and `mmr compact session <session-id>` send the
+  transcript to Morph Compact, which removes low-relevance lines without
+  paraphrasing the lines it keeps. Set `MORPHLLM_API_KEY`; optionally set
+  `MORPHLLM_BASE_URL` and `MMR_COMPACT_MODEL`, or pass `--model`.
+
+## Move a session between machines
+
+- `mmr share session <id|latest> --to <ssh-target|file:///inbox>` packs one
+  native session from this machine. `--via http` serves it once over HTTP.
+- `mmr import session --from <ssh-target>` pulls one session from a peer.
+- `mmr import bundle <locator>` reads a bundle.
+- Both import commands only read by default. `--apply` restores native provider
+  files, and `--force` requires `--apply`.
+
+## Agent integration
+
+- `mmr skill load` prints the bundled agent skill. `mmr skill install` writes
+  it into the user's skills directory; `--local` targets the current project.
+- `mmr mcp --transport stdio|http` serves the fetch and condense commands as
+  MCP tools. See
+  [mmr-mcp.md](mmr-mcp.md).
+
+## Removed commands
+
+No compatibility aliases are kept. Each removed name is a usage error (exit 2).
+
+| Removed | Use instead |
 | --- | --- |
-| `mmr projects` | `mmr list projects` |
-| `mmr sessions` | `mmr list sessions` |
+| `mmr projects`, `mmr sessions` | `mmr list projects`, `mmr list sessions` |
 | `mmr messages --session <id>` | `mmr read session <id>` |
-| `mmr messages` | `mmr read project` |
-| `mmr messages --all --source <source>` | none; read by project or session |
-| `mmr read source`, `context source`, `summarize source`, `compact source` | none; read by project or session |
+| `mmr messages`, `mmr export` | `mmr read project` |
 | `mmr prev [N]` | `mmr recall [N]` |
-| `mmr export` | `mmr read project` |
-| `mmr export --format tree` | `mmr read project --format tree` |
-| `mmr summary` / `mmr remember` | `mmr summarize project/session/source` |
-| `mmr dream`, `mmr assimilate` | none |
-| `mmr search` / `mmr rg` | `mmr find` |
-| `mmr link` | `mmr init` |
-
-## Current Peer And Movement Model
-
-- Read/query commands are local only; there is no peer-read flag.
-- Source-side session movement uses `mmr share session ...`.
-- Destination-side session movement uses `mmr import session ...` or
-  `mmr import bundle ...`.
-- Provider event ingestion uses `mmr --source <source> ingest events ...`.
-- No public compatibility aliases are retained for removed command names or
-  flags.
+| `mmr summary`, `mmr remember` | `mmr summarize project` or `session` |
+| `mmr search`, `mmr rg`, `mmr retrieve` | `mmr find`, then each match's `read_command` |
+| `read`, `context`, `summarize`, `compact` with `source` | the `project` or `session` form, with `--source` |
+| `--remote <ssh-target>` | `mmr import session --from <ssh-target>` |
+| `mmr init`, `mmr link`, `mmr ingest events`, `mmr status` | none; nothing needs to be set up |
+| `mmr note`, `mmr dream`, `mmr assimilate` | none |
+| `mmr sync`, `mmr redact` | none; `share` keeps its own privacy scan |
+| `mmr read project --format tree` | `mmr read project` |

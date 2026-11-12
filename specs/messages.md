@@ -74,8 +74,7 @@ global `--source` is provided, it searches all projects and sources and prints a
 stderr hint explaining how to narrow the lookup.
 
 `mmr read project` reads the cwd project by default, or an explicit project with
-`--project <path>`. JSON output supports `--limit` and `--offset`; tree output is
-available through `--format tree --output-dir <dir>`.
+`--project <path>`. It supports `--limit` and `--offset`.
 
 There is no source-wide read. History is read by project or by session; the
 global `--source` flag only narrows a project or session read to one harness.

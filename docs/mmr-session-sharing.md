@@ -50,14 +50,12 @@ the sidecar check. A standalone `.mmr` file also works, with internal artifact
 hash validation. This is not a ZIP archive.
 
 Default imports verify and print messages and may cache the bundle under
-`~/.mmr/teleport/cache`. They do not write `.codex`, `.claude` or `.pi` histories,
-or ingest events into local search. Messages keep their source project names.
+`~/.mmr/teleport/cache`. They do not write `.codex`, `.claude` or `.pi` histories.
+Messages keep their source project names.
 `--project` remaps only native restoration with `--apply`; reading from a
 new project directory does not rewrite provenance.
 
-No SSH access, server, cloud account or shared store is required. The current
-`sync`/FakeGithubRemote implementation is file-backed simulation, not a hosted
-GitHub/S3/R2 service. A central store can be considered separately if needed.
+No SSH access, server, cloud account or shared store is required.
 
 ## SSH Peers
 

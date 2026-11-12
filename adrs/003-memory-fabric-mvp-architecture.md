@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded on 2026-11-12. mmr no longer has a local store, sync remote,
+redaction pipeline or learned memory. Every command reads each harness's own
+history files directly. See `goals/2026-11-12-cut-to-project-context.md`.
 
 ## Date
 

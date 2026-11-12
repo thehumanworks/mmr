@@ -94,14 +94,6 @@ pub fn resolve_summarize_settings(cli_model: Option<&str>) -> Result<ResolvedSum
     })
 }
 
-pub fn summarize_api_key_configured() -> bool {
-    let summarize = load_mmr_config()
-        .ok()
-        .flatten()
-        .and_then(|config| config.summarize);
-    resolve_summarize_api_key(summarize.as_ref()).is_ok()
-}
-
 fn resolve_summarize_api_key(summarize: Option<&SummarizeConfig>) -> Result<String> {
     if let Some(api_key) =
         summarize.and_then(|value| normalize_optional_str(value.api_key.as_deref()))
@@ -125,18 +117,6 @@ fn resolve_summarize_api_key(summarize: Option<&SummarizeConfig>) -> Result<Stri
             "summarize API key is not configured; set summarize.apiKey or summarize.apiKeyEnv in {path}, or set {ENV_OPENAI_API_KEY}"
         )
     })
-}
-
-pub fn summarize_endpoint_for_status() -> String {
-    load_mmr_config()
-        .ok()
-        .and_then(|config| config)
-        .and_then(|config| config.summarize)
-        .and_then(|summarize| summarize.base_url)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or_else(|| optional_env(ENV_OPENAI_BASE_URL))
-        .unwrap_or_else(|| DEFAULT_CHAT_COMPLETIONS_BASE_URL.to_string())
 }
 
 pub fn write_summarize_config_for_tests(
@@ -377,50 +357,6 @@ mod tests {
             assert!(message.contains("summarize.apiKey"));
             assert!(message.contains("summarize.apiKeyEnv"));
             assert!(message.contains(ENV_OPENAI_API_KEY));
-        });
-    }
-
-    #[test]
-    fn summarize_api_key_configured_reflects_all_sources() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        write_summarize_config_for_tests_with_api(
-            tmp.path(),
-            "http://cfg/v1",
-            "gpt-5.5",
-            Some("inline-key"),
-            None,
-        )
-        .expect("write config");
-        with_home_and_env(tmp.path(), &[], || {
-            assert!(summarize_api_key_configured());
-        });
-
-        write_summarize_config_for_tests_with_api(
-            tmp.path(),
-            "http://cfg/v1",
-            "gpt-5.5",
-            None,
-            Some("CUSTOM_API_KEY"),
-        )
-        .expect("write config");
-        with_home_and_env(tmp.path(), &[("CUSTOM_API_KEY", "custom-env-key")], || {
-            assert!(summarize_api_key_configured());
-        });
-
-        with_home_and_env(tmp.path(), &[("OPENAI_API_KEY", "env-key")], || {
-            assert!(
-                !summarize_api_key_configured(),
-                "apiKeyEnv in config must be satisfied before OPENAI_API_KEY fallback"
-            );
-        });
-
-        with_home_and_env(tmp.path(), &[], || {
-            assert!(!summarize_api_key_configured());
-        });
-
-        let tmp_openai = tempfile::tempdir().expect("tempdir");
-        with_home_and_env(tmp_openai.path(), &[("OPENAI_API_KEY", "env-key")], || {
-            assert!(summarize_api_key_configured());
         });
     }
 

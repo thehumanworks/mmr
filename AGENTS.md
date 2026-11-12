@@ -33,13 +33,14 @@ commit unsafe.
 
 - `src/main.rs`: binary entrypoint, CLI parse + stderr error reporting.
 - `src/cli.rs`: clap command surface and command routing.
-- `src/cli/retrieval.rs`: private find/retrieve matching, response types, session
-  ranking and continuation; only `find_output` and `retrieve_output` are exposed
-  to the parent. Keep argument parsing and shared CLI helpers in `src/cli.rs`.
+- `src/cli/find.rs`: `mmr find`, a case-insensitive scan of native message
+  content; only `FindArgs` and `find_output` are exposed to the parent. Keep
+  shared CLI helpers in `src/cli.rs`.
+- `src/messages/service.rs`: `QueryService`, which loads native provider
+  history and serves every read, list, find and context command.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
 - `src/teleport/`: provider-profile native bundle pack/apply/resume/export (`provider.rs`, `providers/{codex,claude,cursor,grok,pi}.rs`); artifact paths are provider-qualified (`native/<provider>/…`); legacy flat `transcript.native.jsonl` bundles still verify on read.
-- `src/query.rs`: in-memory aggregation, filtering, sorting, pagination, and contract semantics.
 - `src/agent/chat_completions.rs`: strongly typed OpenAI-compatible Chat Completions client used by `summarize`.
 - `flake.nix`, `nix/`: Nix flake (package, overlay, dev shell), home-manager and NixOS modules in `nix/modules/`, and flake checks in `nix/tests/`. User guide: `docs/mmr-nix.md`.
 - `.github/workflows/build.yml`: release builds for Linux and macOS (x86_64 and arm64) on pushes to `main`, pull requests and `v*` tags; `v*` tags also publish the archives to the GitHub release. The tag must match the `Cargo.toml` version. Pin actions to commit SHAs and run `actionlint` after editing it.
@@ -47,6 +48,8 @@ commit unsafe.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
 - `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock provider tests for summarization).
+- `tests/summary_contract.rs`: summarize help, provider request shape and API-key configuration against a mock provider.
+- `tests/mcp_contract.rs`, `tests/portable_bundle_contract.rs`, `tests/peer_import_loopback_contract.rs`: MCP server, share/import bundles, and `import session --from` through a loopback SSH peer.
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
 - `tests/common/mod.rs`: fixture + temp `HOME` helpers.
 - `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and stateless summarization helpers.
@@ -73,7 +76,6 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Build, Test, and Development Commands
 
-- `cargo run -- init` — set up or repair the local mmr store for the current project and import available source history.
 - `cargo run -- list projects` — list all projects across all sources.
 - `cargo run -- --source codex list projects` — list projects from Codex only.
 - `cargo run -- list sessions` — list sessions for the auto-discovered cwd project by default; if discovery fails, fall back to all projects/sources.
@@ -86,8 +88,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- read project` — read chronological project history for the current directory across all sources.
 - `cargo run -- read project --project /path/to/proj` — read chronological history for an explicit project.
 - `cargo run -- --source claude read project --project /path/to/proj` — read project history filtered to one source.
-- `cargo run -- read project --format tree --output-dir /tmp/mmr-tree` — materialize a tree of event files and print the manifest JSON.
-- `cargo run -- context project` — produce project-specific context across all sources.
+- `cargo run -- find "retry limit"` — search the cwd project's history across all sources, newest first; each match has a `read_command`.
+- `cargo run -- context project` — return the project's session list and its newest messages across all sources.
 - `cargo run -- summarize project --project /path/to/proj` — generate a stateless summary over project history.
 - `cargo run -- summarize session <session-id>` — generate a stateless summary over one session.
 - `cargo run -- compact project --project /path/to/proj --query "current task"` — compact project history through Morph Compact without paraphrasing surviving lines.
@@ -109,21 +111,6 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `mmr read project --project <path>` reads chronological history for the given project across all sources unless `--source` is set.
 - `mmr list sessions` and `mmr read project` use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set where supported, or `MMR_AUTO_DISCOVER_PROJECT=0`.
 - Scripts that need only the message array can pipe through `jq '.messages'`; event-oriented commands may expose `events` instead.
-
-## Sync and hydration prerequisites
-
-- `mmr init` creates or repairs the local project link/store and ingests history; `--link-only` skips ingestion. `mmr sync` requires that link.
-- Sync/hydration uses a file-backed GitHub simulation; no GitHub credential or
-  network authentication is performed. `MMR_GITHUB_USER`, `GITHUB_USER`, `USER`,
-  then `USERNAME` supply a descriptor label; the final fallback is the literal
-  `authenticated-user`, not a verified account. `MMR_FAKE_REMOTE_AUTH=0|false|fail|failed`
-  simulates an authentication failure.
-- Use `MMR_FAKE_REMOTE_DIR` when tests need a shared simulated remote root;
-  otherwise it lives under the mmr data directory. This is not hosted sync.
-- Sync writes only redacted projections to that simulated remote. Unsafe event
-  types, deterministic secret findings, or degraded PII coverage block sync
-  rather than silently stripping data.
-- Use `mmr status --pretty`, `mmr init --pretty`, `mmr sync --dry-run --pretty`, `mmr redact scan`, and `mmr redact explain <event-id>` to verify hydration/sync state and diagnose blockers before changing behavior.
 
 ## CLI default env vars
 
@@ -193,15 +180,16 @@ it for one command.
 
 ## Focused portability and maintenance
 
-- Start agent usage with `list sessions`, `read session`, and `recall`; `find`
-  uses the existing linked search store. Do not add a replacement search surface.
+- Start agent usage with `find`, `list sessions`, `read session`, and `recall`.
+  Every command reads native provider history directly; nothing needs setup, and
+  read commands write nothing.
 - Portable handoff: `share session <id> --to file:///absolute/inbox`, copy the
   returned entry directory, then `import bundle /copied/entry`. Bundles are JSON
   with native artifacts/hashes. Default import reads/caches; `--apply` explicitly
   restores native files, and `--force` requires it. `import session` has the same
   default. Scripts relying on the former implicit apply must add `--apply`.
-- File-backed FakeGithubRemote is a simulation. File portability needs no hosted
-  service, credentials, SSH, or mandatory provider conversion.
+- File portability needs no hosted service, credentials, SSH, or mandatory
+  provider conversion.
 - Verify with `cargo test --test portable_bundle_contract`, existing import/share
   contracts, and the full verification loop. Use synthetic temporary homes and
   projects; never use protected runtime histories as fixtures.

@@ -12,8 +12,8 @@ mod send;
 mod ssh;
 
 pub use apply::{ApplyOptions, apply_bundle};
-pub(crate) use bundle::verify_artifact_hashes;
 pub use bundle::{TeleportBundleFile, load_bundle, write_bundle};
+pub(crate) use bundle::{hash_text, verify_artifact_hashes};
 pub use error::TeleportFailure;
 pub use http::{ServeError, ServeOptions, serve_session};
 pub use manifest::{BundleMetadata, TeleportFidelity, project_aliases};

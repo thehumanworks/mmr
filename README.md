@@ -1,7 +1,9 @@
 # mmr
 
-`mmr` is a Rust CLI for browsing local AI coding-session history from Claude
-Code, Codex, Cursor, Grok, and Pi.
+`mmr` lets an agent fetch a project's earlier context, whichever harness
+produced it: Claude Code, Codex, Cursor, Grok or Pi. It reads each harness's own
+history files on this machine, so nothing needs to be set up, and its read
+commands write nothing.
 
 ## Install From GitHub
 
@@ -21,8 +23,8 @@ cargo install --git https://github.com/thehumanworks/mmr.git --rev <commit-sha> 
 Requirements:
 
 - Rust 1.85 or newer.
-- A C compiler toolchain, because `mmr` builds bundled SQLite through
-  `rusqlite`.
+- A C compiler toolchain, because the TLS crypto library (`aws-lc-sys`, pulled
+  in by `reqwest`) compiles C code.
 - Normal platform TLS/build prerequisites for Rust networking crates.
 
 ## Download A Prebuilt Binary
@@ -90,27 +92,28 @@ mmr --help
 mmr skill load
 ```
 
-Start with the local history already on this machine:
+## Use
+
+Run these inside the project, or pass `--project <name-or-path>`:
 
 ```bash
-mmr list sessions --project /path/to/project
-mmr read session <session-id>
-mmr recall --project /path/to/project
+mmr find "retry limit"           # search this project's history, newest first
+mmr --source codex read session <session-id>   # read a match (each match prints this)
+mmr list sessions                # this project's sessions, newest first
+mmr recall                       # the previous session in this project
+mmr context project --limit 20   # session list plus the newest messages, in one call
 ```
 
-To recover a decision when you do not know its session, run these in the project.
-Nothing needs to be set up first:
-
-```bash
-mmr find "retry"                      # matches from every harness, newest first
-mmr --source <source> read session <session_id>   # each match's read_command
-mmr context project --limit 20        # collect bounded raw context for an agent
-```
-
-`find` is case-insensitive and searches the current project; pass `--project`
-or `--all` to widen it. Each match carries a `read_command` that reads its
-session. `context project` returns session metadata and a bounded message array
-locally; it does not call a model.
+- `find` is case-insensitive and searches every harness. `--project` or `--all`
+  widens it and `--session` narrows it. Each match carries a `read_command`.
+- `--source <claude|codex|cursor|grok|pi>` narrows any command to one harness.
+- Output is JSON; add `--pretty` to indent it. Paged results include a
+  `next_command` that runs as printed.
+- `summarize` and `compact` condense history with an external model and need an
+  API key. See [docs/mmr-command-taxonomy.md](docs/mmr-command-taxonomy.md).
+- For agents: `mmr skill load` prints the agent skill, and
+  `mmr mcp --transport stdio` serves the fetch commands as MCP tools (see
+  [docs/mmr-mcp.md](docs/mmr-mcp.md)).
 
 Try the whole workflow on synthetic history (Python 3, standard library only):
 
@@ -135,7 +138,7 @@ Temporary home removed.
 The example creates an isolated temporary HOME/project, clears inherited provider
 configuration, and verifies native files remain byte-for-byte unchanged.
 
-For a local MCP client, use `mmr mcp --transport stdio`; see [docs/mmr-mcp.md](docs/mmr-mcp.md).
+## Move a session to another machine
 
 Carry one session to another machine without SSH:
 
@@ -154,8 +157,7 @@ sessions must now pass `--apply`. `--force` also requires `--apply`.
 
 `.mmr` bundles are JSON with provider-native artifacts and hashes, not ZIP files.
 They can contain private conversation text and paths; transfer them only where
-intended. No cloud account or shared store is needed. The current `sync` backend
-is a file-backed GitHub simulation, not a hosted GitHub/S3/R2 service.
+intended. No cloud account or shared store is needed.
 
 See [docs/mmr-command-taxonomy.md](docs/mmr-command-taxonomy.md) and
 [docs/mmr-session-sharing.md](docs/mmr-session-sharing.md) for the current CLI

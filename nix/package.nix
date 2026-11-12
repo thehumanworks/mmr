@@ -4,7 +4,6 @@
   rustPlatform,
   makeBinaryWrapper,
   pkg-config,
-  sqlite,
   cacert,
   versionCheckHook,
   gitMinimal,
@@ -39,11 +38,6 @@ rustPlatform.buildRustPackage {
     makeBinaryWrapper
     pkg-config
   ];
-
-  # `cargo install` compiles SQLite from source (rusqlite's `bundled`
-  # feature). Recent nixpkgs makes Rust builds link the system SQLite through
-  # pkg-config instead, so provide it.
-  buildInputs = [ sqlite ];
 
   # `git` resolves project roots; `zsh` runs a paging contract test; the HTTP
   # client loads system CA certificates even when it only talks to localhost.

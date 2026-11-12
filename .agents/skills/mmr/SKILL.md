@@ -65,8 +65,6 @@ default; scripts that need restoration must add `--apply`. Explicit
 - `mmr summarize` and `mmr compact` send selected text to configured external
   model services. Use only when that processing is intended.
 - `mmr mcp --transport stdio` exposes the existing CLI-backed tools to a client.
-- `mmr sync` currently uses a file-backed remote simulation, not hosted GitHub,
-  S3 or R2. File handoffs do not require sync.
 - `mmr skill load` prints this bundle; `mmr skill install [--local]` replaces its
   installed copy.
 
