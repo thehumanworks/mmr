@@ -67,6 +67,7 @@ url = "https://github.com/jdx/pitchfork/releases/download/v2.3.0/pitchfork-x86_6
 [tools.pitchfork."platforms.macos-arm64"]
 checksum = "sha256:dbe17406c87fd040b7cdd1fc3b07cfe4b3f532fe75ab617db57f10f8d6b29ec9"
 url = "https://github.com/jdx/pitchfork/releases/download/v2.3.0/pitchfork-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/jdx/pitchfork/releases/assets/385516681"
 
 [tools.pitchfork."platforms.windows-x64"]
 checksum = "sha256:d3d88f4d1314597a3548c56204a7746bb248500209f2fd8721f87a00a1e0131d"
