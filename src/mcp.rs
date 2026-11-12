@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
@@ -122,8 +121,9 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// List sessions in a project, source, or all-project scope. Use to locate which past
-    /// session holds the work, decision, or discussion you need before reading it.
+    /// List a project's sessions, newest first, across every harness. Use to see what past
+    /// sessions exist before reading one; pass a session's session_id and source to
+    /// mmr_read_session.
     #[tool(name = "mmr_list_sessions")]
     async fn list_sessions(
         &self,
@@ -132,8 +132,8 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read one session by session ID. Use when a specific past session is known to contain
-    /// decisions, rationale, or unfinished work to continue.
+    /// Read one session's messages by session_id. Use after mmr_find, mmr_list_sessions or
+    /// mmr_recall points at a session; pass its source too when you have it.
     #[tool(name = "mmr_read_session")]
     async fn read_session(
         &self,
@@ -142,22 +142,12 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Read chronological project history across sources. Use to reconstruct how work
-    /// evolved when raw detail matters more than a summary.
+    /// Read a project's raw message history across every harness, in time order. Use to
+    /// reconstruct how work evolved when raw detail matters more than a summary.
     #[tool(name = "mmr_read_project")]
     async fn read_project(
         &self,
         Parameters(args): Parameters<ReadProjectToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
-    /// Read chronological history for one explicit source (claude, codex, cursor, grok, pi).
-    /// Use when the relevant past work is known to live in a specific tool's sessions.
-    #[tool(name = "mmr_read_source")]
-    async fn read_source(
-        &self,
-        Parameters(args): Parameters<ReadSourceToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         run_cli_tool(args.into_cli_args()).await
     }
@@ -174,62 +164,27 @@ impl MmrMcpServer {
         run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Search normalized events and learned memory across all sessions. Use before proposing
-    /// an approach that may already have been tried, decided, or rejected, or to answer
-    /// "did we ever..." / "why did we..." questions about past work.
+    /// Find text in this project's earlier agent sessions from every harness, newest first
+    /// (case-insensitive; no setup). Use before explaining why code is the way it is, before
+    /// proposing an approach that may already have been tried or rejected, before risky steps
+    /// such as deploys, and for "did we ever..." or "why did we..." questions. Search for a
+    /// few distinctive words. Each match has a session_id and source to pass to
+    /// mmr_read_session. Set all=true to search every project.
     #[tool(name = "mmr_find")]
     async fn find(
         &self,
         Parameters(args): Parameters<FindToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let format = args.format.clone();
-        let output = run_cli_string(args.into_cli_args()).await?;
-        if matches!(format.as_deref(), Some("line")) {
-            return Ok(json_tool_result(serde_json::json!({
-                "command": "find",
-                "format": "line",
-                "text": output,
-            })));
-        }
-        Ok(text_tool_result(output))
+        run_cli_tool(args.into_cli_args()).await
     }
 
-    /// Produce scoped, ready-to-use context for a project across sources. Use to brief
-    /// yourself or another agent before starting work on a project with prior history.
+    /// Return a project's session list plus its newest messages across every harness, in one
+    /// call and without a model. Use to brief yourself before starting work on a project with
+    /// prior history.
     #[tool(name = "mmr_context_project")]
     async fn context_project(
         &self,
         Parameters(args): Parameters<ContextProjectToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
-    /// Produce source-wide context for one explicit source. Use to brief on everything a
-    /// specific tool (claude, codex, cursor, grok, pi) has worked on, across projects.
-    #[tool(name = "mmr_context_source")]
-    async fn context_source(
-        &self,
-        Parameters(args): Parameters<ContextSourceToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
-    /// Return the project memory-assimilation prompt, runbook, output contract, and evidence.
-    /// Use when consolidating a project's session history into durable, learned memory.
-    #[tool(name = "mmr_assimilate_project")]
-    async fn assimilate_project(
-        &self,
-        Parameters(args): Parameters<AssimilateProjectToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
-    }
-
-    /// Return the source memory-assimilation prompt, runbook, output contract, and evidence.
-    /// Use when consolidating one tool's session history into durable, learned memory.
-    #[tool(name = "mmr_assimilate_source")]
-    async fn assimilate_source(
-        &self,
-        Parameters(args): Parameters<AssimilateSourceToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         run_cli_tool(args.into_cli_args()).await
     }
@@ -253,16 +208,8 @@ impl MmrMcpServer {
         run_summary_tool(args.output_format.clone(), args.into_cli_args()).await
     }
 
-    /// Summarize one explicit source through the configured OpenAI-compatible provider.
-    #[tool(name = "mmr_summarize_source")]
-    async fn summarize_source(
-        &self,
-        Parameters(args): Parameters<SummarizeSourceToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_summary_tool(args.output_format.clone(), args.into_cli_args()).await
-    }
-
-    /// Compact project history with Morph Compact.
+    /// Compact project history with Morph Compact (needs MORPHLLM_API_KEY). It drops
+    /// low-relevance lines and keeps the rest verbatim; use query to focus it.
     #[tool(name = "mmr_compact_project")]
     async fn compact_project(
         &self,
@@ -271,32 +218,14 @@ impl MmrMcpServer {
         run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
     }
 
-    /// Compact one explicit session with Morph Compact.
+    /// Compact one session with Morph Compact (needs MORPHLLM_API_KEY). It drops
+    /// low-relevance lines and keeps the rest verbatim; use query to focus it.
     #[tool(name = "mmr_compact_session")]
     async fn compact_session(
         &self,
         Parameters(args): Parameters<CompactSessionToolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
-    }
-
-    /// Compact one explicit source with Morph Compact.
-    #[tool(name = "mmr_compact_source")]
-    async fn compact_source(
-        &self,
-        Parameters(args): Parameters<CompactSourceToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_compact_tool(args.output_format.clone(), args.into_cli_args()).await
-    }
-
-    /// Inspect local project, redaction, source, and sync state. Use to troubleshoot mmr
-    /// setup or linking before concluding that history is missing.
-    #[tool(name = "mmr_status")]
-    async fn status(
-        &self,
-        Parameters(args): Parameters<StatusToolArgs>,
-    ) -> Result<CallToolResult, ErrorData> {
-        run_cli_tool(args.into_cli_args()).await
     }
 
     /// Return the bundled mmr agent skill as JSON text. Use to load full mmr usage guidance
@@ -366,23 +295,6 @@ impl MmrMcpServer {
         ))
     }
 
-    /// Run the assimilation handoff and produce evidence-backed memory candidates.
-    #[prompt(name = "mmr_memory_assimilation")]
-    async fn memory_assimilation(
-        &self,
-        Parameters(args): Parameters<MemoryAssimilationPromptArgs>,
-    ) -> GetPromptResult {
-        prompt_result(format!(
-            "Use `mmr_assimilate_project` for project={project}, source={source}, \
-             evidence_mode={evidence_mode}. Convert the returned evidence bundle into \
-             stable, non-sensitive memory candidates. Preserve citations and reject \
-             unsupported claims.",
-            project = display_opt(args.project.as_deref()),
-            source = display_opt(args.source.as_deref()),
-            evidence_mode = args.evidence_mode.as_deref().unwrap_or("shared-safe")
-        ))
-    }
-
     /// Search history first, then read the relevant sessions.
     #[prompt(name = "mmr_find_then_read")]
     async fn find_then_read(
@@ -413,8 +325,16 @@ impl ServerHandler for MmrMcpServer {
         )
         .with_server_info(Implementation::new("mmr", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "mmr exposes local AI coding session history. Tools return JSON text that matches \
-             the mmr CLI contract; prompts describe reusable history-retrieval workflows.",
+            "mmr holds this project's earlier agent sessions from Claude Code, Codex, Cursor, \
+             Grok and Pi on this machine. Git history records what changed; these sessions \
+             record why, what was tried and rejected, and what was left unfinished. Check them \
+             before you explain why code is the way it is, when the user asks you to resume or \
+             refers to earlier work, and before a risky step such as a deploy, migration or \
+             large refactor. Call mmr_find with a few distinctive words (a constant, file or \
+             error name), then mmr_read_session with a match's session_id and source. Call \
+             mmr_recall to continue the previous session, and mmr_context_project to brief \
+             yourself on the project. Omitting project uses the project of the directory the \
+             server runs in. Tools return JSON text that matches the mmr CLI.",
         )
     }
 }
@@ -430,10 +350,15 @@ struct EmptyToolArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ListProjectsToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Maximum projects to return (default 10).
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Sort by timestamp (default) or message-count.
     sort_by: Option<String>,
+    /// Sort order: desc (default) or asc.
     order: Option<String>,
 }
 
@@ -452,13 +377,20 @@ impl ListProjectsToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ListSessionsToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Use every project instead of one.
     #[serde(default)]
     all: bool,
+    /// Maximum sessions to return (default 20).
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Sort by timestamp (default) or message-count.
     sort_by: Option<String>,
+    /// Sort order: desc (default) or asc.
     order: Option<String>,
 }
 
@@ -479,10 +411,16 @@ impl ListSessionsToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ReadSessionToolArgs {
+    /// Session id, from a mmr_find match, mmr_list_sessions or mmr_recall.
+    #[serde(alias = "session")]
     session_id: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name to narrow the lookup, as in a result's project_name.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
 }
 
@@ -500,9 +438,13 @@ impl ReadSessionToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ReadProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
 }
 
@@ -519,31 +461,19 @@ impl ReadProjectToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct ReadSourceToolArgs {
-    source: String,
-    limit: Option<usize>,
-    offset: Option<usize>,
-}
-
-impl ReadSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["read".to_string(), "source".to_string()]);
-        push_opt(&mut args, "--limit", self.limit);
-        push_opt(&mut args, "--offset", self.offset);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct RecallToolArgs {
+    /// How many sessions back: 1 (default) is the previous stable session.
     n: Option<u32>,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Use every project instead of one.
     #[serde(default)]
     all: bool,
+    /// Maximum messages to return (default 50).
     limit: Option<usize>,
+    /// Allow the newest session, which may be the caller's own live session.
     #[serde(default)]
     include_newest: bool,
 }
@@ -566,15 +496,22 @@ impl RecallToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct FindToolArgs {
+    /// Text to find in message content; case-insensitive.
     query: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
-    project: Option<PathBuf>,
-    session: Option<String>,
-    role: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
+    project: Option<String>,
+    /// Use every project instead of one.
     #[serde(default)]
-    ignore_case: bool,
-    context: Option<usize>,
-    format: Option<String>,
+    all: bool,
+    /// Only search this session id.
+    #[serde(alias = "session_id")]
+    session: Option<String>,
+    /// Maximum matches to return (default 20).
+    limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
+    offset: Option<usize>,
 }
 
 impl FindToolArgs {
@@ -582,20 +519,22 @@ impl FindToolArgs {
         let mut args = Vec::new();
         push_source(&mut args, self.source);
         args.extend(["find".to_string(), self.query]);
-        push_opt(&mut args, "--project", self.project.map(path_to_string));
+        push_opt(&mut args, "--project", self.project);
+        push_flag(&mut args, "--all", self.all);
         push_opt(&mut args, "--session", self.session);
-        push_opt(&mut args, "--role", self.role);
-        push_flag(&mut args, "--ignore-case", self.ignore_case);
-        push_opt(&mut args, "--context", self.context);
-        push_opt(&mut args, "--format", self.format);
+        push_opt(&mut args, "--limit", self.limit);
+        push_opt(&mut args, "--offset", self.offset);
         args
     }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ContextProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Maximum newest messages to include (default 100).
     limit: Option<usize>,
 }
 
@@ -611,73 +550,20 @@ impl ContextProjectToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct ContextSourceToolArgs {
-    source: String,
-    limit: Option<usize>,
-}
-
-impl ContextSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["context".to_string(), "source".to_string()]);
-        push_opt(&mut args, "--limit", self.limit);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct AssimilateProjectToolArgs {
-    source: Option<String>,
-    project: Option<PathBuf>,
-    evidence_mode: Option<String>,
-    #[serde(default)]
-    allow_raw_evidence: bool,
-}
-
-impl AssimilateProjectToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, self.source);
-        args.extend(["assimilate".to_string(), "project".to_string()]);
-        push_opt(&mut args, "--project", self.project.map(path_to_string));
-        push_opt(&mut args, "--evidence-mode", self.evidence_mode);
-        push_flag(&mut args, "--allow-raw-evidence", self.allow_raw_evidence);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct AssimilateSourceToolArgs {
-    source: String,
-    evidence_mode: Option<String>,
-    #[serde(default)]
-    allow_raw_evidence: bool,
-    per_project_limit: Option<usize>,
-    since: Option<String>,
-}
-
-impl AssimilateSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["assimilate".to_string(), "source".to_string()]);
-        push_opt(&mut args, "--evidence-mode", self.evidence_mode);
-        push_flag(&mut args, "--allow-raw-evidence", self.allow_raw_evidence);
-        push_opt(&mut args, "--per-project-limit", self.per_project_limit);
-        push_opt(&mut args, "--since", self.since);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct SummarizeProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Replace the output-format and rules part of the summary instructions.
     instructions: Option<String>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -696,13 +582,22 @@ impl SummarizeProjectToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SummarizeSessionToolArgs {
+    /// Session id, from a mmr_find match, mmr_list_sessions or mmr_recall.
+    #[serde(alias = "session")]
     session_id: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name to narrow the lookup, as in a result's project_name.
     project: Option<String>,
+    /// Maximum messages to include.
     limit: Option<usize>,
+    /// Items to skip, for paging. Pass next_offset from the previous result.
     offset: Option<usize>,
+    /// Replace the output-format and rules part of the summary instructions.
     instructions: Option<String>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -724,34 +619,24 @@ impl SummarizeSessionToolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct SummarizeSourceToolArgs {
-    source: String,
-    instructions: Option<String>,
-    model: Option<String>,
-    output_format: Option<String>,
-}
-
-impl SummarizeSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["summarize".to_string(), "source".to_string()]);
-        push_summary_runner(&mut args, self.instructions, self.model, self.output_format);
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct CompactProjectToolArgs {
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name, as in a result's project_name. Omit to use the project of the directory the server runs in.
     project: Option<String>,
-    remote: Option<String>,
+    /// Focus query for relevance-based pruning.
     query: Option<String>,
+    /// Fraction of input to keep, for example 0.3 (aggressive) or 0.7 (light).
     compression_ratio: Option<f32>,
+    /// Keep the last N messages uncompressed.
     preserve_recent: Option<u32>,
+    /// Omit compacted_line_ranges from the result.
     no_line_ranges: Option<bool>,
+    /// Omit "(filtered N lines)" markers from the compacted text.
     no_markers: Option<bool>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -761,7 +646,6 @@ impl CompactProjectToolArgs {
         push_source(&mut args, self.source);
         args.extend(["compact".to_string(), "project".to_string()]);
         push_opt(&mut args, "--project", self.project);
-        push_opt(&mut args, "--remote", self.remote);
         push_compact_runner(
             &mut args,
             CompactRunnerToolArgs {
@@ -780,16 +664,26 @@ impl CompactProjectToolArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CompactSessionToolArgs {
+    /// Session id, from a mmr_find match, mmr_list_sessions or mmr_recall.
+    #[serde(alias = "session")]
     session_id: String,
+    /// Narrow to one harness: claude, codex, cursor, grok or pi. Omit to read every harness.
     source: Option<String>,
+    /// Project path or name to narrow the lookup, as in a result's project_name.
     project: Option<String>,
-    remote: Option<String>,
+    /// Focus query for relevance-based pruning.
     query: Option<String>,
+    /// Fraction of input to keep, for example 0.3 (aggressive) or 0.7 (light).
     compression_ratio: Option<f32>,
+    /// Keep the last N messages uncompressed.
     preserve_recent: Option<u32>,
+    /// Omit compacted_line_ranges from the result.
     no_line_ranges: Option<bool>,
+    /// Omit "(filtered N lines)" markers from the compacted text.
     no_markers: Option<bool>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
 }
 
@@ -803,42 +697,6 @@ impl CompactSessionToolArgs {
             self.session_id,
         ]);
         push_opt(&mut args, "--project", self.project);
-        push_opt(&mut args, "--remote", self.remote);
-        push_compact_runner(
-            &mut args,
-            CompactRunnerToolArgs {
-                query: self.query,
-                compression_ratio: self.compression_ratio,
-                preserve_recent: self.preserve_recent,
-                no_line_ranges: self.no_line_ranges,
-                no_markers: self.no_markers,
-                model: self.model,
-                output_format: self.output_format,
-            },
-        );
-        args
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CompactSourceToolArgs {
-    source: String,
-    remote: Option<String>,
-    query: Option<String>,
-    compression_ratio: Option<f32>,
-    preserve_recent: Option<u32>,
-    no_line_ranges: Option<bool>,
-    no_markers: Option<bool>,
-    model: Option<String>,
-    output_format: Option<String>,
-}
-
-impl CompactSourceToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, Some(self.source));
-        args.extend(["compact".to_string(), "source".to_string()]);
-        push_opt(&mut args, "--remote", self.remote);
         push_compact_runner(
             &mut args,
             CompactRunnerToolArgs {
@@ -856,29 +714,20 @@ impl CompactSourceToolArgs {
 }
 
 struct CompactRunnerToolArgs {
+    /// Focus query for relevance-based pruning.
     query: Option<String>,
+    /// Fraction of input to keep, for example 0.3 (aggressive) or 0.7 (light).
     compression_ratio: Option<f32>,
+    /// Keep the last N messages uncompressed.
     preserve_recent: Option<u32>,
+    /// Omit compacted_line_ranges from the result.
     no_line_ranges: Option<bool>,
+    /// Omit "(filtered N lines)" markers from the compacted text.
     no_markers: Option<bool>,
+    /// Model to use instead of the configured default.
     model: Option<String>,
+    /// json (default) or md.
     output_format: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct StatusToolArgs {
-    source: Option<String>,
-    project: Option<PathBuf>,
-}
-
-impl StatusToolArgs {
-    fn into_cli_args(self) -> Vec<String> {
-        let mut args = Vec::new();
-        push_source(&mut args, self.source);
-        args.push("status".to_string());
-        push_opt(&mut args, "--project", self.project.map(path_to_string));
-        args
-    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -904,13 +753,6 @@ struct SessionHandoffPromptArgs {
     session_id: String,
     source: Option<String>,
     project: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct MemoryAssimilationPromptArgs {
-    project: Option<String>,
-    source: Option<String>,
-    evidence_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1034,10 +876,6 @@ fn push_compact_runner(args: &mut Vec<String>, runner: CompactRunnerToolArgs) {
         "--output-format",
         Some(runner.output_format.unwrap_or_else(|| "json".to_string())),
     );
-}
-
-fn path_to_string(path: PathBuf) -> String {
-    path.to_string_lossy().into_owned()
 }
 
 fn display_opt(value: Option<&str>) -> &str {

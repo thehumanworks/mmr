@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::capture::CodexAdapter;
 use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{NativeArtifactSpec, TeleportProviderProfile};
@@ -22,7 +21,7 @@ impl TeleportProviderProfile for CodexProfile {
     }
 
     fn parser_version(&self) -> &'static str {
-        CodexAdapter::PARSER_VERSION
+        "codex-rollout-v1"
     }
 
     fn capabilities(&self) -> Vec<String> {

@@ -10,8 +10,6 @@ pub struct ApiProject {
     pub session_count: i32,
     pub message_count: i32,
     pub last_activity: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<ApiMessageOrigin>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,8 +17,6 @@ pub struct ApiProjectsResponse {
     pub projects: Vec<ApiProject>,
     pub total_messages: i64,
     pub total_sessions: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peer_results: Option<Vec<ApiPeerResult>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -35,16 +31,12 @@ pub struct ApiSession {
     pub user_messages: i32,
     pub assistant_messages: i32,
     pub preview: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<ApiMessageOrigin>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApiSessionsResponse {
     pub sessions: Vec<ApiSession>,
     pub total_sessions: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peer_results: Option<Vec<ApiPeerResult>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,16 +52,6 @@ pub struct ApiMessage {
     pub msg_type: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<ApiMessageOrigin>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiMessageOrigin {
-    pub host: String,
-    pub transport: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote_mmr_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,8 +65,6 @@ pub struct ApiMessagesResponse {
     /// Present only for `recall`, which selects a session by age; omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_selection: Option<SessionSelection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peer_results: Option<Vec<ApiPeerResult>>,
 }
 
 /// Self-describing record of which prior session(s) a reverse-axis query resolved to,
@@ -125,20 +105,6 @@ pub struct SkippedNewest {
     pub session_id: String,
     pub last_timestamp: String,
     pub assumed_live: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiPeerResult {
-    pub host: String,
-    pub transport: String,
-    pub command: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote_mmr_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_messages: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_sessions: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

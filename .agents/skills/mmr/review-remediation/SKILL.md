@@ -66,7 +66,7 @@ Assign bounded goals to specialized subagents (see `.codex/agents/mmr_*.toml`):
 
 - Work only in the assigned worktree
 - Add fixture-driven tests before or with the fix
-- Smallest change in `src/cli.rs`, `src/sync.rs`, `src/teleport/**`, etc.
+- Smallest change in `src/cli.rs`, `src/messages/**`, `src/teleport/**`, etc.
 - Return branch, changed files, verification outcomes, merge notes
 
 ## 4. Branch Implement → Merge to Main
