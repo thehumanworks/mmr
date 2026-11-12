@@ -337,18 +337,11 @@ fn scan_native_transcript(content: &str) -> TeleportScanSummary {
 }
 
 fn source_filter_for(source: &str) -> Result<SourceFilter, TeleportFailure> {
-    Ok(match source {
-        "codex" => SourceFilter::Codex,
-        "claude" => SourceFilter::Claude,
-        "cursor" => SourceFilter::Cursor,
-        "grok" => SourceFilter::Grok,
-        "pi" => SourceFilter::Pi,
-        other => {
-            return Err(TeleportFailure::runtime(
-                "teleport/pack",
-                format!("unknown source filter for {other}"),
-            ));
-        }
+    SourceFilter::from_name(source).ok_or_else(|| {
+        TeleportFailure::runtime(
+            "teleport/pack",
+            format!("unknown source filter for {source}"),
+        )
     })
 }
 

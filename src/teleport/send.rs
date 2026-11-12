@@ -25,24 +25,6 @@ pub enum SendTransport {
     File,
 }
 
-impl SendTransport {
-    pub fn from_arg(value: &str) -> Result<Self, TeleportFailure> {
-        match value {
-            "auto" => Ok(Self::Auto),
-            "ssh" => Ok(Self::Ssh),
-            "file" => Ok(Self::File),
-            "http" => Err(TeleportFailure::usage(
-                "teleport/send",
-                "teleport send does not support HTTP transport yet",
-            )),
-            other => Err(TeleportFailure::usage(
-                "teleport/send",
-                format!("unsupported --transport value {other:?}; expected auto, ssh, or file"),
-            )),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolvedSendTransport {
     Ssh,

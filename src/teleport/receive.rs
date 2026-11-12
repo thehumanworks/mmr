@@ -8,7 +8,7 @@ use super::bundle::bundle_sha256;
 use super::error::TeleportFailure;
 use super::file::{
     BUNDLE_FILENAME, InboxEntryState, ReceiveLocatorKind, SHA256_FILENAME,
-    classify_receive_locator, inbox_entry_state, parse_locator, verify_ready_inbox_bundle,
+    classify_receive_locator, inbox_entry_state, verify_ready_inbox_bundle,
 };
 use super::http::{is_http_locator, parse_http_locator, receive_http_bundle};
 
@@ -60,50 +60,6 @@ pub fn receive_bundle(options: ReceiveOptions) -> Result<ReceiveResponse, Telepo
             receive_inbox_entry(&options.locator, &entry_dir, &options)
         }
     }
-}
-
-pub fn resolve_receive_locator(
-    positional: Option<String>,
-    to: Option<String>,
-) -> Result<String, TeleportFailure> {
-    resolve_teleport_locator("teleport/receive", "receive", positional, to)
-}
-
-pub fn resolve_teleport_locator(
-    command: &'static str,
-    subcommand: &str,
-    positional: Option<String>,
-    to: Option<String>,
-) -> Result<String, TeleportFailure> {
-    match (positional, to) {
-        (Some(_), Some(_)) => Err(TeleportFailure::usage(
-            command,
-            format!(
-                "teleport {subcommand}: only one bundle locator is allowed; use either a positional path or --to, not both"
-            ),
-        )),
-        (None, None) => Err(TeleportFailure::usage(
-            command,
-            format!(
-                "teleport {subcommand}: bundle path is required; pass a positional path or --to"
-            ),
-        )),
-        (Some(path), None) | (None, Some(path)) => normalize_teleport_locator(command, &path),
-    }
-}
-
-fn normalize_teleport_locator(
-    command: &'static str,
-    value: &str,
-) -> Result<String, TeleportFailure> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(TeleportFailure::usage(command, "locator path is required"));
-    }
-    if is_http_locator(trimmed) {
-        return Ok(trimmed.to_string());
-    }
-    parse_locator(trimmed).map(|path| path.display().to_string())
 }
 
 fn receive_http(options: &ReceiveOptions) -> Result<ReceiveResponse, TeleportFailure> {

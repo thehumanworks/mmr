@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use common::{RetrieveContractFixture, TestFixture, parse_stdout_json};
+use common::{PeerLoopback, RetrieveContractFixture, TestFixture, parse_stdout_json, rows};
 
 const DEV_SUBSKILLS: [&str; 4] = [
     "goal-closeout",
@@ -3464,6 +3464,267 @@ fn compact_source_requires_explicit_source() {
         stderr.contains("`mmr compact source` requires --source"),
         "stderr should explain missing source: {stderr}"
     );
+}
+
+const LOOPBACK_PROJECT_TRANSCRIPT: &str = "
+## Session sess-codex-1 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:00:01] user: hello from codex
+
+## Session sess-codex-2 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:00:30] user: start longer codex thread
+- [2025-01-02T00:01:00] assistant: first long codex answer
+- [2025-01-02T00:02:00] user: follow-up question
+- [2025-01-02T00:03:00] assistant: second long codex answer
+
+## Session sess-remote-a (codex, /Users/test/codex-proj)
+- [2025-01-02T00:04:00] user: remote codex question
+- [2025-01-02T00:04:30] assistant: remote codex answer
+
+## Session sess-codex-1 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:05:00] assistant: short codex answer
+
+## Session sess-remote-b (codex, /Users/test/codex-proj)
+- [2025-01-07T00:00:01] user: newest remote question
+- [2025-01-07T00:00:02] assistant: newest remote answer
+";
+
+const LOOPBACK_SESSION_TRANSCRIPT: &str = "
+## Session sess-codex-1 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:00:01] user: hello from codex
+- [2025-01-02T00:05:00] assistant: short codex answer
+";
+
+const LOOPBACK_SOURCE_TRANSCRIPT: &str = "
+## Session sess-codex-1 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:00:01] user: hello from codex
+
+## Session sess-codex-2 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:00:30] user: start longer codex thread
+- [2025-01-02T00:01:00] assistant: first long codex answer
+- [2025-01-02T00:02:00] user: follow-up question
+- [2025-01-02T00:03:00] assistant: second long codex answer
+
+## Session sess-remote-a (codex, /Users/test/codex-proj)
+- [2025-01-02T00:04:00] user: remote codex question
+- [2025-01-02T00:04:30] assistant: remote codex answer
+
+## Session sess-codex-1 (codex, /Users/test/codex-proj)
+- [2025-01-02T00:05:00] assistant: short codex answer
+
+## Session sess-codex-recent-1 (codex, /Users/test/codex-recent)
+- [2025-01-03T00:00:01] user: brand new project question
+- [2025-01-03T00:01:00] assistant: recent project answer
+
+## Session sess-remote-only (codex, /Users/test/remote-only)
+- [2025-01-06T00:00:01] user: remote only question
+
+## Session sess-remote-b (codex, /Users/test/codex-proj)
+- [2025-01-07T00:00:01] user: newest remote question
+- [2025-01-07T00:00:02] assistant: newest remote answer
+";
+
+/// `summarize` and `compact` with `--remote` send one deduplicated,
+/// chronological transcript built from both machines.
+#[test]
+fn summarize_and_compact_remote_send_merged_transcripts() {
+    if !loopback_bind_available() {
+        return;
+    }
+    let fixture = TestFixture::seeded();
+    let remote = PeerLoopback::seeded(&fixture);
+    let path = remote.path_env();
+    let scopes: [(&[&str], &str); 3] = [
+        (
+            &["project", "--project", "/Users/test/codex-proj"],
+            LOOPBACK_PROJECT_TRANSCRIPT,
+        ),
+        (
+            &[
+                "session",
+                "sess-codex-1",
+                "--project",
+                "/Users/test/codex-proj",
+            ],
+            LOOPBACK_SESSION_TRANSCRIPT,
+        ),
+        (&["source"], LOOPBACK_SOURCE_TRANSCRIPT),
+    ];
+
+    for (scope, transcript) in scopes {
+        let mut args = vec!["--source", "codex", "summarize"];
+        args.extend_from_slice(scope);
+        args.extend(["--remote", "studio"]);
+        let (base_url, captured, handle) = start_mock_chat_completions_server(
+            r#"{"id":"loopback","model":"test-model","choices":[{"message":{"role":"assistant","content":"merged summary"}}]}"#,
+        );
+        let output = run_cli_with_home_and_env(
+            &fixture.home,
+            &args,
+            &[
+                ("OPENAI_API_KEY", "test-key"),
+                ("OPENAI_BASE_URL", base_url.as_str()),
+                ("PATH", path.as_str()),
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "args={args:?} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        handle.join().expect("mock server thread");
+        let body = captured.lock().expect("captured body").clone().unwrap();
+        assert_eq!(
+            first_input_text(&body),
+            format!("Analyze the following AI coding session transcript(s).\n\n{transcript}"),
+            "args={args:?}"
+        );
+
+        let mut args = vec!["--source", "codex", "compact"];
+        args.extend_from_slice(scope);
+        args.extend(["--remote", "studio"]);
+        let (base_url, captured, handle) = start_mock_compact_server(
+            r#"{"id":"cmpr-loopback","object":"compact","model":"morph-compactor","output":"merged","messages":[],"usage":{"input_tokens":1,"output_tokens":1,"compression_ratio":0.5,"processing_time_ms":1}}"#,
+        );
+        let output = run_cli_with_home_and_env(
+            &fixture.home,
+            &args,
+            &[
+                ("MORPHLLM_API_KEY", "test-key"),
+                ("MORPHLLM_BASE_URL", base_url.as_str()),
+                ("PATH", path.as_str()),
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "args={args:?} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        handle.join().expect("mock compact server thread");
+        let body = captured.lock().expect("captured body").clone().unwrap();
+        assert_eq!(body["input"], transcript, "args={args:?}");
+    }
+
+    let calls = remote.ssh_calls();
+    assert_eq!(
+        calls,
+        [
+            "studio mmr peer read-project --request-json -",
+            "studio mmr peer read-project --request-json -",
+            "studio mmr peer read-session --request-json -",
+            "studio mmr peer read-session --request-json -",
+            "studio mmr peer read-source --request-json -",
+            "studio mmr peer read-source --request-json -",
+        ]
+    );
+}
+
+#[test]
+fn context_project_returns_sessions_newest_first_and_newest_message_window() {
+    let fixture = TestFixture::seeded();
+    let output = fixture.run_cli(&[
+        "context",
+        "project",
+        "--project",
+        "/Users/test/codex-proj",
+        "--limit",
+        "3",
+    ]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "context/project");
+    assert_eq!(json["scope"], "project");
+    assert!(json["source"].is_null());
+    assert_eq!(json["project"], "/Users/test/codex-proj");
+    assert_eq!(
+        rows(&json["sessions"], &["/session_id", "/last_timestamp"]),
+        [
+            "sess-codex-1|2025-01-02T00:05:00",
+            "sess-codex-2|2025-01-02T00:03:00",
+        ]
+    );
+    assert_eq!(
+        rows(&json["messages"], &["/timestamp", "/session_id"]),
+        [
+            "2025-01-02T00:02:00|sess-codex-2",
+            "2025-01-02T00:03:00|sess-codex-2",
+            "2025-01-02T00:05:00|sess-codex-1",
+        ]
+    );
+    assert_eq!(json["total_sessions"], 2);
+    assert_eq!(json["total_messages"], 6);
+    assert!(json.get("peer_results").is_none());
+}
+
+#[test]
+fn context_source_requires_source_and_spans_projects() {
+    let fixture = TestFixture::seeded();
+    let missing = fixture.run_cli_with_env(&["context", "source"], &[("MMR_DEFAULT_SOURCE", "")]);
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("`mmr context source` requires --source"),
+        "stderr={}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+
+    let output = fixture.run_cli(&["--source", "codex", "context", "source", "--limit", "2"]);
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(json["command"], "context/source");
+    assert_eq!(json["scope"], "source");
+    assert_eq!(json["source"], "codex");
+    assert!(json["project"].is_null());
+    assert_eq!(
+        rows(&json["sessions"], &["/session_id"]),
+        ["sess-codex-recent-1", "sess-codex-1", "sess-codex-2"]
+    );
+    assert_eq!(
+        rows(&json["messages"], &["/timestamp", "/role"]),
+        ["2025-01-03T00:00:01|user", "2025-01-03T00:01:00|assistant"]
+    );
+    assert_eq!(json["total_sessions"], 3);
+    assert_eq!(json["total_messages"], 8);
+}
+
+#[test]
+fn default_source_env_is_trimmed_and_case_insensitive() {
+    let fixture = TestFixture::seeded();
+    let sources_for = |value: &str| {
+        let output = fixture.run_cli_with_env(
+            &["list", "projects", "--limit", "20"],
+            &[("MMR_DEFAULT_SOURCE", value)],
+        );
+        assert!(
+            output.status.success(),
+            "MMR_DEFAULT_SOURCE={value:?} stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut sources = rows(&parse_stdout_json(&output)["projects"], &["/source"]);
+        sources.sort();
+        sources.dedup();
+        sources
+    };
+    for value in ["codex", " Codex ", "CODEX"] {
+        assert_eq!(
+            sources_for(value),
+            ["codex"],
+            "MMR_DEFAULT_SOURCE={value:?}"
+        );
+    }
+    for value in ["", "  ", "not-a-source"] {
+        assert_eq!(
+            sources_for(value),
+            ["claude", "codex", "cursor", "grok", "pi"],
+            "MMR_DEFAULT_SOURCE={value:?} should not filter"
+        );
+    }
 }
 
 #[test]

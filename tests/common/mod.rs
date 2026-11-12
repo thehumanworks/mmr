@@ -76,6 +76,128 @@ pub fn parse_stdout_json(output: &Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("stdout JSON")
 }
 
+/// A second machine for `--remote` tests. An `ssh` script on `PATH` drops the
+/// ssh options and host, then runs this build's `mmr` with `HOME` set to
+/// `home`, so both the client and the `mmr peer …` server code run.
+pub struct PeerLoopback {
+    pub home: PathBuf,
+    bin_dir: PathBuf,
+    ssh_log: PathBuf,
+}
+
+impl PeerLoopback {
+    /// Remote history for `/Users/test/codex-proj`, `/Users/test/proj` and a
+    /// remote-only project. `sess-codex-1` is a byte-for-byte copy of the local
+    /// fixture session, so merged reads must drop its duplicate messages.
+    pub fn seeded(local: &TestFixture) -> Self {
+        let root = local.home.parent().expect("fixture root").join("remote");
+        let home = root.join("home");
+        let bin_dir = root.join("bin");
+        let ssh_log = root.join("ssh.log");
+        fs::create_dir_all(home.join("cwd")).expect("remote cwd");
+        fs::create_dir_all(&bin_dir).expect("remote bin dir");
+
+        let sessions = home.join(".codex").join("sessions");
+        fs::create_dir_all(&sessions).expect("remote codex sessions");
+        fs::copy(
+            local.home.join(".codex/sessions/sess-codex-1.jsonl"),
+            sessions.join("sess-codex-1.jsonl"),
+        )
+        .expect("copy shared session");
+        write_file(
+            &sessions.join("sess-remote-a.jsonl"),
+            r#"{"type":"session_meta","timestamp":"2025-01-02T00:04:00","payload":{"id":"sess-remote-a","cwd":"/Users/test/codex-proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-02T00:04:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-02T00:04:00","payload":{"type":"user_message","message":"remote codex question"}}
+{"type":"response_item","timestamp":"2025-01-02T00:04:30","payload":{"role":"assistant","content":[{"type":"output_text","text":"remote codex answer"}]}}"#,
+        );
+        write_file(
+            &sessions.join("sess-remote-b.jsonl"),
+            r#"{"type":"session_meta","timestamp":"2025-01-07T00:00:00","payload":{"id":"sess-remote-b","cwd":"/Users/test/codex-proj","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-07T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-07T00:00:01","payload":{"type":"user_message","message":"newest remote question"}}
+{"type":"response_item","timestamp":"2025-01-07T00:00:02","payload":{"role":"assistant","content":[{"type":"output_text","text":"newest remote answer"}]}}"#,
+        );
+        write_file(
+            &sessions.join("sess-remote-only.jsonl"),
+            r#"{"type":"session_meta","timestamp":"2025-01-06T00:00:00","payload":{"id":"sess-remote-only","cwd":"/Users/test/remote-only","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-06T00:00:00","git":{"branch":"main"}}}
+{"type":"event_msg","timestamp":"2025-01-06T00:00:01","payload":{"type":"user_message","message":"remote only question"}}"#,
+        );
+        write_file(
+            &home
+                .join(".claude")
+                .join("projects")
+                .join("-Users-test-proj")
+                .join("sess-claude-remote.jsonl"),
+            r#"{"type":"user","sessionId":"sess-claude-remote","message":{"role":"user","content":"remote claude question"},"timestamp":"2025-01-01T00:00:30","uuid":"ru1","cwd":"/Users/test/proj"}"#,
+        );
+
+        let script = format!(
+            "#!/bin/sh\n\
+             while [ \"$#\" -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\n\
+             shift\n\
+             printf '%s\\n' \"$*\" >> '{log}'\n\
+             shift\n\
+             shift\n\
+             cd '{cwd}' || exit 1\n\
+             HOME='{home}' exec '{bin}' \"$@\"\n",
+            log = ssh_log.display(),
+            cwd = home.join("cwd").display(),
+            home = home.display(),
+            bin = env!("CARGO_BIN_EXE_mmr"),
+        );
+        let ssh = bin_dir.join("ssh");
+        fs::write(&ssh, script).expect("write fake ssh");
+        let mut permissions = fs::metadata(&ssh).expect("ssh metadata").permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        fs::set_permissions(&ssh, permissions).expect("chmod fake ssh");
+
+        Self {
+            home,
+            bin_dir,
+            ssh_log,
+        }
+    }
+
+    /// `PATH` value that resolves `ssh` to the loopback script.
+    pub fn path_env(&self) -> String {
+        format!(
+            "{}:{}",
+            self.bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    }
+
+    /// Remote commands the client sent, one `host mmr peer …` line per call.
+    pub fn ssh_calls(&self) -> Vec<String> {
+        fs::read_to_string(&self.ssh_log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// Render each item of a JSON array as `field|field|…` using JSON pointers, so
+/// tests can pin order and content in one readable assertion. Missing or null
+/// values render as `-`.
+pub fn rows(items: &serde_json::Value, pointers: &[&str]) -> Vec<String> {
+    items
+        .as_array()
+        .expect("JSON array")
+        .iter()
+        .map(|item| {
+            pointers
+                .iter()
+                .map(|pointer| match item.pointer(pointer) {
+                    None | Some(serde_json::Value::Null) => "-".to_string(),
+                    Some(serde_json::Value::String(text)) => text.clone(),
+                    Some(other) => other.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join("|")
+        })
+        .collect()
+}
+
 pub struct RetrieveContractFixture {
     _tmp: tempfile::TempDir,
     pub home: PathBuf,

@@ -56,24 +56,3 @@ impl std::fmt::Display for TeleportFailure {
 }
 
 impl std::error::Error for TeleportFailure {}
-
-impl From<super::bundle::BundleLocatorError> for TeleportFailure {
-    fn from(error: super::bundle::BundleLocatorError) -> Self {
-        let subcommand = match &error {
-            super::bundle::BundleLocatorError::MultipleLocators { subcommand }
-            | super::bundle::BundleLocatorError::MissingLocator { subcommand } => {
-                subcommand.as_str()
-            }
-        };
-        let command = match subcommand {
-            "inspect" => "teleport/inspect",
-            "apply" => "teleport/apply",
-            "resume" => "teleport/resume",
-            "export" => "teleport/export",
-            "send" => "teleport/send",
-            "receive" => "teleport/receive",
-            _ => "teleport/inspect",
-        };
-        Self::usage(command, error.to_string())
-    }
-}

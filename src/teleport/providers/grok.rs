@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::teleport::bundle::{remap_text, transcript_latest_timestamp};
+use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{
     NativeArtifactSpec, TeleportProviderProfile, percent_encoded_project_dir,
@@ -55,10 +55,6 @@ impl TeleportProviderProfile for GrokProfile {
         RESTORE_PATH
     }
 
-    fn primary_native_path(&self) -> &'static str {
-        UPDATES_PATH
-    }
-
     fn build_restore_hints(&self, session_id: &str) -> Value {
         restore_hints_for_provider(
             "grok",
@@ -83,10 +79,6 @@ impl TeleportProviderProfile for GrokProfile {
 
     fn supports_native_apply(&self) -> bool {
         true
-    }
-
-    fn supports_resume_transform(&self, bundle_source: &str, target: &str) -> bool {
-        bundle_source == "grok" && target == "grok"
     }
 
     fn native_destination_path(
@@ -119,19 +111,6 @@ impl TeleportProviderProfile for GrokProfile {
             ),
             UPDATES_PATH => remap_text(content, replacements),
             _ => remap_text(content, replacements),
-        }
-    }
-
-    fn conflict_check_path(
-        &self,
-        bundle: &crate::teleport::bundle::TeleportBundleFile,
-    ) -> Option<String> {
-        if bundle.files.contains_key(UPDATES_PATH) {
-            Some(UPDATES_PATH.to_string())
-        } else if bundle.files.contains_key("transcript.native.jsonl") {
-            Some("transcript.native.jsonl".to_string())
-        } else {
-            None
         }
     }
 }
@@ -181,14 +160,4 @@ fn remap_grok_summary(
         info.insert("cwd".to_string(), Value::String(target_project.to_string()));
     }
     value.to_string()
-}
-
-pub fn grok_conflict_timestamp(
-    bundle: &crate::teleport::bundle::TeleportBundleFile,
-) -> Option<String> {
-    let updates = bundle
-        .files
-        .get(UPDATES_PATH)
-        .or_else(|| bundle.files.get("transcript.native.jsonl"))?;
-    transcript_latest_timestamp(updates)
 }

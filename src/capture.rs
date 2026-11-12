@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -1836,18 +1836,6 @@ pub fn event_hash_set(events: &[NormalizedEvent]) -> HashSet<String> {
         .map(NormalizedEvent::into_store_event)
         .map(|event| event.event_id())
         .collect()
-}
-
-pub fn event_hash_multiset(events: &[NormalizedEvent]) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-    for event in events
-        .iter()
-        .cloned()
-        .map(NormalizedEvent::into_store_event)
-    {
-        *counts.entry(event.event_id()).or_insert(0) += 1;
-    }
-    counts
 }
 
 #[cfg(test)]

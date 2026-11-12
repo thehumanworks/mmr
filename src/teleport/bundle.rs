@@ -23,29 +23,6 @@ pub struct TeleportBundleFile {
     pub files: BTreeMap<String, String>,
 }
 
-#[derive(Debug)]
-pub enum BundleLocatorError {
-    MultipleLocators { subcommand: String },
-    MissingLocator { subcommand: String },
-}
-
-impl std::fmt::Display for BundleLocatorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MultipleLocators { subcommand } => write!(
-                f,
-                "teleport {subcommand}: only one bundle locator is allowed; use either a positional path or --to, not both"
-            ),
-            Self::MissingLocator { subcommand } => write!(
-                f,
-                "teleport {subcommand}: bundle path is required; pass a positional path or --to"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for BundleLocatorError {}
-
 pub fn hash_bytes(bytes: &[u8]) -> String {
     format!("sha256:{}", hash_hex(bytes))
 }

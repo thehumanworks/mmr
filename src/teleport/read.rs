@@ -15,7 +15,7 @@ use super::file::{
     classify_receive_locator, inbox_entry_state, verify_ready_inbox_bundle,
 };
 use super::http::{fetch_and_cache_http_bundle, is_http_locator, parse_http_locator};
-use super::receive::{ReceiveStagedSummary, resolve_teleport_locator};
+use super::receive::ReceiveStagedSummary;
 use crate::types::api::ApiMessage;
 
 #[derive(Debug, Clone)]
@@ -66,13 +66,6 @@ pub fn read_bundle(options: ReadOptions) -> Result<ReadResponse, TeleportFailure
             read_inbox_entry(&options.locator, &entry_dir, &options)
         }
     }
-}
-
-pub fn resolve_read_locator(
-    positional: Option<String>,
-    to: Option<String>,
-) -> Result<String, TeleportFailure> {
-    resolve_teleport_locator("teleport/read", "read", positional, to)
 }
 
 fn read_http(options: &ReadOptions) -> Result<ReadResponse, TeleportFailure> {

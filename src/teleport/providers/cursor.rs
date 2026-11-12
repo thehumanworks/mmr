@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::capture::CursorAdapter;
-use crate::teleport::bundle::{remap_text, transcript_latest_timestamp};
+use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{
     NativeArtifactSpec, TeleportProviderProfile, relative_after_marker,
@@ -51,10 +51,6 @@ impl TeleportProviderProfile for CursorProfile {
         RESTORE_PATH
     }
 
-    fn primary_native_path(&self) -> &'static str {
-        NATIVE_TRANSCRIPT
-    }
-
     fn build_restore_hints(&self, session_id: &str) -> Value {
         restore_hints_for_provider(
             "cursor",
@@ -79,10 +75,6 @@ impl TeleportProviderProfile for CursorProfile {
 
     fn supports_native_apply(&self) -> bool {
         true
-    }
-
-    fn supports_resume_transform(&self, bundle_source: &str, target: &str) -> bool {
-        bundle_source == "cursor" && target == "cursor"
     }
 
     fn native_destination_path(
@@ -113,17 +105,6 @@ impl TeleportProviderProfile for CursorProfile {
             source_canonical,
             aliases,
         )
-    }
-
-    fn conflict_check_path(
-        &self,
-        bundle: &crate::teleport::bundle::TeleportBundleFile,
-    ) -> Option<String> {
-        bundle
-            .files
-            .keys()
-            .find(|path| *path == NATIVE_TRANSCRIPT || *path == "transcript.native.jsonl")
-            .cloned()
     }
 }
 
@@ -160,8 +141,4 @@ pub fn remap_cursor_native_transcript(
     _aliases: &[String],
 ) -> String {
     remap_text(content, replacements)
-}
-
-pub fn cursor_conflict_timestamp(content: &str) -> Option<String> {
-    transcript_latest_timestamp(content)
 }

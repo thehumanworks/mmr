@@ -35,7 +35,6 @@ pub trait TeleportProviderProfile: Debug + Send + Sync {
     fn native_artifacts(&self) -> Vec<NativeArtifactSpec>;
     fn normalized_transcript_path(&self) -> &'static str;
     fn restore_hints_path(&self) -> &'static str;
-    fn primary_native_path(&self) -> &'static str;
 
     fn build_restore_hints(&self, session_id: &str) -> Value;
     fn documented_resume_command(&self, session_id: &str) -> String;
@@ -43,7 +42,6 @@ pub trait TeleportProviderProfile: Debug + Send + Sync {
     fn restore_adapters(&self) -> Vec<String>;
 
     fn supports_native_apply(&self) -> bool;
-    fn supports_resume_transform(&self, bundle_source: &str, target: &str) -> bool;
 
     fn native_destination_path(
         &self,
@@ -63,8 +61,6 @@ pub trait TeleportProviderProfile: Debug + Send + Sync {
         source_canonical: &str,
         aliases: &[String],
     ) -> String;
-
-    fn conflict_check_path(&self, bundle: &TeleportBundleFile) -> Option<String>;
 }
 
 pub fn profile_for(source: &str) -> Result<&'static dyn TeleportProviderProfile, TeleportFailure> {
@@ -83,25 +79,13 @@ pub fn profile_for(source: &str) -> Result<&'static dyn TeleportProviderProfile,
     }
 }
 
-pub fn supported_sources() -> &'static [&'static str] {
-    &["codex", "claude", "cursor", "grok", "pi"]
-}
-
 pub fn resolve_bundle_native_path(
-    profile: &dyn TeleportProviderProfile,
     bundle: &TeleportBundleFile,
     bundle_path: &str,
 ) -> Option<String> {
-    if bundle.files.contains_key(bundle_path) {
-        return bundle.files.get(bundle_path).cloned();
-    }
-    for legacy in legacy_paths_for(bundle_path) {
-        if let Some(content) = bundle.files.get(legacy) {
-            return Some(content.clone());
-        }
-    }
-    let _ = profile;
-    None
+    std::iter::once(bundle_path)
+        .chain(legacy_paths_for(bundle_path))
+        .find_map(|path| bundle.files.get(path).cloned())
 }
 
 pub fn legacy_paths_for(bundle_path: &str) -> Vec<&'static str> {

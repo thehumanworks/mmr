@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::capture::ClaudeAdapter;
-use crate::teleport::bundle::{remap_text, transcript_latest_timestamp};
+use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{
     NativeArtifactSpec, TeleportProviderProfile, relative_after_marker,
@@ -48,10 +48,6 @@ impl TeleportProviderProfile for ClaudeProfile {
         RESTORE_PATH
     }
 
-    fn primary_native_path(&self) -> &'static str {
-        NATIVE_TRANSCRIPT
-    }
-
     fn build_restore_hints(&self, session_id: &str) -> Value {
         restore_hints_for_provider(
             "claude",
@@ -76,10 +72,6 @@ impl TeleportProviderProfile for ClaudeProfile {
 
     fn supports_native_apply(&self) -> bool {
         true
-    }
-
-    fn supports_resume_transform(&self, bundle_source: &str, target: &str) -> bool {
-        bundle_source == "claude" && target == "claude"
     }
 
     fn native_destination_path(
@@ -110,17 +102,6 @@ impl TeleportProviderProfile for ClaudeProfile {
             source_canonical,
             aliases,
         )
-    }
-
-    fn conflict_check_path(
-        &self,
-        bundle: &crate::teleport::bundle::TeleportBundleFile,
-    ) -> Option<String> {
-        bundle
-            .files
-            .keys()
-            .find(|path| *path == NATIVE_TRANSCRIPT || *path == "transcript.native.jsonl")
-            .cloned()
     }
 }
 
@@ -180,8 +161,4 @@ pub fn remap_claude_native_transcript(
         updated.push('\n');
     }
     updated
-}
-
-pub fn claude_conflict_timestamp(content: &str) -> Option<String> {
-    transcript_latest_timestamp(content)
 }

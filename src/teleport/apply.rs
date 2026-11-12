@@ -95,13 +95,12 @@ pub fn apply_bundle(options: ApplyOptions) -> Result<ApplyResponse, TeleportFail
     let write_targets = native_write_targets(profile, &bundle, &home, &target_project)?;
     let mut remapped_contents = BTreeMap::new();
     for (bundle_path, _) in &write_targets {
-        let native_content =
-            resolve_bundle_native_path(profile, &bundle, bundle_path).ok_or_else(|| {
-                TeleportFailure::runtime(
-                    "teleport/apply",
-                    format!("native artifact missing from bundle: {bundle_path}"),
-                )
-            })?;
+        let native_content = resolve_bundle_native_path(&bundle, bundle_path).ok_or_else(|| {
+            TeleportFailure::runtime(
+                "teleport/apply",
+                format!("native artifact missing from bundle: {bundle_path}"),
+            )
+        })?;
         remapped_contents.insert(
             bundle_path.clone(),
             profile.remap_native_content(
@@ -261,7 +260,7 @@ fn reject_newer_existing_artifact(
     }
 
     let bundle_last_timestamp = &bundle.manifest.session.last_timestamp;
-    let existing_timestamp = conflict_timestamp_for(profile, bundle, bundle_path, existing);
+    let existing_timestamp = conflict_timestamp_for(profile, bundle_path, existing);
     if let Some(ref existing_timestamp) = existing_timestamp
         && timestamp_is_newer_than(existing_timestamp, bundle_last_timestamp)
     {
@@ -291,11 +290,9 @@ fn reject_newer_existing_artifact(
 
 fn conflict_timestamp_for(
     profile: &dyn super::provider::TeleportProviderProfile,
-    bundle: &TeleportBundleFile,
     bundle_path: &str,
     existing: &str,
 ) -> Option<String> {
-    let _ = profile.conflict_check_path(bundle);
     transcript_latest_timestamp(existing).or_else(|| {
         if profile.source_name() == "grok" && bundle_path.ends_with("summary.json") {
             grok_summary_timestamp(existing)

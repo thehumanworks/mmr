@@ -8,8 +8,6 @@ use serde_json::Value;
 use crate::types::source::ClaudeFileTask;
 use crate::types::{MessageRecord, SourceKind};
 
-use super::decode_project_name;
-
 pub fn load_claude_messages(home: &Path) -> Result<Vec<MessageRecord>> {
     let projects_dir = home.join(".claude").join("projects");
     if !projects_dir.exists() {
@@ -95,7 +93,7 @@ fn parse_claude_file(task: &ClaudeFileTask) -> Result<Vec<MessageRecord>> {
         .with_context(|| format!("failed to read Claude session file {}", task.path.display()))?;
 
     let mut out = Vec::new();
-    let fallback_project_path = decode_project_name(&task.project_name);
+    let fallback_project_path = task.project_name.clone();
     let source_file = task.path.display().to_string();
     let mut detected_project_path = String::new();
 

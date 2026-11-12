@@ -7,8 +7,6 @@ use serde_json::Value;
 
 use crate::types::{MessageRecord, SourceKind};
 
-use super::decode_project_name;
-
 struct CursorFileTask {
     path: std::path::PathBuf,
     project_name: String,
@@ -100,7 +98,7 @@ fn parse_cursor_file(task: &CursorFileTask) -> Result<Vec<MessageRecord>> {
 
     let mut out = Vec::new();
     let source_file = task.path.display().to_string();
-    let project_path = decode_project_name(&task.project_name);
+    let project_path = task.project_name.clone();
 
     for (line_index, line) in content.lines().enumerate() {
         if line.trim().is_empty() {

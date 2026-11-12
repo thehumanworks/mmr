@@ -80,8 +80,7 @@ pub struct ApiMessagesResponse {
     pub next_offset: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_command: Option<String>,
-    /// Present only when a reverse session-axis selector (`--session-back`/`--session-range`)
-    /// is used; omitted entirely otherwise so default `messages` output stays byte-identical.
+    /// Present only for `recall`, which selects a session by age; omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_selection: Option<SessionSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

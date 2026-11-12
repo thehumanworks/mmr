@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::capture::CodexAdapter;
-use crate::teleport::bundle::{remap_text, transcript_latest_timestamp};
+use crate::teleport::bundle::remap_text;
 use crate::teleport::manifest::restore_hints_for_provider;
 use crate::teleport::provider::{NativeArtifactSpec, TeleportProviderProfile};
 
@@ -45,10 +45,6 @@ impl TeleportProviderProfile for CodexProfile {
         RESTORE_PATH
     }
 
-    fn primary_native_path(&self) -> &'static str {
-        NATIVE_TRANSCRIPT
-    }
-
     fn build_restore_hints(&self, session_id: &str) -> Value {
         restore_hints_for_provider(
             "codex",
@@ -73,10 +69,6 @@ impl TeleportProviderProfile for CodexProfile {
 
     fn supports_native_apply(&self) -> bool {
         true
-    }
-
-    fn supports_resume_transform(&self, bundle_source: &str, target: &str) -> bool {
-        bundle_source == "codex" && target == "codex"
     }
 
     fn native_destination_path(
@@ -107,17 +99,6 @@ impl TeleportProviderProfile for CodexProfile {
             source_canonical,
             aliases,
         )
-    }
-
-    fn conflict_check_path(
-        &self,
-        bundle: &crate::teleport::bundle::TeleportBundleFile,
-    ) -> Option<String> {
-        bundle
-            .files
-            .keys()
-            .find(|path| *path == NATIVE_TRANSCRIPT || *path == "transcript.native.jsonl")
-            .cloned()
     }
 }
 
@@ -177,8 +158,4 @@ pub fn remap_codex_native_transcript(
         updated.push('\n');
     }
     updated
-}
-
-pub fn codex_conflict_timestamp(content: &str) -> Option<String> {
-    transcript_latest_timestamp(content)
 }

@@ -11,17 +11,6 @@ pub struct ChatCompletionsClient {
 }
 
 impl ChatCompletionsClient {
-    pub fn from_env() -> Result<Self> {
-        let api_key = required_env("OPENAI_API_KEY")?;
-        let base_url = std::env::var("OPENAI_BASE_URL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| DEFAULT_CHAT_COMPLETIONS_BASE_URL.to_string());
-
-        Ok(Self::new(api_key, base_url))
-    }
-
     pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -188,14 +177,6 @@ struct ChatResponseContentPart {
     text: Option<String>,
     #[serde(default)]
     refusal: Option<String>,
-}
-
-fn required_env(name: &str) -> Result<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("{name} must be set"))
 }
 
 #[cfg(test)]

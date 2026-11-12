@@ -18,10 +18,6 @@ pub fn resolve_home_dir() -> Result<PathBuf> {
     dirs::home_dir().context("failed to resolve home directory")
 }
 
-pub fn load_messages() -> Result<Vec<MessageRecord>> {
-    load_messages_filtered(None)
-}
-
 pub fn load_messages_filtered(source: Option<SourceFilter>) -> Result<Vec<MessageRecord>> {
     let home = resolve_home_dir()?;
     if let Some(source) = source {
@@ -60,8 +56,4 @@ pub fn load_messages_filtered(source: Option<SourceFilter>) -> Result<Vec<Messag
     messages.extend(grok_result?);
     messages.extend(pi_result?);
     Ok(messages)
-}
-
-fn decode_project_name(project_name: &str) -> String {
-    project_name.to_string()
 }
