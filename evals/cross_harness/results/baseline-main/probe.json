@@ -22,7 +22,10 @@
       "thundering-herd": false,
       "billing-imports": false,
       "staging-url": false,
-      "72-hours": true
+      "72-hours": true,
+      "deploy-window": false,
+      "flaky-cause": false,
+      "ui-retries": false
     },
     "read project (cwd): output chars": 20187,
     "recall (cwd): selected": [
@@ -36,7 +39,10 @@
       "thundering-herd": false,
       "billing-imports": false,
       "staging-url": false,
-      "72-hours": true
+      "72-hours": true,
+      "deploy-window": false,
+      "flaky-cause": false,
+      "ui-retries": false
     },
     "context project (cwd): output chars": 22492,
     "list sessions --all": {

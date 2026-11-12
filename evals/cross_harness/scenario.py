@@ -394,7 +394,7 @@ def sessions(home: str, now: datetime) -> list[Session]:
 
     # N5 · Codex · lint (noise, long output)
     out.append(Session("lint", "codex", proj, ago(2), [
-        ("user", "bump ruff and fix whatever it complains about"),
+        ("user", "bump ruff and fix whatever it complains about. And note for whoever deploys this week: never deploy between 17:00 and 19:00 CET, that's Acme's settlement batch window and they drop webhooks during it."),
         ("tool", "shell", "uv add --dev 'ruff>=0.8' && uv run ruff check .", ruff_output(60)),
         ("tool", "shell", "uv run ruff check . --fix && uv run ruff format .", "Found 60 errors (57 fixed, 3 remaining).\n4 files reformatted"),
         ("tool", "shell", "git commit -am lint", "[main 0a7f9e2] lint"),
@@ -427,6 +427,9 @@ FACTS = {
     "billing-imports": ("constraints", "billing-svc imports it directly"),
     "staging-url": ("staging", STAGING_URL),
     "72-hours": ("idempotency", "older than 72 hours"),
+    "deploy-window": ("lint", "settlement batch window"),
+    "flaky-cause": ("flaky", "sharing one DB file"),
+    "ui-retries": ("ui-retry", "Max 2 retries"),
 }
 
 TASKS = [
@@ -466,5 +469,33 @@ TASKS = [
         "tests": "synthesis across an archived Codex session, a Claude Code session and a Cursor session",
         # Only facts git cannot supply: the partner behind the cut and the outage behind the jitter.
         "rubric": {"started at 5 retries": r"\b5\b|five", "cut after Acme/billing duplicate charges": r"acme|billing", "jitter added": r"jitter", "jitter after Acme's outage": r"outage"},
+    },
+    # Held out: added after the skill text was written, to check it was not tuned to the tasks above.
+    {
+        "id": "deploy",
+        "held_out": True,
+        "prompt": "I'm about to deploy this. Anything I should watch out for?",
+        "tests": "held out; Codex session (current format), aside in a user message of an unrelated task",
+        "rubric": {"17:00-19:00 CET window": r"17[:.]?00|5 ?pm", "Acme settlement batch": r"settlement|batch"},
+    },
+    {
+        "id": "flaky",
+        "held_out": True,
+        "prompt": "Are any of the tests known to be flaky?",
+        "tests": "held out; Cursor session",
+        "rubric": {
+            "test_store": r"test_store",
+            "cause: CI jobs share one DB file (database is locked)": r"database is locked|LEDGER_DB|(one|same|single|shared)\W+(\w+\W+){0,2}(db|database|sqlite)\W+file|parallel (ci )?jobs",
+        },
+    },
+    {
+        "id": "dashboard",
+        "held_out": True,
+        "prompt": "How many times does the ledger dashboard retry a failed fetch?",
+        "tests": "held out; sibling project (ledger-ui), Codex session",
+        "rubric": {
+            "2 retries": r"(max(imum)?|up to|at most)\W{0,3}(of\W{0,3})?(2|two)\b|\b(2|two)\W{0,3}(retries|retry|times)\b|MAX_RETRIES\W{0,6}2\b",
+            "names the ledger-ui project": r"ledger-ui",
+        },
     },
 ]

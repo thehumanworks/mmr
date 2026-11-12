@@ -310,7 +310,7 @@ def report(out_dir: Path) -> str:
         allc = [r for r in results if r["condition"] == c]
         row.append(f"**{sum(r['passed'] for r in allc)}/{len(allc)}**")
         lines.append("| " + " | ".join(row) + " |")
-    lines += ["", "## Cost per run (median over all tasks)", "", "| condition | runs using mmr | tool calls | mmr calls | mmr errors | mmr output chars | raw history reads | input tokens | output tokens | cost USD | wall s |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["", "## Cost per run (median over all tasks; mmr errors and raw history reads are totals)", "", "| condition | runs using mmr | tool calls | mmr calls | mmr errors (total) | mmr output chars | raw history reads (total) | input tokens | output tokens | cost USD | wall s |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else 0  # noqa: E731
     for c in conditions:
         rs = [r for r in results if r["condition"] == c]
@@ -355,6 +355,7 @@ def main() -> None:
     parser.add_argument("--mmr", default=str(REPO_ROOT / "target" / "release" / "mmr"))
     parser.add_argument("--model", default="claude-sonnet-5-5")
     parser.add_argument("--label", default=datetime.now().strftime("%Y%m%d-%H%M"))
+    parser.add_argument("--mmr-commit", help="commit the mmr binary was built from (default: this checkout's HEAD)")
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
     parser.add_argument("--tasks", default=",".join(t["id"] for t in scenario.TASKS))
     parser.add_argument("--reps", type=int, default=2)
@@ -396,7 +397,7 @@ def main() -> None:
         sys.exit("corpus self-check failed: " + "; ".join(check["problems"]))
     (out_dir / "probe.json").write_text(json.dumps(check, indent=2))
     version = subprocess.run([str(mmr), "--version"], capture_output=True, text=True).stdout.strip()
-    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
+    commit = args.mmr_commit or subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
     claude_version = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout.strip()
     (out_dir / "meta.json").write_text(json.dumps({"mmr_version": version, "mmr_commit": commit, "claude_version": claude_version,
                                                    "model": args.model, "reps": args.reps, "date": datetime.now().isoformat(timespec="minutes")}, indent=2))

@@ -34,6 +34,12 @@ that with headless agent runs instead of argument.
 | `redis` | Would Redis fit? Did we look at it? | Claude Code session in `.claude/worktrees/` |
 | `staging-url` | Which staging endpoint did we use? | Grok session started in `scripts/` |
 | `retry-history` | How did the retry policy change, and why? | archived Codex + Claude Code + Cursor |
+| `deploy` | About to deploy, anything to watch out for? | Codex session, an aside in a user message (held out) |
+| `flaky` | Are any tests known to be flaky? | Cursor session (held out) |
+| `dashboard` | How many times does the ledger dashboard retry? | sibling project `ledger-ui`, Codex session (held out) |
+
+The three held-out tasks were written after the skill text was settled, to
+check that it was not tuned to the first six.
 
 ## Conditions
 
@@ -61,8 +67,9 @@ python3 evals/cross_harness/run.py --regrade evals/cross_harness/results/mine  #
 ```
 
 `--model` picks the agent model (default `claude-sonnet-5-5`), `--jobs` the
-parallelism, `--keep` keeps sandboxes. A full run (84 runs) takes about ten
-minutes at 7 jobs and costs about $8 with the default model. Results land in
+parallelism, `--keep` keeps sandboxes. A full run (9 tasks x 7 conditions x 2
+repetitions, 126 runs) takes about ten minutes at 7 jobs and costs about $8 with
+the default model. Results land in
 `results/<label>/`: `results.jsonl` (one row per run), `report.md`,
 `probe.json` and every transcript.
 
