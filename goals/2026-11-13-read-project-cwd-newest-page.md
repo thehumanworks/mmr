@@ -3,7 +3,7 @@ goal_id: "2026-11-13-read-project-cwd-newest-page"
 title: "Make read project in the current directory page like --project"
 description: "Route the cwd form of read project and find through the same project lookup and paging as --project, so the first page is the newest one."
 date: "2026-11-13"
-status: "in-progress"
+status: "done"
 confidence_floor: 85
 created: "2026-11-13"
 updated: "2026-11-13"
@@ -53,7 +53,7 @@ name to the whole project, so only the paging was wrong (see Evidence).
 - [x] DoD-1 — cwd and `--project` forms of `read project` agree.
 - [x] DoD-2 — cwd `read project` and `find` keep including subdirectory sessions.
 - [x] DoD-3 — Differential check explained.
-- [ ] DoD-4 — Full verification loop passes; PR merged.
+- [x] DoD-4 — Full verification loop passes; PR merged.
 
 ## Evidence
 
@@ -69,6 +69,9 @@ name to the whole project, so only the paging was wrong (see Evidence).
   with the same `total_messages`, `next_page`, `next_offset` and
   `next_command`. The unpaged cwd `read project` and every `find` case are
   unchanged.
+- Verification loop: `cargo fmt --check`, clippy with `-D warnings`,
+  `cargo test` (222 tests), benchmarks, both examples, `cargo build
+  --release` and `nix build` pass. PR #35 CI builds all four targets.
 
 ## Exit conditions
 
