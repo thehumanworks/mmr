@@ -217,33 +217,39 @@ fn walk_cursor_slug(dir: &Path, parts: &[&str], depth: usize) -> Option<String> 
     if depth > 64 {
         return None;
     }
-    for take in (1..=parts.len()).rev() {
-        for name in slug_component_candidates(&parts[..take]) {
-            let next = dir.join(&name);
-            if next.is_dir()
-                && let Some(found) = walk_cursor_slug(&next, &parts[take..], depth + 1)
-            {
-                return Some(found);
-            }
-        }
-    }
-    None
+    // Match the directory's real entries, so names that mix separators
+    // ("mmr-check.KRB", ".tmp", "my_app v2") decode as well as plain ones.
+    let mut matches = fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let take = slug_parts_matched(&name, parts)?;
+            entry.path().is_dir().then_some((take, name))
+        })
+        .collect::<Vec<_>>();
+    // Longest match first, then by name, so the walk is deterministic.
+    matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    matches
+        .into_iter()
+        .find_map(|(take, name)| walk_cursor_slug(&dir.join(name), &parts[take..], depth + 1))
 }
 
-/// Directory names that `parts` joined by "-" could have come from.
-fn slug_component_candidates(parts: &[&str]) -> Vec<String> {
-    let mut out = Vec::new();
-    if parts.len() > 1 && parts[0].is_empty() {
-        // "--claude" in a slug is "/.claude" on disk.
-        out.push(format!(".{}", parts[1..].join("-")));
-    }
-    for separator in ["-", ".", "_", " "] {
-        let candidate = parts.join(separator);
-        if !candidate.is_empty() && !out.contains(&candidate) {
-            out.push(candidate);
-        }
-    }
-    out
+/// How many of the slug's "-"-separated `parts` the directory `name` accounts
+/// for, when its slug is a prefix of them. Cursor and Claude replace every
+/// character but letters and digits (".claude" is the parts `["", "claude"]`);
+/// some callers replace only "/" (".claude" stays one part).
+fn slug_parts_matched(name: &str, parts: &[&str]) -> Option<usize> {
+    let normalised = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    [normalised.as_str(), name]
+        .into_iter()
+        .map(|slug| slug.split('-').collect::<Vec<_>>())
+        .filter(|own| own.len() <= parts.len() && own[..] == parts[..own.len()])
+        .map(|own| own.len())
+        .max()
 }
 
 /// Split Cursor's `<timestamp>…</timestamp>\n<user_query>\n…\n</user_query>`
@@ -322,5 +328,39 @@ fn extract_text_content(content: &Value) -> String {
             String::new()
         }
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_paths_that_mix_separators_and_dot_folders() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let base = tmp
+            .path()
+            .canonicalize()
+            .expect("canonical")
+            .join("mmr-check.KRB/.tmp1");
+        let project = base.join("home/src/ledger-svc");
+        let worktree = project.join(".claude/worktrees/dedupe-redis");
+        fs::create_dir_all(&worktree).expect("worktree");
+        fs::create_dir_all(base.join("home/src/ledger-svc-old")).expect("sibling");
+        let project = project.display().to_string();
+        let worktree = worktree.display().to_string();
+
+        // Cursor and Claude replace every character but letters and digits.
+        assert_eq!(
+            decode_cursor_project_dir(&cursor_project_slug(&project)),
+            Some(project.clone())
+        );
+        assert_eq!(
+            decode_project_dir_name(&format!("-{}", cursor_project_slug(&worktree))),
+            Some(worktree)
+        );
+        // Some callers replace only "/" and keep the dots.
+        let slash_only = project.trim_start_matches('/').replace('/', "-");
+        assert_eq!(decode_cursor_project_dir(&slash_only), Some(project));
     }
 }
