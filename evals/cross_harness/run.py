@@ -148,7 +148,8 @@ def codex_session_model(codex_home: Path, transcript: Path) -> str | None:
 
 
 def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path, agent: str, model: str,
-                    base_url: str = CODEX_BASE_URL, codex_login: bool = False) -> tuple[str, list[str], str]:
+                    base_url: str = CODEX_BASE_URL, codex_login: bool = False,
+                    codex_sandbox: bool = False) -> tuple[str, list[str], str]:
     """Return (PATH, extra agent args, prompt prefix)."""
     bin_dir = run_dir / "bin"
     bin_dir.mkdir()
@@ -177,7 +178,9 @@ def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path, agent:
         mcp_config.write_text(json.dumps({"mcpServers": {"mmr": mmr_server} if condition == "mcp" else {}}))
         return path, ["--mcp-config", str(mcp_config), "--strict-mcp-config"], prefix
     # Subagents and web search are off, as they are for Claude Code above.
-    config = ['approval_policy = "never"', 'sandbox_mode = "danger-full-access"', 'web_search = "disabled"',
+    # With codex_sandbox, Codex's own sandbox confines the agent's commands to writing in the project.
+    sandbox = "workspace-write" if codex_sandbox else "danger-full-access"
+    config = ['approval_policy = "never"', f'sandbox_mode = "{sandbox}"', 'web_search = "disabled"',
               "check_for_update_on_startup = false"]
     if model:
         config.insert(0, f'model = "{model}"')
@@ -215,7 +218,7 @@ def run_agent(task: dict, condition: str, rep: int, args, out_dir: Path) -> dict
     build_world(home, now)
     project = home / scenario.PROJECT
     path, extra, prefix = setup_condition(condition, home, Path(args.mmr).resolve(), run_dir, args.agent, args.model,
-                                         args.base_url, args.codex_login)
+                                         args.base_url, args.codex_login, args.codex_sandbox)
     env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
     env.update(HOME=str(home), PATH=path, IS_SANDBOX="1", TERM="dumb", LANG="C.UTF-8")
     prompt = prefix + task["prompt"]
@@ -225,8 +228,8 @@ def run_agent(task: dict, condition: str, rep: int, args, out_dir: Path) -> dict
                "--disallowedTools", "WebFetch,WebSearch,Task,Agent", *extra]
     else:
         env.update({k: os.environ[k] for k in CODEX_ENV if k in os.environ}, CODEX_HOME=str(home / ".codex"))
-        cmd = ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
-               "-C", str(project), *extra, prompt]
+        isolation = ["--sandbox", "workspace-write"] if args.codex_sandbox else ["--dangerously-bypass-approvals-and-sandbox"]
+        cmd = ["codex", "exec", "--json", *isolation, "--skip-git-repo-check", "-C", str(project), *extra, prompt]
     started = time.time()
     transcript_path = out_dir / "transcripts" / f"{run_id}.jsonl"
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
@@ -519,6 +522,9 @@ def main() -> None:
     parser.add_argument("--base-url", default=CODEX_BASE_URL, help="Codex only: OpenAI-compatible Responses endpoint")
     parser.add_argument("--codex-login", action="store_true",
                         help="Codex only: use the sign-in in ~/.codex/auth.json and Codex's default model, not --base-url")
+    parser.add_argument("--codex-sandbox", action="store_true",
+                        help="Codex only: run with Codex's workspace-write sandbox instead of bypassing it "
+                             "(use on a real machine; it may not work inside containers)")
     parser.add_argument("--label", default=datetime.now().strftime("%Y%m%d-%H%M"))
     parser.add_argument("--mmr-commit", help="commit the mmr binary was built from (default: this checkout's HEAD)")
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
