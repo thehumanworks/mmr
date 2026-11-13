@@ -52,12 +52,30 @@ cut them in a follow-up:
 
 ## Definition of Done
 
-- [ ] DoD-1 — Commands, MCP tools, model clients and config removed.
-- [ ] DoD-2 — `MMR_DEFAULT_SOURCE` and its Nix options removed, with warnings.
-- [ ] DoD-3 — Differential check explained.
-- [ ] DoD-4 — Docs, skill text and help teach only the surviving surface.
+- [x] DoD-1 — Commands, MCP tools, model clients and config removed.
+- [x] DoD-2 — `MMR_DEFAULT_SOURCE` and its Nix options removed, with warnings.
+- [x] DoD-3 — Differential check explained.
+- [x] DoD-4 — Docs, skill text and help teach only the surviving surface.
 - [ ] DoD-5 — Full verification loop passes; PR merged after the evaluation
   thread's PR.
+
+## Evidence
+
+- `model_commands_are_rejected` and `default_source_env_is_ignored` failed
+  before the cut and pass after it.
+- Differential check against `main` (0a59506), PR #31 matrix: 22 of 137
+  cases differ (30 of 411 files). 12 are help texts: the top-level help and
+  9 subcommand helps (the global `--source` line no longer mentions
+  `MMR_DEFAULT_SOURCE`), plus `summarize --help` and `compact --help`, which
+  are now usage errors. 8 are summarize/compact cases, now exit 2. One is
+  `list projects` with `MMR_DEFAULT_SOURCE=" Codex "`, which now returns all
+  7 projects from 5 harnesses instead of 3 Codex projects. One is
+  `skill load`, whose text changed. Three share cases differ only in
+  timestamps and the hashes that cover them, as they do between two runs of
+  the same binary. All 47 summarize/compact cases
+  of the model matrix are now exit 2.
+- No runtime dependency compiles C any more (`cargo tree -i cc` finds only
+  the Haiku time-zone crate).
 
 ## Exit conditions
 
