@@ -40,7 +40,7 @@ TOLD_PREFIX = (
     "sessions (Claude Code, Codex, Cursor, Grok, Pi) on this machine.\n\n"
 )
 CODEX_BASE_URL = "https://ai-gateway.vercel.sh/v1"
-DEFAULT_MODEL = {"claude": "claude-sonnet-5-5", "codex": "openai/gpt-5.3-codex"}
+DEFAULT_MODEL = {"claude": "claude-sonnet-5-5", "codex": "openai/gpt-6.1-sol"}
 HISTORY_DIRS = re.compile(r"\.claude/projects/[^ ]*\.jsonl|\.claude/projects/?(\s|$|\*)|\.codex/(sessions|archived)|\.cursor/projects|\.grok/sessions|\.pi/agent")
 PASS_ENV = ["ANTHROPIC_BASE_URL", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy",
             "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
@@ -115,8 +115,40 @@ def codex_catalog(model: str, work: Path) -> Path | None:
     return path
 
 
+CODEX_LOGIN = Path.home() / ".codex" / "auth.json"
+_login_lock = __import__("threading").Lock()
+
+
+def sync_codex_login(sandbox_auth: Path) -> None:
+    """If Codex refreshed the sign-in by replacing the linked file, carry the new tokens back."""
+    with _login_lock:
+        if sandbox_auth.is_symlink() or not sandbox_auth.is_file():
+            return
+        fresh = json.loads(sandbox_auth.read_text())
+        current = json.loads(CODEX_LOGIN.read_text())
+        if (fresh.get("last_refresh") or "") > (current.get("last_refresh") or ""):
+            CODEX_LOGIN.write_text(json.dumps(fresh, indent=2))
+
+
+def codex_session_model(codex_home: Path, transcript: Path) -> str | None:
+    """The model Codex actually used, from the session file of the run's thread."""
+    thread = next((json.loads(line).get("thread_id") for line in transcript.read_text(errors="replace").splitlines()
+                   if line.startswith('{"type":"thread.started"')), None)
+    if not thread:
+        return None
+    for rollout in codex_home.glob(f"sessions/**/rollout-*{thread}.jsonl"):
+        for line in rollout.read_text(errors="replace").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "turn_context":
+                return (event.get("payload") or {}).get("model")
+    return None
+
+
 def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path, agent: str, model: str,
-                    base_url: str = CODEX_BASE_URL) -> tuple[str, list[str], str]:
+                    base_url: str = CODEX_BASE_URL, codex_login: bool = False) -> tuple[str, list[str], str]:
     """Return (PATH, extra agent args, prompt prefix)."""
     bin_dir = run_dir / "bin"
     bin_dir.mkdir()
@@ -144,16 +176,25 @@ def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path, agent:
         mcp_config = run_dir / "mcp.json"
         mcp_config.write_text(json.dumps({"mcpServers": {"mmr": mmr_server} if condition == "mcp" else {}}))
         return path, ["--mcp-config", str(mcp_config), "--strict-mcp-config"], prefix
-    # Codex reaches the model through an OpenAI-compatible gateway. Subagents and web search are
-    # off, as they are for Claude Code above.
-    config = [f'model = "{model}"', 'model_provider = "gateway"', 'approval_policy = "never"',
-              'sandbox_mode = "danger-full-access"', 'web_search = "disabled"', "check_for_update_on_startup = false"]
-    catalog = codex_catalog(model, run_dir.parent)
-    if catalog:
-        config.append(f'model_catalog_json = "{catalog}"')
-    config += ["", "[features]", "multi_agent = false", "", "[analytics]", "enabled = false", "",
-               "[model_providers.gateway]", 'name = "AI Gateway"', f'base_url = "{base_url}"',
-               'env_key = "AI_GATEWAY_API_KEY"', 'wire_api = "responses"']
+    # Subagents and web search are off, as they are for Claude Code above.
+    config = ['approval_policy = "never"', 'sandbox_mode = "danger-full-access"', 'web_search = "disabled"',
+              "check_for_update_on_startup = false"]
+    if model:
+        config.insert(0, f'model = "{model}"')
+    if codex_login:
+        # The user's own Codex sign-in. Link it rather than copy it, so a token refresh during a run
+        # reaches the real file (see sync_codex_login).
+        (agent_home / "auth.json").symlink_to(CODEX_LOGIN)
+    else:
+        # An OpenAI-compatible gateway instead.
+        config.insert(1, 'model_provider = "gateway"')
+        catalog = codex_catalog(model, run_dir.parent)
+        if catalog:
+            config.append(f'model_catalog_json = "{catalog}"')
+    config += ["", "[features]", "multi_agent = false", "", "[analytics]", "enabled = false"]
+    if not codex_login:
+        config += ["", "[model_providers.gateway]", 'name = "AI Gateway"', f'base_url = "{base_url}"',
+                   'env_key = "AI_GATEWAY_API_KEY"', 'wire_api = "responses"']
     if condition == "mcp":
         config += ["", "[mcp_servers.mmr]", f'command = "{mmr_server["command"]}"', 'args = ["mcp", "--transport", "stdio"]']
     (agent_home / "config.toml").write_text("\n".join(config) + "\n")
@@ -174,7 +215,7 @@ def run_agent(task: dict, condition: str, rep: int, args, out_dir: Path) -> dict
     build_world(home, now)
     project = home / scenario.PROJECT
     path, extra, prefix = setup_condition(condition, home, Path(args.mmr).resolve(), run_dir, args.agent, args.model,
-                                         args.base_url)
+                                         args.base_url, args.codex_login)
     env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
     env.update(HOME=str(home), PATH=path, IS_SANDBOX="1", TERM="dumb", LANG="C.UTF-8")
     prompt = prefix + task["prompt"]
@@ -197,7 +238,12 @@ def run_agent(task: dict, condition: str, rep: int, args, out_dir: Path) -> dict
         except subprocess.TimeoutExpired:
             timed_out = True
     result = analyse(transcript_path, task, args.model)
-    result.update(run_id=run_id, condition=condition, task=task["id"], rep=rep, model=args.model, agent=args.agent,
+    model = args.model
+    if args.agent == "codex":
+        model = codex_session_model(home / ".codex", transcript_path) or model
+        if args.codex_login:
+            sync_codex_login(home / ".codex" / "auth.json")
+    result.update(run_id=run_id, condition=condition, task=task["id"], rep=rep, model=model, agent=args.agent,
                   wall_s=round(time.time() - started, 1), timed_out=timed_out)
     if not args.keep:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -268,7 +314,7 @@ def analyse(transcript: Path, task: dict, model: str = "") -> dict:
 
 
 # USD per million tokens (input, cached input, output), for agents whose stream reports no cost.
-PRICES = {"openai/gpt-5.3-codex": (1.75, 0.175, 14.0)}
+PRICES = {"openai/gpt-6.1-sol": (2.0, 0.1, 10.0), "openai/gpt-5.5": (5.0, 0.5, 30.0)}
 MMR_COMMAND = re.compile(r"(^|[\s;&|(/'\"])mmr(\s|$)")
 
 
@@ -415,7 +461,7 @@ def report(out_dir: Path) -> str:
     conditions = [c for c in CONDITIONS if any(r["condition"] == c for r in results)]
     lines = [f"# Cross-harness context eval: {out_dir.name}", ""]
     if meta:
-        lines += [f"- mmr: `{meta.get('mmr_version', '?')}` ({meta.get('mmr_commit', '?')})", f"- agent: {meta.get('agent_version') or 'Claude Code ' + meta.get('claude_version', '?')}, model `{meta.get('model')}`", f"- runs: {len(results)} ({meta.get('reps')} per cell), {meta.get('date')}", ""]
+        lines += [f"- mmr: `{meta.get('mmr_version', '?')}` ({meta.get('mmr_commit', '?')})", f"- agent: {meta.get('agent_version') or 'Claude Code ' + meta.get('claude_version', '?')}, model `{', '.join(sorted({r['model'] for r in results if r.get('model')})) or meta.get('model')}`", f"- runs: {len(results)} ({meta.get('reps')} per cell), {meta.get('date')}", ""]
     lines += ["## Pass rate (all rubric items found in the final answer)", "", "| condition | " + " | ".join(tasks) + " | all |", "|---|" + "---|" * (len(tasks) + 1)]
     for c in conditions:
         row = [c]
@@ -471,6 +517,8 @@ def main() -> None:
     parser.add_argument("--agent", choices=["claude", "codex"], default="claude", help="the reading agent")
     parser.add_argument("--model", help=f"default: {DEFAULT_MODEL['claude']} (claude), {DEFAULT_MODEL['codex']} (codex)")
     parser.add_argument("--base-url", default=CODEX_BASE_URL, help="Codex only: OpenAI-compatible Responses endpoint")
+    parser.add_argument("--codex-login", action="store_true",
+                        help="Codex only: use the sign-in in ~/.codex/auth.json and Codex's default model, not --base-url")
     parser.add_argument("--label", default=datetime.now().strftime("%Y%m%d-%H%M"))
     parser.add_argument("--mmr-commit", help="commit the mmr binary was built from (default: this checkout's HEAD)")
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
@@ -487,7 +535,8 @@ def main() -> None:
     parser.add_argument("--report", metavar="DIR", help="re-render the report for a results directory")
     parser.add_argument("--regrade", metavar="DIR", help="re-grade stored transcripts with the current rubrics, then re-render")
     args = parser.parse_args()
-    args.model = args.model or DEFAULT_MODEL[args.agent]
+    if not (args.agent == "codex" and args.codex_login):
+        args.model = args.model or DEFAULT_MODEL[args.agent]
 
     if args.regrade:
         out = Path(args.regrade)
@@ -523,7 +572,7 @@ def main() -> None:
     shutil.rmtree(Path(args.work) / "_skill", ignore_errors=True)
     mmr_skill_dir(mmr, Path(args.work) / "_skill")  # once, before threads share it
     (Path(args.work) / "_codex_catalog.json").unlink(missing_ok=True)
-    if args.agent == "codex" and not codex_catalog(args.model, Path(args.work)):
+    if args.agent == "codex" and not args.codex_login and not codex_catalog(args.model, Path(args.work)):
         print(f"note: {args.model} is not in Codex's bundled catalog; Codex will use fallback metadata", flush=True)
     done = {r["run_id"] for r in load_results(out_dir)}
     tasks = [t for t in scenario.TASKS if t["id"] in args.tasks.split(",")]
