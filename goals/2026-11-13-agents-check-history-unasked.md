@@ -64,3 +64,20 @@ fetching across harnesses) named three gaps:
 
 - `BLOCKED-DEP`: no approved way to run Codex headless. Report Claude Code
   results and leave the Codex measurement as an open gap.
+
+## Evidence so far
+
+[evals/cross_harness/RESULTS.md](../evals/cross_harness/RESULTS.md), section
+2026-11-13.
+
+- Claude Code, build bbb65e5, 16 tasks x 2: `mmr skill install` (skill plus
+  paragraph) 29/32 and 15/16 on change requests; skill alone 19/32 and 5/16;
+  hook 23/32; MCP 26/32; no mmr 0/32.
+- The first paragraph wording missed one-line changes (timeout 0/2). The
+  revised wording, skill and MCP instructions pass it 2/2 and three tasks
+  written afterwards 6/6.
+- Still failing: the sibling-project task (out of scope, see Decisions) and
+  one run where the agent read a rule and broke it.
+- Codex runner built (`--agent codex`) and checked offline against a local
+  stand-in server. Codex measurement waits on approval of model and endpoint;
+  until then the goal stays in progress.

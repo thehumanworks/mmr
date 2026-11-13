@@ -105,16 +105,16 @@ It writes the skill to `~/.agents/skills/mmr` (Codex and other agents) and
 `<!-- mmr:begin -->` and `<!-- mmr:end -->`, to `~/.claude/CLAUDE.md` and
 `~/.codex/AGENTS.md` (or `$CODEX_HOME/AGENTS.md`) for each agent already set up
 on the machine. The paragraph tells the agent to look at the project's earlier
-sessions before it starts a task. Running the command again replaces the
+sessions before it starts a task, even a one-line change. Running the command again replaces the
 paragraph rather than adding another; `--no-instructions` installs only the
 skill. For another agent, copy the paragraph from
 [src/agent_instructions.md](src/agent_instructions.md) into its global
 instructions.
 
 Why both: a skill is used when a request sounds like it needs history ("why is
-this 3?", "pick up where we left off"). Asked to change code instead ("make
-deliver() take a config object"), agents with only the skill checked history
-in 1 of 10 runs; with the paragraph, in 10 of 10. See
+this 3?", "pick up where we left off"). Asked to change code instead ("set
+TIMEOUT_S back to 10"), Claude Code agents with only the skill found the
+earlier decision in 5 of 16 runs; with the paragraph, in 15 of 16. See
 [evals/cross_harness](evals/cross_harness/RESULTS.md).
 
 ## Use
