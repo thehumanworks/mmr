@@ -38,7 +38,11 @@ fetching across harnesses) named three gaps:
    paragraph, 2 repetitions each.
 2. The winning mechanism on the original nine tasks, to check it does not hurt.
 3. The same conditions with Codex as the reader, once a model and endpoint are
-   approved.
+   approved. Proposed: Codex 0.167 with its default model (GPT-6.1-Sol) through
+   the Vercel AI Gateway, with the model's entry from Codex's bundled catalog so
+   Codex sends its native prompt and tools. The runner was checked offline
+   against a local stand-in server: Codex sees the skill, the AGENTS.md
+   paragraph, the hook output and the MCP server.
 4. Contract tests for the install change; fmt, clippy, tests, release build,
    `nix build`.
 
