@@ -606,54 +606,15 @@ fn read_cwd_project_messages(
     limit: Option<usize>,
     offset: usize,
 ) -> Result<ApiMessagesResponse> {
-    let (codex_path, claude_name) =
-        resolve_project_from_cwd().context("could not get current directory")?;
-    let cursor_name = claude_name.clone();
-    let mut messages: Vec<ApiMessage> = Vec::new();
-    let mut total_messages = 0;
-    for (source, project) in [
-        (SourceFilter::Codex, codex_path.as_str()),
-        (SourceFilter::Claude, claude_name.as_str()),
-        (SourceFilter::Cursor, cursor_name.as_str()),
-        (SourceFilter::Grok, codex_path.as_str()),
-        (SourceFilter::Pi, codex_path.as_str()),
-    ] {
-        if source_filter.is_none() || source_filter == Some(source) {
-            let response = service.messages(
-                &[],
-                Some(project),
-                Some(source),
-                MessageQueryOptions::new(None, 0, oldest_first()),
-            )?;
-            total_messages += response.total_messages;
-            messages.extend(response.messages);
-        }
-    }
-    messages.sort_by(|a, b| {
-        a.timestamp
-            .cmp(&b.timestamp)
-            .then_with(|| a.session_id.cmp(&b.session_id))
-    });
-
-    let total = messages.len();
-    let paged = paginate(messages, limit, offset);
-    let next_offset = offset.saturating_add(paged.len()) as i64;
-    Ok(ApiMessagesResponse {
-        messages: paged,
-        total_messages: total_messages.max(total as i64),
-        next_page: next_offset < total as i64,
-        next_offset,
-        next_command: None,
-        session_selection: None,
-    })
-}
-
-fn paginate<T>(items: Vec<T>, limit: Option<usize>, offset: usize) -> Vec<T> {
-    let iter = items.into_iter().skip(offset);
-    match limit {
-        Some(limit) => iter.take(limit).collect(),
-        None => iter.collect(),
-    }
+    // The same lookup and paging as `--project <cwd>`: every harness's view
+    // of this directory and its subdirectories, newest page first.
+    let (cwd, _) = resolve_project_from_cwd().context("could not get current directory")?;
+    service.messages(
+        &[],
+        Some(&cwd),
+        source_filter,
+        MessageQueryOptions::new(limit, offset, oldest_first()),
+    )
 }
 
 fn oldest_first() -> SortOptions {

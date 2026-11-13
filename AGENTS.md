@@ -100,7 +100,8 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 
 ## Read and project detection
 
-- `mmr read project` uses the current working directory to infer the project: Codex, Grok, and Pi match on the **canonical path** (e.g. `/Users/mish/proj`); Claude and Cursor match on the same path with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`).
+- `mmr read project` uses the current working directory's canonical path as `--project`, so both forms resolve the same way: Codex, Grok, and Pi store the path (e.g. `/Users/mish/proj`); Claude stores it with **slashes replaced by hyphens** and a leading hyphen (e.g. `-Users-mish-proj`); Cursor stores a lossy slug. Sessions started in subdirectories and worktrees of the project are included.
+- Paged `read project` returns the newest window first, in chronological order; a larger `--offset` reaches further back.
 - `mmr read project --project <path>` reads chronological history for the given project across all sources unless `--source` is set.
 - `mmr list sessions` and `mmr read project` use the same cwd canonical path as their default project scope unless `--project` is provided, `--all` is set where supported, or `MMR_AUTO_DISCOVER_PROJECT=0`.
 - Scripts that need only the message array can pipe through `jq '.messages'`; event-oriented commands may expose `events` instead.
