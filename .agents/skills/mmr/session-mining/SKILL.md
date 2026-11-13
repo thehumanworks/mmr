@@ -53,7 +53,7 @@ Prefer `mmr recall` when you are inside a project and want the immediate previou
 
 4. Produce a **reminder artifact** (continuity brief, key decisions list, task inventory, etc.) that can be fed back into the current session or stored for later.
 
-5. Use the results to improve long-term agent behavior (better handoff prompts, project docs, improved `mmr summarize` workflows, etc.).
+5. Use the results to improve long-term agent behavior (better handoff prompts, project docs, etc.).
 
 ## Why This Skill Exists
 
@@ -97,7 +97,7 @@ After using the skill on a real trace, you should be able to answer:
 ## Related Assets
 
 - Parent: `.agents/skills/mmr/SKILL.md`
-- `mmr summarize` — built-in continuity brief generator (this skill can feed richer input into it)
+- `mmr find` — locate the session that holds a decision, constant or error before reading it
 - Other mmr siblings: `mmr-clap-colored-cli`, `mmr-native-bundle-providers`
 
 ## References

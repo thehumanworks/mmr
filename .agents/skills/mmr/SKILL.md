@@ -20,8 +20,9 @@ mmr recall --project /path/to/project
 
 `recall` selects the previous stable session, holding back the newest by default.
 `list sessions` and `read project` infer the current project when no scope is
-given; pass `--project` when the scope matters. Omit `--source` for all providers unless `MMR_DEFAULT_SOURCE` sets a default,
-or use `--source claude|codex|cursor|grok|pi`; `all` is not a source value.
+given; pass `--project` when the scope matters. Omit `--source` to read every
+provider, or use `--source claude|codex|cursor|grok|pi`; `all` is not a source
+value.
 
 When you do not know which session holds something, run `mmr find "phrase"` in
 the project. It needs no setup, is case-insensitive, searches every harness,
@@ -31,8 +32,7 @@ to read the whole session. Use `--project <path>` or `--all` to widen the scope.
 If access to history is restricted, report the missing context instead of
 reading protected provider files as a fallback.
 
-Use `mmr context project --limit 20` for bounded raw messages and session metadata
-without model calls. In the source checkout, run `python3
+Use `mmr context project --limit 20` for bounded raw messages and session metadata. In the source checkout, run `python3
 examples/find_read_context.py` after `cargo build --locked` to try this flow with
 an isolated synthetic HOME and verify native histories remain unchanged.
 
@@ -61,9 +61,8 @@ default; scripts that need restoration must add `--apply`. Explicit
 
 ## Additional Capabilities
 
-- `mmr context project` prepares project context without calling a model.
-- `mmr summarize` and `mmr compact` send selected text to configured external
-  model services. Use only when that processing is intended.
+- `mmr context project` prepares a one-call project briefing. No mmr command
+  calls a model or needs an API key; condense what you read yourself.
 - `mmr mcp --transport stdio` exposes the existing CLI-backed tools to a client.
 - `mmr skill load` prints this bundle; `mmr skill install [--local]` replaces its
   installed copy.
