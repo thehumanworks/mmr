@@ -63,6 +63,7 @@ let
 in
 # home-manager traces warnings whenever a configuration is read, so the
 # warning texts are covered by the NixOS module check, which shares them.
+# Building this check prints the two expected warnings for `legacy`.
 assert home.config.warnings == [ ];
 assert minimal.config.warnings == [ ];
 assert mmrVariables minimal.config == { };
