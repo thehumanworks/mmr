@@ -39,9 +39,12 @@ TOLD_PREFIX = (
     "Note: `mmr` is installed on this machine. It reads the history of earlier AI coding "
     "sessions (Claude Code, Codex, Cursor, Grok, Pi) on this machine.\n\n"
 )
+CODEX_BASE_URL = "https://ai-gateway.vercel.sh/v1"
+DEFAULT_MODEL = {"claude": "claude-sonnet-5-5", "codex": "openai/gpt-5.3-codex"}
 HISTORY_DIRS = re.compile(r"\.claude/projects/[^ ]*\.jsonl|\.claude/projects/?(\s|$|\*)|\.codex/(sessions|archived)|\.cursor/projects|\.grok/sessions|\.pi/agent")
 PASS_ENV = ["ANTHROPIC_BASE_URL", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy",
             "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
+CODEX_ENV = ["AI_GATEWAY_API_KEY"]
 SYSTEM_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
@@ -92,36 +95,69 @@ def mmr_skill_dir(mmr: Path, scratch: Path) -> Path:
     return scratch / ".agents" / "skills" / "mmr"
 
 
-def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path) -> tuple[str, list[str], str]:
-    """Return (PATH, extra claude args, prompt prefix)."""
+HOOK_COMMAND = ("echo 'Earlier agent sessions in this project, newest first (from mmr; "
+                "read one with: mmr read session <session_id>):'; mmr list sessions --limit 8")
+
+
+def codex_catalog(model: str, work: Path) -> Path | None:
+    """Codex picks prompts and tools from its bundled model catalog, keyed by its own model names.
+    The gateway names the same model `openai/<name>`, so copy the bundled entry under that name."""
+    path = work / "_codex_catalog.json"
+    if not path.exists():
+        scratch = work / "_codex_debug"
+        scratch.mkdir(parents=True, exist_ok=True)
+        bundled = subprocess.run(["codex", "debug", "models", "--bundled"], capture_output=True, text=True,
+                                 env={"HOME": str(scratch), "CODEX_HOME": str(scratch), "PATH": os.environ["PATH"]}).stdout
+        entries = [m for m in json.loads(bundled[bundled.index("{"):])["models"] if m["slug"] == model.split("/")[-1]]
+        if not entries:
+            return None
+        path.write_text(json.dumps({"models": [dict(entries[0], slug=model)]}))
+    return path
+
+
+def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path, agent: str, model: str,
+                    base_url: str = CODEX_BASE_URL) -> tuple[str, list[str], str]:
+    """Return (PATH, extra agent args, prompt prefix)."""
     bin_dir = run_dir / "bin"
     bin_dir.mkdir()
-    path = f"{bin_dir}:{Path(shutil.which('claude')).parent}:{SYSTEM_PATH}"
-    mcp_config = run_dir / "mcp.json"
-    servers = {}
+    path = f"{bin_dir}:{Path(shutil.which(agent)).parent}:{SYSTEM_PATH}"
     if condition != "none":
         shutil.copy2(mmr, bin_dir / "mmr")
     if condition == "shipped-skill":
         subprocess.run([str(bin_dir / "mmr"), "skill", "install"], env={"HOME": str(home), "PATH": path},
                        check=True, stdout=subprocess.DEVNULL)
+    # Where each agent looks: Claude Code ~/.claude, Codex ~/.agents/skills and ~/.codex.
+    agent_home = home / (".claude" if agent == "claude" else ".codex")
+    agent_home.mkdir(exist_ok=True)
     if condition in ("skill", "hook", "instructions"):
-        shutil.copytree(mmr_skill_dir(mmr, run_dir.parent / "_skill"), home / ".claude" / "skills" / "mmr")
+        skills = home / (".claude" if agent == "claude" else ".agents") / "skills" / "mmr"
+        shutil.copytree(mmr_skill_dir(mmr, run_dir.parent / "_skill"), skills)
+    hooks = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": HOOK_COMMAND}]}]}}
     if condition == "hook":
         # A SessionStart hook puts the project's recent sessions in front of the agent.
-        command = ("echo 'Earlier agent sessions in this project, newest first (from mmr; "
-                   "read one with: mmr read session <session_id>):'; mmr list sessions --limit 8")
-        settings = {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": command}]}]}}
-        (home / ".claude").mkdir(exist_ok=True)
-        (home / ".claude" / "settings.json").write_text(json.dumps(settings))
+        (agent_home / ("settings.json" if agent == "claude" else "hooks.json")).write_text(json.dumps(hooks))
     if condition == "instructions":
-        (home / ".claude").mkdir(exist_ok=True)
-        (home / ".claude" / "CLAUDE.md").write_text(INSTRUCTIONS)
-    if condition == "mcp":
-        servers["mmr"] = {"command": str(bin_dir / "mmr"), "args": ["mcp", "--transport", "stdio"]}
-    mcp_config.write_text(json.dumps({"mcpServers": servers}))
-    args = ["--mcp-config", str(mcp_config), "--strict-mcp-config"]
+        (agent_home / ("CLAUDE.md" if agent == "claude" else "AGENTS.md")).write_text(INSTRUCTIONS)
     prefix = TOLD_PREFIX if condition == "told" else ""
-    return path, args, prefix
+    mmr_server = {"command": str(bin_dir / "mmr"), "args": ["mcp", "--transport", "stdio"]}
+    if agent == "claude":
+        mcp_config = run_dir / "mcp.json"
+        mcp_config.write_text(json.dumps({"mcpServers": {"mmr": mmr_server} if condition == "mcp" else {}}))
+        return path, ["--mcp-config", str(mcp_config), "--strict-mcp-config"], prefix
+    # Codex reaches the model through an OpenAI-compatible gateway. Subagents and web search are
+    # off, as they are for Claude Code above.
+    config = [f'model = "{model}"', 'model_provider = "gateway"', 'approval_policy = "never"',
+              'sandbox_mode = "danger-full-access"', 'web_search = "disabled"', "check_for_update_on_startup = false"]
+    catalog = codex_catalog(model, run_dir.parent)
+    if catalog:
+        config.append(f'model_catalog_json = "{catalog}"')
+    config += ["", "[features]", "multi_agent = false", "", "[analytics]", "enabled = false", "",
+               "[model_providers.gateway]", 'name = "AI Gateway"', f'base_url = "{base_url}"',
+               'env_key = "AI_GATEWAY_API_KEY"', 'wire_api = "responses"']
+    if condition == "mcp":
+        config += ["", "[mcp_servers.mmr]", f'command = "{mmr_server["command"]}"', 'args = ["mcp", "--transport", "stdio"]']
+    (agent_home / "config.toml").write_text("\n".join(config) + "\n")
+    return path, ["--dangerously-bypass-hook-trust"] if condition == "hook" else [], prefix
 
 
 # --------------------------------------------------------------------------- agent run
@@ -137,37 +173,46 @@ def run_agent(task: dict, condition: str, rep: int, args, out_dir: Path) -> dict
     now = datetime.now(timezone.utc).astimezone()
     build_world(home, now)
     project = home / scenario.PROJECT
-    path, extra, prefix = setup_condition(condition, home, Path(args.mmr).resolve(), run_dir)
+    path, extra, prefix = setup_condition(condition, home, Path(args.mmr).resolve(), run_dir, args.agent, args.model,
+                                         args.base_url)
     env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
     env.update(HOME=str(home), PATH=path, IS_SANDBOX="1", TERM="dumb", LANG="C.UTF-8")
     prompt = prefix + task["prompt"]
-    cmd = ["claude", "-p", prompt, "--model", args.model, "--output-format", "stream-json", "--verbose",
-           "--max-turns", str(args.max_turns), "--permission-mode", "bypassPermissions",
-           "--disallowedTools", "WebFetch,WebSearch,Task,Agent", *extra]
+    if args.agent == "claude":
+        cmd = ["claude", "-p", prompt, "--model", args.model, "--output-format", "stream-json", "--verbose",
+               "--max-turns", str(args.max_turns), "--permission-mode", "bypassPermissions",
+               "--disallowedTools", "WebFetch,WebSearch,Task,Agent", *extra]
+    else:
+        env.update({k: os.environ[k] for k in CODEX_ENV if k in os.environ}, CODEX_HOME=str(home / ".codex"))
+        cmd = ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
+               "-C", str(project), *extra, prompt]
     started = time.time()
     transcript_path = out_dir / "transcripts" / f"{run_id}.jsonl"
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     timed_out = False
     with transcript_path.open("w") as handle:
         try:
-            subprocess.run(cmd, cwd=project, env=env, stdout=handle, stderr=subprocess.STDOUT, timeout=args.timeout)
+            subprocess.run(cmd, cwd=project, env=env, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+                           timeout=args.timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-    result = analyse(transcript_path, task)
-    result.update(run_id=run_id, condition=condition, task=task["id"], rep=rep, model=args.model,
+    result = analyse(transcript_path, task, args.model)
+    result.update(run_id=run_id, condition=condition, task=task["id"], rep=rep, model=args.model, agent=args.agent,
                   wall_s=round(time.time() - started, 1), timed_out=timed_out)
     if not args.keep:
         shutil.rmtree(run_dir, ignore_errors=True)
     return result
 
 
-def analyse(transcript: Path, task: dict) -> dict:
+def analyse(transcript: Path, task: dict, model: str = "") -> dict:
     events = []
     for line in transcript.read_text(errors="replace").splitlines():
         try:
             events.append(json.loads(line))
         except json.JSONDecodeError:
             continue
+    if any(str(event.get("type", "")).startswith(("thread.", "turn.", "item.")) for event in events if isinstance(event, dict)):
+        return analyse_codex(events, task, model)
     calls, results = [], {}
     final = None
     for event in events:
@@ -219,6 +264,70 @@ def analyse(transcript: Path, task: dict) -> dict:
         "cost_usd": (final or {}).get("total_cost_usd", 0.0),
         "turns": (final or {}).get("num_turns", 0),
         "is_error": (final or {}).get("is_error", final is None),
+    }
+
+
+# USD per million tokens (input, cached input, output), for agents whose stream reports no cost.
+PRICES = {"openai/gpt-5.3-codex": (1.75, 0.175, 14.0)}
+MMR_COMMAND = re.compile(r"(^|[\s;&|(/'\"])mmr(\s|$)")
+
+
+def analyse_codex(events: list[dict], task: dict, model: str) -> dict:
+    """The same summary as analyse(), from a `codex exec --json` event stream."""
+    steps, answers, usage, failed = [], [], {}, False
+    for event in events:
+        kind = event.get("type")
+        item = event.get("item") or {}
+        if kind == "item.completed" and item.get("type") == "agent_message":
+            answers.append(item.get("text", ""))
+        elif kind == "item.completed" and item.get("type") in ("command_execution", "mcp_tool_call"):
+            if item["type"] == "command_execution":
+                tool, detail = "shell", item.get("command", "")
+                text = item.get("aggregated_output") or ""
+                error = item.get("status") == "failed" or (item.get("exit_code") or 0) != 0
+                is_mmr = MMR_COMMAND.search(detail) is not None
+            else:
+                tool = f"mcp__{item.get('server')}__{item.get('tool')}"
+                detail = json.dumps(item.get("arguments"))[:200]
+                result = item.get("result") or {}
+                text = "\n".join(part.get("text", "") for part in result.get("content", []) if isinstance(part, dict))
+                error = item.get("status") == "failed" or bool(item.get("error"))
+                is_mmr = item.get("server") == "mmr"
+            steps.append({
+                "tool": "Skill" if re.search(r"skills/mmr/SKILL\.md", detail) else tool,
+                "detail": detail[:400], "mmr": is_mmr,
+                "raw_history": bool(HISTORY_DIRS.search(detail)) and not is_mmr,
+                "error": error or bool(re.search(r"^error:|Error: ", text[:300], re.M)),
+                "result_chars": len(text),
+            })
+        elif kind == "turn.completed":
+            for key, value in (event.get("usage") or {}).items():
+                usage[key] = usage.get(key, 0) + value
+        elif kind in ("turn.failed", "error"):
+            failed = True
+    answer = answers[-1] if answers else ""
+    rubric = {name: bool(re.search(pattern, answer, re.I)) for name, pattern in task["rubric"].items()}
+    tokens_in, cached, tokens_out = usage.get("input_tokens", 0), usage.get("cached_input_tokens", 0), usage.get("output_tokens", 0)
+    price = PRICES.get(model, (0.0, 0.0, 0.0))
+    cost = ((tokens_in - cached) * price[0] + cached * price[1] + tokens_out * price[2]) / 1e6
+    finished = bool(answers) and not failed
+    return {
+        "passed": finished and all(rubric.values()),
+        "rubric": rubric,
+        "score": sum(rubric.values()) / len(rubric),
+        "answer": answer,
+        "tool_calls": len(steps),
+        "mmr_calls": sum(s["mmr"] for s in steps),
+        "mmr_errors": sum(s["mmr"] and s["error"] for s in steps),
+        "mmr_output_chars": sum(s["result_chars"] for s in steps if s["mmr"]),
+        "raw_history_calls": sum(s["raw_history"] for s in steps),
+        "skill_calls": sum(s["tool"] == "Skill" for s in steps),
+        "steps": steps,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cost_usd": round(cost, 4),
+        "turns": len(steps) + 1 if finished else len(steps),
+        "is_error": not finished,
     }
 
 
@@ -306,7 +415,7 @@ def report(out_dir: Path) -> str:
     conditions = [c for c in CONDITIONS if any(r["condition"] == c for r in results)]
     lines = [f"# Cross-harness context eval: {out_dir.name}", ""]
     if meta:
-        lines += [f"- mmr: `{meta.get('mmr_version', '?')}` ({meta.get('mmr_commit', '?')})", f"- agent: Claude Code {meta.get('claude_version', '?')}, model `{meta.get('model')}`", f"- runs: {len(results)} ({meta.get('reps')} per cell), {meta.get('date')}", ""]
+        lines += [f"- mmr: `{meta.get('mmr_version', '?')}` ({meta.get('mmr_commit', '?')})", f"- agent: {meta.get('agent_version') or 'Claude Code ' + meta.get('claude_version', '?')}, model `{meta.get('model')}`", f"- runs: {len(results)} ({meta.get('reps')} per cell), {meta.get('date')}", ""]
     lines += ["## Pass rate (all rubric items found in the final answer)", "", "| condition | " + " | ".join(tasks) + " | all |", "|---|" + "---|" * (len(tasks) + 1)]
     for c in conditions:
         row = [c]
@@ -359,7 +468,9 @@ def report(out_dir: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mmr", default=str(REPO_ROOT / "target" / "release" / "mmr"))
-    parser.add_argument("--model", default="claude-sonnet-5-5")
+    parser.add_argument("--agent", choices=["claude", "codex"], default="claude", help="the reading agent")
+    parser.add_argument("--model", help=f"default: {DEFAULT_MODEL['claude']} (claude), {DEFAULT_MODEL['codex']} (codex)")
+    parser.add_argument("--base-url", default=CODEX_BASE_URL, help="Codex only: OpenAI-compatible Responses endpoint")
     parser.add_argument("--label", default=datetime.now().strftime("%Y%m%d-%H%M"))
     parser.add_argument("--mmr-commit", help="commit the mmr binary was built from (default: this checkout's HEAD)")
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
@@ -368,20 +479,22 @@ def main() -> None:
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--max-turns", type=int, default=40)
     parser.add_argument("--timeout", type=int, default=900)
-    parser.add_argument("--work", default=str(Path(os.environ.get("TMPDIR", "/tmp")) / "mmr-eval-work"))
+    # Not under /tmp: Codex refuses to set up its helper commands there.
+    parser.add_argument("--work", default=str(Path.home() / ".cache" / "mmr-eval-work"))
     parser.add_argument("--results", default=str(HERE / "results"))
     parser.add_argument("--keep", action="store_true", help="keep sandboxes for inspection")
     parser.add_argument("--selfcheck", action="store_true", help="verify the corpus and probe mmr without an agent")
     parser.add_argument("--report", metavar="DIR", help="re-render the report for a results directory")
     parser.add_argument("--regrade", metavar="DIR", help="re-grade stored transcripts with the current rubrics, then re-render")
     args = parser.parse_args()
+    args.model = args.model or DEFAULT_MODEL[args.agent]
 
     if args.regrade:
         out = Path(args.regrade)
         tasks = {t["id"]: t for t in scenario.TASKS}
         regraded = []
         for r in load_results(out):
-            fresh = analyse(out / "transcripts" / f"{r['run_id']}.jsonl", tasks[r["task"]])
+            fresh = analyse(out / "transcripts" / f"{r['run_id']}.jsonl", tasks[r["task"]], r.get("model", ""))
             regraded.append({**r, **fresh})
         (out / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in regraded))
         args.report = args.regrade
@@ -404,11 +517,14 @@ def main() -> None:
     (out_dir / "probe.json").write_text(json.dumps(check, indent=2))
     version = subprocess.run([str(mmr), "--version"], capture_output=True, text=True).stdout.strip()
     commit = args.mmr_commit or subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
-    claude_version = subprocess.run(["claude", "--version"], capture_output=True, text=True).stdout.strip()
-    (out_dir / "meta.json").write_text(json.dumps({"mmr_version": version, "mmr_commit": commit, "claude_version": claude_version,
+    agent_version = subprocess.run([args.agent, "--version"], capture_output=True, text=True).stdout.strip()
+    (out_dir / "meta.json").write_text(json.dumps({"mmr_version": version, "mmr_commit": commit, "agent": args.agent, "agent_version": agent_version,
                                                    "model": args.model, "reps": args.reps, "date": datetime.now().isoformat(timespec="minutes")}, indent=2))
     shutil.rmtree(Path(args.work) / "_skill", ignore_errors=True)
     mmr_skill_dir(mmr, Path(args.work) / "_skill")  # once, before threads share it
+    (Path(args.work) / "_codex_catalog.json").unlink(missing_ok=True)
+    if args.agent == "codex" and not codex_catalog(args.model, Path(args.work)):
+        print(f"note: {args.model} is not in Codex's bundled catalog; Codex will use fallback metadata", flush=True)
     done = {r["run_id"] for r in load_results(out_dir)}
     tasks = [t for t in scenario.TASKS if t["id"] in args.tasks.split(",")]
     jobs = [(t, c, rep) for rep in range(1, args.reps + 1) for c in args.conditions.split(",") for t in tasks
