@@ -1172,6 +1172,106 @@ fn messages_returns_empty_for_discovered_but_empty_project() {
 }
 
 #[test]
+fn read_project_in_cwd_pages_like_explicit_project() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let cwd_str = fs::canonicalize(&cwd)
+        .expect("canonicalize cwd project")
+        .to_string_lossy()
+        .into_owned();
+
+    for offset in ["0", "1", "3"] {
+        let implicit = fixture.run_cli_in_dir(
+            &["read", "project", "--limit", "1", "--offset", offset],
+            &cwd,
+        );
+        let explicit = fixture.run_cli_in_dir(
+            &[
+                "read",
+                "project",
+                "--project",
+                &cwd_str,
+                "--limit",
+                "1",
+                "--offset",
+                offset,
+            ],
+            &cwd,
+        );
+        for output in [&implicit, &explicit] {
+            assert!(
+                output.status.success(),
+                "offset={offset} stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let implicit = parse_stdout_json(&implicit);
+        let explicit = parse_stdout_json(&explicit);
+        for field in ["messages", "total_messages", "next_page", "next_offset"] {
+            assert_eq!(implicit[field], explicit[field], "offset={offset} {field}");
+        }
+        if let Some(command) = implicit["next_command"].as_str() {
+            assert!(!command.contains("--project"), "{command}");
+        }
+    }
+
+    // The first page is the newest message, as with --project.
+    let first =
+        parse_stdout_json(&fixture.run_cli_in_dir(&["read", "project", "--limit", "1"], &cwd));
+    assert_eq!(first["messages"][0]["content"], "cwd claude answer");
+}
+
+#[test]
+fn read_project_and_find_in_cwd_include_subdirectory_sessions() {
+    let fixture = TestFixture::seeded();
+    let cwd = seed_cwd_project_with_history(&fixture);
+    let subdir = cwd.join("scripts");
+    fs::create_dir_all(&subdir).expect("create subdirectory");
+    let subdir_str = fs::canonicalize(&subdir)
+        .expect("canonicalize subdirectory")
+        .to_string_lossy()
+        .into_owned();
+    write_file(
+        &fixture
+            .home
+            .join(".codex")
+            .join("sessions")
+            .join("sess-cwd-subdir.jsonl"),
+        &format!(
+            r#"{{"type":"session_meta","timestamp":"2025-01-09T00:00:00","payload":{{"id":"sess-cwd-subdir","cwd":"{subdir_str}","cli_version":"1.0.0","model_provider":"openai","timestamp":"2025-01-09T00:00:00"}}}}
+{{"type":"event_msg","timestamp":"2025-01-09T00:00:01","payload":{{"type":"user_message","message":"subdirmarker question"}}}}"#
+        ),
+    );
+
+    let read = fixture.run_cli_in_dir(&["read", "project"], &cwd);
+    assert!(
+        read.status.success(),
+        "{}",
+        String::from_utf8_lossy(&read.stderr)
+    );
+    let read = parse_stdout_json(&read);
+    assert!(
+        read["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["session_id"] == "sess-cwd-subdir"),
+        "{read}"
+    );
+
+    let found = fixture.run_cli_in_dir(&["find", "subdirmarker"], &cwd);
+    assert!(
+        found.status.success(),
+        "{}",
+        String::from_utf8_lossy(&found.stderr)
+    );
+    let found = parse_stdout_json(&found);
+    let matches = found["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1, "{found}");
+    assert_eq!(matches[0]["session_id"], "sess-cwd-subdir");
+}
+
+#[test]
 fn read_session_is_chronological_and_paginated() {
     let fixture = TestFixture::seeded();
 

@@ -30,7 +30,8 @@ command calls a model or needs an API key, and no read command writes anything.
 - `mmr read session <session-id>` reads one session. `--project` narrows the
   lookup when the same id exists in several projects.
 - `mmr read project` reads the project's history across harnesses in time
-  order. Page it with `--limit` and `--offset`.
+  order. With `--limit`, the first page holds the newest messages and
+  `--offset` reaches further back.
 - `mmr context project` returns the project's session list and a bounded array
   of its newest messages in one call. `--limit` bounds the messages.
 
