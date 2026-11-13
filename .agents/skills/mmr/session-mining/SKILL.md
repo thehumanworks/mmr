@@ -29,10 +29,10 @@ Prefer `mmr recall` when you are inside a project and want the immediate previou
 1. Retrieve the prior session into a file:
    ```bash
    # The single previous session (full content)
-   mmr recall --source claude --limit 100000 > /tmp/prior-session.json
+   mmr recall --limit 100000 > /tmp/prior-session.json
 
    # A known session ID
-   mmr read session <session-id> --source claude > /tmp/session.json
+   mmr read session <session-id> > /tmp/session.json
    ```
 
 2. Confirm you actually got the complete data (not a truncated page). Compare `total_messages` against the array length and check `next_page`:
@@ -68,7 +68,7 @@ This skill exists to make that retrieval + analysis + reminding loop repeatable,
 - **Age 0 is dangerous by default.** The newest session is often the caller's own live/incomplete session. Use `--include-newest` only when you deliberately want it.
 - **Focus on continuity value**, not just "what happened." Ask: What would a future version of me (or a new agent) need to know that is at risk of being lost?
 - **Produce reminder artifacts** that are actually usable (structured decisions, open tasks, rationale, invariants, etc.).
-- **Update durable memory** when useful (project docs, handoff notes, etc.).
+- **Update durable memory** when useful (project docs, AGENTS.md, CLAUDE.md, etc.).
 - **Subagent delegation is encouraged** for deep analysis of large ranges.
 
 ## Common Patterns

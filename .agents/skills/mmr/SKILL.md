@@ -1,72 +1,54 @@
 ---
 name: mmr
-description: "Read and search local AI coding-session history (Claude, Codex, Cursor, Grok, Pi), recover project context, or carry a selected session between machines as a file. Use for mmr setup, usage, and troubleshooting."
+description: "Earlier AI coding sessions for the current project, from every agent on this machine (Claude Code, Codex, Cursor, Grok, Pi): what was decided and why, what was tried and rejected, rules the user gave, and where the last session stopped. Use when starting or resuming work in a project, when asked to pick up or continue earlier work, and before explaining why code or config is the way it is or whether something was tried before: git shows what changed, these sessions show why."
 ---
 
-# mmr
+# mmr: the project's earlier agent sessions
 
-`mmr` is the local Rust CLI for retrieving the history needed for a task.
-Check `mmr <command> --help` for the installed version's contract. stdout is JSON
-unless a command explicitly requests another format. Check the exit status:
-structured failures can also emit JSON on stdout; diagnostics use stderr.
+Run mmr from the project directory. It reads every agent's history for that
+directory, including sessions started in its subdirectories and worktrees,
+whichever agent ran them. Output is JSON on stdout; errors go to stderr.
 
-## Read Local Context
-
-```bash
-mmr list sessions --project /path/to/project
-mmr read session <session-id>
-mmr recall --project /path/to/project
-```
-
-`recall` selects the previous stable session, holding back the newest by default.
-`list sessions` and `read project` infer the current project when no scope is
-given; pass `--project` when the scope matters. Omit `--source` to read every
-provider, or use `--source claude|codex|cursor|grok|pi`; `all` is not a source
-value.
-
-When you do not know which session holds something, run `mmr find "phrase"` in
-the project. It needs no setup, is case-insensitive, searches every harness,
-and returns matches newest first. Run a match's `read_command` (or pass its
-`source` and `session_id` to `mmr --source <source> read session <session_id>`)
-to read the whole session. Use `--project <path>` or `--all` to widen the scope.
-If access to history is restricted, report the missing context instead of
-reading protected provider files as a fallback.
-
-Use `mmr context project --limit 20` for bounded raw messages and session metadata. In the source checkout, run `python3
-examples/find_read_context.py` after `cargo build --locked` to try this flow with
-an isolated synthetic HOME and verify native histories remain unchanged.
-
-## Carry Context As A File
+## Start here
 
 ```bash
-# Source machine: choose the session, then export to an inbox directory.
-mmr --source codex share session <session-id> --to file:///absolute/path/to/inbox
-# Copy the directory reported as inbox_path to the destination machine.
-mmr import bundle /copied/entry
-mmr import bundle /copied/entry -O md | jq -r .text
+mmr list sessions               # newest first: source, session_id, dates, preview of the first prompt
+mmr recall                      # the previous session in full (skips the newest, usually your own)
+mmr read session <session_id>   # one session in full
 ```
 
-The entry contains `bundle.mmr` (JSON, not ZIP), `bundle.sha256`, and `ready`.
-Default import verifies and reads messages, caching under `~/.mmr/teleport/cache`
-without installing native histories. Preserve source project provenance. No
-SSH, server, central account, or Claude/Codex conversion is needed to read it.
-Native artifacts may contain private conversation text and paths; transfer only
-when intended by the user.
+## Search the whole project history
 
-To deliberately restore a provider-native session, pass `--apply --project
-/local/project`. `--force` requires `--apply`. Older builds applied imports by
-default; scripts that need restoration must add `--apply`. Explicit
-`--read-only` remains supported. The same read-only default applies to
-`import session --from <ssh-target>`; SSH is an optional transport.
+```bash
+mmr find "WORDS"     # case-insensitive text match in every session of the project, newest first
+```
 
-## Additional Capabilities
+Each match has a `snippet` and a `read_command` that reads its whole session.
+`--all` searches every project. `mmr read project` returns every message,
+oldest first, when you need all of it.
 
-- `mmr context project` prepares a one-call project briefing. No mmr command
-  calls a model or needs an API key; condense what you read yourself.
-- `mmr mcp --transport stdio` exposes the existing CLI-backed tools to a client.
-- `mmr skill load` prints this bundle; `mmr skill install [--local]` replaces its
-  installed copy.
+Compact one session with jq:
+`mmr read session <id> | jq -r '.messages[] | "\(.role): \(.content)"'`.
 
-For deeper continuity extraction, read `session-mining/SKILL.md`. In the mmr
-source repository, follow `AGENTS.md` and the focused MCP, native-bundle and CLI
-skills; verify with fixture-only contract tests and the full Rust checks.
+## Rules
+
+- Before answering "why is it like this?" or "did we try X?", search here.
+  If nothing relevant turns up, say so; do not infer a reason from git alone.
+- Cite what you use: date, source and session. Later sessions override
+  earlier ones, and the user's words override an agent's.
+- Inside the project, omit `--project`. For another project, pass its absolute
+  path (`--project /abs/path`); `mmr list projects` lists them all.
+- Omit `--source` unless you want one agent's sessions only
+  (`--source claude|codex|cursor|grok|pi`).
+- In Claude Code sessions, tool output (file contents, logs) appears as user
+  messages. Skim past it.
+
+## Other commands
+
+- `mmr context project` returns session metadata and recent messages in one
+  bounded response.
+- `mmr share session <id> --to file:///abs/inbox` and `mmr import bundle <dir>`
+  carry one session to another machine as a file.
+- `mmr mcp --transport stdio` serves the same reads as MCP tools.
+
+For deeper analysis of long sessions, read `session-mining/SKILL.md`.
