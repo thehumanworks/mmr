@@ -381,3 +381,49 @@ fn skill_install_reaches_claude_code_and_the_shared_skills_directory() {
         );
     }
 }
+
+#[test]
+fn skill_install_adds_one_paragraph_to_each_agents_global_instructions() {
+    let world = World::new();
+    let claude_md = world.home.join(".claude/CLAUDE.md");
+    let agents_md = world.home.join(".codex/AGENTS.md");
+    fs::create_dir_all(claude_md.parent().expect("parent")).expect("claude home");
+    fs::write(&claude_md, "# My rules\n- be terse\n").expect("existing CLAUDE.md");
+
+    // No ~/.codex yet: Codex's file is skipped, not created.
+    let response = world.run(&world.home, &["skill", "install"]);
+    assert_eq!(
+        response["instruction_files"],
+        json!([claude_md.display().to_string()])
+    );
+    assert_eq!(
+        response["skipped_instruction_files"],
+        json!([agents_md.display().to_string()])
+    );
+    let claude = fs::read_to_string(&claude_md).expect("CLAUDE.md");
+    assert!(claude.starts_with("# My rules\n- be terse\n\n<!-- mmr:begin -->\n"));
+    assert!(claude.contains("run `mmr list sessions`"));
+    assert!(!agents_md.exists());
+
+    // Installing again replaces the paragraph instead of adding a second one.
+    fs::create_dir_all(agents_md.parent().expect("parent")).expect("codex home");
+    world.run(&world.home, &["skill", "install"]);
+    assert_eq!(fs::read_to_string(&claude_md).expect("CLAUDE.md"), claude);
+    let agents = fs::read_to_string(&agents_md).expect("AGENTS.md");
+    assert_eq!(agents.matches("<!-- mmr:begin -->").count(), 1);
+    assert!(agents.ends_with("<!-- mmr:end -->\n"));
+
+    // An agent that is not set up here gets no file, even though the skill install
+    // creates ~/.claude/skills.
+    let fresh = World::new();
+    let response = fresh.run(&fresh.home, &["skill", "install"]);
+    assert_eq!(response["instruction_files"], json!([]));
+    assert!(!fresh.home.join(".claude/CLAUDE.md").exists());
+
+    // Opting out leaves instruction files alone.
+    let bare = World::new();
+    fs::create_dir_all(bare.home.join(".claude")).expect("claude home");
+    let response = bare.run(&bare.home, &["skill", "install", "--no-instructions"]);
+    assert_eq!(response["instruction_files"], json!([]));
+    assert!(!bare.home.join(".claude/CLAUDE.md").exists());
+}

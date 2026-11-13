@@ -93,30 +93,29 @@ mmr skill load
 ## Let Your Agents Use It
 
 mmr is mainly for coding agents: what earlier sessions in a project decided,
-tried and left unfinished, whichever agent ran them. Install the bundled skill
-so agents reach for it without being told:
+tried and left unfinished, whichever agent ran them. One command sets agents up
+to check it without being told:
 
 ```bash
-mmr skill install   # ~/.agents/skills/mmr and ~/.claude/skills/mmr
+mmr skill install
 ```
 
-The skill makes an agent check history when it starts or resumes work, or
-before it explains why code is the way it is. A request that does not sound
-like a history question ("I'm about to deploy this, anything to watch out
-for?") does not trigger it. For that, give Claude Code the recent sessions at
-startup with a SessionStart hook in `~/.claude/settings.json` (about 4 KB of
-context per session start):
+It writes the skill to `~/.agents/skills/mmr` (Codex and other agents) and
+`~/.claude/skills/mmr` (Claude Code). It also adds one paragraph, between
+`<!-- mmr:begin -->` and `<!-- mmr:end -->`, to `~/.claude/CLAUDE.md` and
+`~/.codex/AGENTS.md` (or `$CODEX_HOME/AGENTS.md`) for each agent already set up
+on the machine. The paragraph tells the agent to look at the project's earlier
+sessions before it starts a task. Running the command again replaces the
+paragraph rather than adding another; `--no-instructions` installs only the
+skill. For another agent, copy the paragraph from
+[src/agent_instructions.md](src/agent_instructions.md) into its global
+instructions.
 
-```json
-{
-  "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "echo 'Earlier agent sessions in this project, newest first (from mmr; read one with: mmr read session <session_id>):'; mmr list sessions --limit 8" }] }]
-  }
-}
-```
-
-[evals/cross_harness](evals/cross_harness/README.md) measures both setups
-against a project with history from all five agents.
+Why both: a skill is used when a request sounds like it needs history ("why is
+this 3?", "pick up where we left off"). Asked to change code instead ("make
+deliver() take a config object"), agents with only the skill checked history
+in 1 of 10 runs; with the paragraph, in 10 of 10. See
+[evals/cross_harness](evals/cross_harness/RESULTS.md).
 
 ## Use
 
