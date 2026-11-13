@@ -43,6 +43,7 @@ commit unsafe.
 - `src/teleport/`: provider-profile native bundle pack/apply/resume/export (`provider.rs`, `providers/{codex,claude,cursor,grok,pi}.rs`); artifact paths are provider-qualified (`native/<provider>/…`); legacy flat `transcript.native.jsonl` bundles still verify on read.
 - `flake.nix`, `nix/`: Nix flake (package, overlay, dev shell), home-manager and NixOS modules in `nix/modules/`, and flake checks in `nix/tests/`. User guide: `docs/mmr-nix.md`.
 - `.github/workflows/build.yml`: release builds for Linux and macOS (x86_64 and arm64) on pushes to `main`, pull requests and `v*` tags; `v*` tags also publish the archives to the GitHub release. The tag must match the `Cargo.toml` version. Pin actions to commit SHAs and run `actionlint` after editing it.
+- `CHANGELOG.md`: one `## vX.Y.Z (date)` section per release, breaking changes first. To release: bump `Cargo.toml` and `Cargo.lock`, add the section, merge, then push the `vX.Y.Z` tag on the green merge commit. The release job puts the tag's section above the generated pull-request list.
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).

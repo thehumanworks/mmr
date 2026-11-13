@@ -39,7 +39,8 @@ targets on every push to `main`, every pull request and every `v*` tag:
 
 Each archive holds the `mmr` binary and this README, next to a `.sha256`
 checksum file. A `v*` tag attaches the archives and a combined `SHA256SUMS` to
-its [GitHub release](https://github.com/thehumanworks/mmr/releases). Builds of
+its [GitHub release](https://github.com/thehumanworks/mmr/releases), whose notes
+start with that version's [CHANGELOG.md](CHANGELOG.md) section. Builds of
 `main` and of pull requests are workflow artifacts on the
 [Actions run page](https://github.com/thehumanworks/mmr/actions/workflows/build.yml)
 (GitHub sign-in required).
