@@ -3,10 +3,10 @@ goal_id: "2026-11-12-prove-cross-harness-context"
 title: "Prove mmr gives a new agent the project's earlier context, whichever harness produced it"
 description: "Build a repeatable evaluation in which a fresh agent answers questions about, or resumes, work done earlier in the same project by other agent harnesses; measure success, cost and stumbles; fix what blocks it; report before and after."
 date: "2026-11-12"
-status: "in-progress"
+status: "done"
 confidence_floor: 80
 created: "2026-11-12"
-updated: "2026-11-12"
+updated: "2026-11-13"
 ---
 
 # Goal
@@ -61,10 +61,11 @@ answer, so grading is deterministic and repeatable.
 |----|--------------------|
 | `none` | no mmr (control: what the repo alone gives) |
 | `path` | mmr on PATH, nothing else |
-| `skill-shipped` | mmr on PATH and `mmr skill install` run, as the docs say |
+| `shipped-skill` | mmr on PATH and `mmr skill install` run, as the docs say |
 | `skill` | mmr skill placed where Claude Code loads skills |
 | `told` | the task prompt says mmr exists (measures use once discovered) |
 | `mcp` | mmr MCP server configured, unprompted |
+| `hook` | skill plus a SessionStart hook that lists recent sessions |
 
 **Metrics per run.** Pass/fail per rubric item, tool calls (total and mmr),
 the mmr commands used, input/output/cache tokens, cost, turns, wall time, and
@@ -97,3 +98,23 @@ errors or wrong turns seen in the transcript.
 - `BLOCKED-DEP`: the agent CLI cannot run headless in the container.
 - `SCOPE-CHANGE`: a needed fix collides with the surface-cut work; hand it over
   as a finding instead.
+
+## Evidence
+
+[evals/cross_harness/RESULTS.md](../evals/cross_harness/RESULTS.md) has the
+before/after tables, the failures that remain, and the cause and fix for each
+problem the evaluation found. Raw results for each run are in
+`evals/cross_harness/results/<label>/results.jsonl`.
+
+- Baseline, `main` 83f0fb5: skill 2/18, MCP 6/18, best condition 6/18, no mmr 0/18.
+- After this goal and PR #32 (10383c3): skill 13/18, `mmr skill install` 14/18,
+  SessionStart hook 15/18, MCP 14/18, no mmr 0/18. Haiku: skill 7/9, hook 8/9.
+- Probe from the project directory: 5/10 sessions and 2/9 facts on `main`;
+  10/10 and 9/9 after, with the sibling project and the old prototype still
+  out of scope.
+- Still failing, stated in RESULTS.md: generic requests without the hook,
+  facts in a sibling project, and only Claude Code measured as the reader.
+- Overfitting check: the skill's search example first used words from the
+  tasks; it now uses a placeholder, and three held-out tasks were added after
+  the skill text was settled.
+

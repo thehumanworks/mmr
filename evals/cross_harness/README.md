@@ -1,5 +1,7 @@
 # Cross-harness context evaluation
 
+Latest results and what they changed: [RESULTS.md](RESULTS.md).
+
 Does mmr let an agent that knows nothing about a project find out what earlier
 agents did there, whichever agent harness they ran in? This evaluation answers
 that with headless agent runs instead of argument.

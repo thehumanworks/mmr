@@ -443,7 +443,7 @@ TASKS = [
         "id": "resume",
         "prompt": "Pick up where we left off. Before you change anything, tell me what the last session was working on, what state it left things in, and what you would do next.",
         "tests": "Pi session (newest before this one)",
-        "rubric": {"idempotency/dedupe work": r"idempoten|dedup", "migration 0007 next": r"0007", "72-hour key cleanup": r"72"},
+        "rubric": {"idempotency/dedupe work": r"idempoten|dedup", "migration 0007 next": r"0007", "72-hour key cleanup": r"\b72\W{0,2}(h\b|hours?\b)|three days"},
     },
     {
         "id": "constraints",
