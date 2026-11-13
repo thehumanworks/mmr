@@ -70,11 +70,15 @@ A session landing between page reads cannot shift the window.
 ## Raw Reads
 
 `mmr read session <session-id>` reads one explicit session. If no `--project` or
-global `--source` is provided, it searches all projects and sources and prints a
-stderr hint explaining how to narrow the lookup.
+global `--source` is provided, it searches all projects and sources. An unknown
+id is an error that points at `mmr list sessions`.
 
 `mmr read project` reads the cwd project by default, or an explicit project with
-`--project <path>`. It supports `--limit` and `--offset`.
+`--project <path>`. Both forms resolve the project the same way, so the cwd form
+returns exactly what `--project <canonical cwd>` returns, including sessions
+started in the project's subdirectories and worktrees. It supports `--limit`
+and `--offset`: the first page holds the newest messages, each page is in
+chronological order, and a larger offset reaches further back.
 
 There is no source-wide read. History is read by project or by session; the
 global `--source` flag only narrows a project or session read to one harness.
