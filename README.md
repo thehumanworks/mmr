@@ -92,6 +92,34 @@ mmr --help
 mmr skill load
 ```
 
+## Let Your Agents Use It
+
+mmr is mainly for coding agents: what earlier sessions in a project decided,
+tried and left unfinished, whichever agent ran them. Install the bundled skill
+so agents reach for it without being told:
+
+```bash
+mmr skill install   # ~/.agents/skills/mmr and ~/.claude/skills/mmr
+```
+
+The skill makes an agent check history when it starts or resumes work, or
+before it explains why code is the way it is. A request that does not sound
+like a history question ("I'm about to deploy this, anything to watch out
+for?") does not trigger it. For that, give Claude Code the recent sessions at
+startup with a SessionStart hook in `~/.claude/settings.json` (about 4 KB of
+context per session start):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "echo 'Earlier agent sessions in this project, newest first (from mmr; read one with: mmr read session <session_id>):'; mmr list sessions --limit 8" }] }]
+  }
+}
+```
+
+[evals/cross_harness](evals/cross_harness/README.md) measures both setups
+against a project with history from all five agents.
+
 ## Use
 
 Run these inside the project, or pass `--project <name-or-path>`:

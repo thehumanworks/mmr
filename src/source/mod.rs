@@ -10,6 +10,8 @@ mod cursor;
 mod grok;
 mod pi;
 
+pub(crate) use cursor::{cursor_project_slug, decode_project_dir_name};
+
 pub fn resolve_home_dir() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("SIMPLEMMR_HOME") {
         return Ok(PathBuf::from(home));

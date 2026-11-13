@@ -384,7 +384,7 @@ fn skill_load_prints_bundled_skill_for_agent_context() {
     assert!(stdout.starts_with("# mmr skill bundle"));
     assert!(stdout.contains("## mmr/SKILL.md"));
     assert!(stdout.contains("name: mmr"));
-    assert!(stdout.contains("`mmr` is the local Rust CLI"));
+    assert!(stdout.contains("# mmr: the project's earlier agent sessions"));
     assert!(stdout.contains("## mmr/session-mining/SKILL.md"));
     assert!(stdout.contains("session-mining"));
     assert_dev_subskills_absent_from_text(&stdout);
@@ -3027,7 +3027,7 @@ fn messages_session_without_project_searches_all_projects() {
 }
 
 #[test]
-fn messages_session_without_project_or_source_prints_hint() {
+fn messages_session_without_project_or_source_searches_every_source_quietly() {
     let fixture = TestFixture::seeded();
 
     let output = fixture.run_cli(&["read", "session", "sess-claude-1"]);
@@ -3036,11 +3036,13 @@ fn messages_session_without_project_or_source_prints_hint() {
         "stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(parse_stdout_json(&output)["total_messages"], 2);
 
+    // Omitting --source is the recommended form, so it gets no hint pushing toward it.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--source"),
-        "expected hint about --source in stderr, got: {stderr}"
+        !stderr.contains("--source"),
+        "no --source hint expected, got: {stderr}"
     );
 }
 
@@ -3084,17 +3086,20 @@ fn messages_session_with_explicit_project_uses_project_scope() {
     let messages = json["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 2);
 
-    // Asking for a project that doesn't contain the session → 0 messages
-    let empty_output = fixture.run_cli(&[
+    // Asking for a project that doesn't contain the session is an error, not an empty session.
+    let missing_output = fixture.run_cli(&[
         "read",
         "session",
         "sess-claude-1",
         "--project",
         "/Users/test/codex-proj",
     ]);
-    assert!(empty_output.status.success());
-    let empty_json = parse_stdout_json(&empty_output);
-    assert_eq!(empty_json["total_messages"].as_i64().unwrap(), 0);
+    assert!(!missing_output.status.success());
+    let stderr = String::from_utf8_lossy(&missing_output.stderr);
+    assert!(
+        stderr.contains("no session sess-claude-1 found in /Users/test/codex-proj"),
+        "{stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
