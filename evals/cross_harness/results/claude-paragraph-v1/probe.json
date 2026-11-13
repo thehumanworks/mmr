@@ -1,0 +1,77 @@
+{
+  "problems": [],
+  "probe": {
+    "list sessions (cwd)": {
+      "scaffold": true,
+      "prototype": false,
+      "incident": true,
+      "redis": true,
+      "jitter": true,
+      "constraints": true,
+      "staging": true,
+      "ui-retry": false,
+      "flaky": true,
+      "explain": true,
+      "lint": true,
+      "idempotency": true
+    },
+    "read project (cwd): fact visible": {
+      "five-retries": true,
+      "duplicate-charges": true,
+      "redis-rejected": true,
+      "thundering-herd": true,
+      "billing-imports": true,
+      "staging-url": true,
+      "72-hours": true,
+      "deploy-window": true,
+      "flaky-cause": true,
+      "ui-retries": false
+    },
+    "read project (cwd): output chars": 30950,
+    "recall (cwd): selected": [
+      "lint",
+      "idempotency"
+    ],
+    "context project (cwd): fact visible": {
+      "five-retries": true,
+      "duplicate-charges": true,
+      "redis-rejected": true,
+      "thundering-herd": true,
+      "billing-imports": true,
+      "staging-url": true,
+      "72-hours": true,
+      "deploy-window": true,
+      "flaky-cause": true,
+      "ui-retries": false
+    },
+    "context project (cwd): output chars": 35974,
+    "list sessions --all": {
+      "scaffold": true,
+      "prototype": true,
+      "incident": true,
+      "redis": true,
+      "jitter": true,
+      "constraints": true,
+      "staging": true,
+      "ui-retry": true,
+      "flaky": true,
+      "explain": true,
+      "lint": true,
+      "idempotency": true
+    }
+  },
+  "native_paths": {
+    "scaffold": ".codex/archived_sessions/rollout-2026-10-20T10-12-00-b88829fd-f7f9-5dc6-8575-6cca2befe8dd.jsonl.zst",
+    "prototype": ".claude/projects/-root--cache-mmr-eval-work-selfcheck-home-scratch-ledger-svc/38920544-b8dd-506f-9fe9-24795a349af3.jsonl",
+    "incident": ".claude/projects/-root--cache-mmr-eval-work-selfcheck-home-src-ledger-svc/8a3e4773-4aeb-5975-908b-fb411aff772f.jsonl",
+    "redis": ".claude/projects/-root--cache-mmr-eval-work-selfcheck-home-src-ledger-svc--claude-worktrees-dedupe-redis/73b55632-086d-5bfb-bd6f-83c987dbdec0.jsonl",
+    "jitter": ".cursor/projects/root-.cache-mmr-eval-work-selfcheck-home-src-ledger-svc/agent-transcripts/6926bb03-ce8f-56c7-b64b-6e0b0ac39812/6926bb03-ce8f-56c7-b64b-6e0b0ac39812.jsonl",
+    "constraints": ".codex/sessions/2026/11/04/rollout-2026-11-04T10-12-00-f9471233-13a2-582c-b8af-e4c5dc28b704.jsonl",
+    "staging": ".grok/sessions/%2Froot%2F.cache%2Fmmr-eval-work%2Fselfcheck%2Fhome%2Fsrc%2Fledger-svc%2Fscripts/86e28a15-5548-53f9-86b0-ad81aa82ecdf",
+    "ui-retry": ".codex/sessions/2026/11/07/rollout-2026-11-07T10-12-00-6f0fa148-93f7-59b3-bcaa-33f571b76878.jsonl",
+    "flaky": ".cursor/projects/root-.cache-mmr-eval-work-selfcheck-home-src-ledger-svc/agent-transcripts/1ee02b7c-bc8d-59bf-a580-503b702551dd/1ee02b7c-bc8d-59bf-a580-503b702551dd.jsonl",
+    "explain": ".claude/projects/-root--cache-mmr-eval-work-selfcheck-home-src-ledger-svc/27b9ebba-7a17-5023-9850-51e5d8270b9c.jsonl",
+    "lint": ".codex/sessions/2026/11/11/rollout-2026-11-11T10-12-00-ab493931-f479-5128-9a29-9cf4c88f5692.jsonl",
+    "idempotency": ".pi/agent/sessions/--root-.cache-mmr-eval-work-selfcheck-home-src-ledger-svc--/2026-11-12T17-12-00-000Z_64cba498-6ae0-5e58-85ec-5f9c3b819a21.jsonl"
+  }
+}

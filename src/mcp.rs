@@ -289,10 +289,12 @@ impl ServerHandler for MmrMcpServer {
             "mmr holds this project's earlier agent sessions from Claude Code, Codex, Cursor, \
              Grok and Pi on this machine. Git history records what changed; these sessions \
              record why, what was tried and rejected, and what was left unfinished. Check them \
-             before you explain why code is the way it is, when the user asks you to resume or \
-             refers to earlier work, and before a risky step such as a deploy, migration or \
-             large refactor. Call mmr_find with a few distinctive words (a constant, file or \
-             error name), then mmr_read_session with a match's session_id and source. Call \
+             before you change code or config, even a one-line change; before you explain why \
+             code is the way it is; when the user asks you to resume or refers to earlier work; \
+             and before a risky step such as a deploy or migration. Call mmr_find with a \
+             distinctive name from the task (a constant, function, file or error name), then \
+             mmr_read_session with a match's session_id and source. If a session gives a reason \
+             against the change, or a rule it must follow, tell the user. Call \
              mmr_recall to continue the previous session, and mmr_context_project to brief \
              yourself on the project. Omitting project uses the project of the directory the \
              server runs in. Tools return JSON text that matches the mmr CLI.",

@@ -1,6 +1,6 @@
 ---
 name: mmr
-description: "Earlier AI coding sessions for the current project, from every agent on this machine (Claude Code, Codex, Cursor, Grok, Pi): what was decided and why, what was tried and rejected, rules the user gave, and where the last session stopped. Use when starting or resuming work in a project, when asked to pick up or continue earlier work, and before explaining why code or config is the way it is or whether something was tried before: git shows what changed, these sessions show why."
+description: "Earlier AI coding sessions for the current project, from every agent on this machine (Claude Code, Codex, Cursor, Grok, Pi): what was decided and why, what was tried and rejected, rules the user gave, and where the last session stopped. Use when starting or resuming work in a project, before changing code or config (even a one-line change), when asked to pick up or continue earlier work, and before explaining why code or config is the way it is or whether something was tried before: git shows what changed, these sessions show why."
 ---
 
 # mmr: the project's earlier agent sessions
@@ -34,6 +34,9 @@ Compact one session with jq:
 
 - Before answering "why is it like this?" or "did we try X?", search here.
   If nothing relevant turns up, say so; do not infer a reason from git alone.
+- Before changing a value, rule, file or dependency, search for its name
+  (`mmr find "<name>"`). If a session gives a reason against the change, or a
+  rule it must follow, tell the user.
 - Cite what you use: date, source and session. Later sessions override
   earlier ones, and the user's words override an agent's.
 - Inside the project, omit `--project`. For another project, pass its absolute

@@ -1,0 +1,3 @@
+## Earlier agent sessions
+
+This machine keeps the history of earlier AI coding sessions (Claude Code, Codex, Cursor, Grok, Pi), readable with `mmr` from a project's directory. They hold decisions and their reasons, rules the user gave, and work left unfinished. Check them before you start a task in a project, even a one-line change: run `mmr find "<name>"` with a distinctive name from the task (a constant, function or file), or `mmr list sessions` for recent work, then `mmr read session <id>` for a session that matters. If an earlier session gives a reason against the change, or a rule it must follow, tell the user.

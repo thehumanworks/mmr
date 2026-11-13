@@ -1,0 +1,9 @@
+{
+  "mmr_version": "mmr 0.2.0",
+  "mmr_commit": "6564fa3",
+  "agent": "claude",
+  "agent_version": "2.1.323 (Claude Code)",
+  "model": "claude-sonnet-5-5",
+  "reps": 2,
+  "date": "2026-11-13T00:47"
+}

@@ -285,9 +285,12 @@ pub enum SkillCommand {
 
 #[derive(Args, Debug)]
 pub struct SkillInstallArgs {
-    /// Install under the current directory (.agents/skills/mmr and .claude/skills/mmr) instead of under HOME
+    /// Install under the current directory (.agents/skills/mmr and .claude/skills/mmr) instead of under HOME; leaves instruction files alone
     #[arg(long)]
     local: bool,
+    /// Install only the skill, without the paragraph in ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
+    #[arg(long)]
+    no_instructions: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1287,12 +1290,20 @@ struct SkillInstallResponse {
     paths: Vec<String>,
     replaced: bool,
     files: Vec<String>,
+    /// Global instruction files that now hold mmr's paragraph (between
+    /// `<!-- mmr:begin -->` and `<!-- mmr:end -->`).
+    instruction_files: Vec<String>,
+    /// Instruction files left alone because that agent's home directory does not exist.
+    skipped_instruction_files: Vec<String>,
 }
 
 fn skill_command_response(args: &SkillArgs, pretty: bool) -> Result<String> {
     match &args.command {
         SkillCommand::Load => Ok(render_bundled_mmr_skill()),
-        SkillCommand::Install(args) => serialize(&install_bundled_mmr_skill(args.local)?, pretty),
+        SkillCommand::Install(args) => serialize(
+            &install_bundled_mmr_skill(args.local, !args.no_instructions)?,
+            pretty,
+        ),
     }
 }
 
@@ -1312,7 +1323,7 @@ This is the bundled `mmr` skill. Read `mmr/SKILL.md` first, then load referenced
     output
 }
 
-fn install_bundled_mmr_skill(local: bool) -> Result<SkillInstallResponse> {
+fn install_bundled_mmr_skill(local: bool, instructions: bool) -> Result<SkillInstallResponse> {
     let base = if local {
         std::env::current_dir().context("current_dir")?
     } else {
@@ -1324,6 +1335,16 @@ fn install_bundled_mmr_skill(local: bool) -> Result<SkillInstallResponse> {
         base.join(".agents").join("skills").join("mmr"),
         base.join(".claude").join("skills").join("mmr"),
     ];
+    // Decide before the skill write creates `~/.claude`: only agents already set up on
+    // this machine get the paragraph.
+    let agent_files = if instructions && !local {
+        agent_instruction_files(&base)
+            .into_iter()
+            .map(|(agent_home, file)| (agent_home.is_dir(), file))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let mut replaced = false;
     for target in &targets {
         replaced |= remove_existing_skill_target(target)?;
@@ -1335,6 +1356,17 @@ fn install_bundled_mmr_skill(local: bool) -> Result<SkillInstallResponse> {
             }
             fs::write(&path, file.contents)
                 .with_context(|| format!("write skill file {}", path.display()))?;
+        }
+    }
+
+    let mut instruction_files = Vec::new();
+    let mut skipped_instruction_files = Vec::new();
+    for (agent_present, file) in agent_files {
+        if agent_present {
+            upsert_agent_instructions(&file)?;
+            instruction_files.push(file.display().to_string());
+        } else {
+            skipped_instruction_files.push(file.display().to_string());
         }
     }
 
@@ -1351,7 +1383,67 @@ fn install_bundled_mmr_skill(local: bool) -> Result<SkillInstallResponse> {
             .iter()
             .map(|file| file.relative_path.to_string())
             .collect(),
+        instruction_files,
+        skipped_instruction_files,
     })
+}
+
+/// Paragraph that tells an agent to check earlier sessions before any task. A skill
+/// alone triggers on history-shaped questions; in the cross-harness eval, agents asked to
+/// change code checked history in 1 of 10 runs with the skill and 10 of 10 with this.
+const AGENT_INSTRUCTIONS: &str = include_str!("agent_instructions.md");
+const AGENT_INSTRUCTIONS_BEGIN: &str = "<!-- mmr:begin -->";
+const AGENT_INSTRUCTIONS_END: &str = "<!-- mmr:end -->";
+
+/// (agent home, global instructions file) for each agent that reads one.
+fn agent_instruction_files(home: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let claude = home.join(".claude");
+    let codex = std::env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    vec![
+        (claude.clone(), claude.join("CLAUDE.md")),
+        (codex.clone(), codex.join("AGENTS.md")),
+    ]
+}
+
+/// Add mmr's paragraph to an instructions file, or replace the one between mmr's
+/// markers, leaving the rest of the file as it was.
+fn upsert_agent_instructions(path: &Path) -> Result<()> {
+    let existing = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let block =
+        format!("{AGENT_INSTRUCTIONS_BEGIN}\n{AGENT_INSTRUCTIONS}{AGENT_INSTRUCTIONS_END}\n");
+    let updated = match (
+        existing.find(AGENT_INSTRUCTIONS_BEGIN),
+        existing.find(AGENT_INSTRUCTIONS_END),
+    ) {
+        (Some(start), Some(end)) if start < end => {
+            let after = &existing[end + AGENT_INSTRUCTIONS_END.len()..];
+            format!(
+                "{}{block}{}",
+                &existing[..start],
+                after.strip_prefix('\n').unwrap_or(after)
+            )
+        }
+        _ if existing.trim().is_empty() => block,
+        _ => {
+            let separator = if existing.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            format!("{existing}{separator}{block}")
+        }
+    };
+    if updated != existing {
+        fs::write(path, updated).with_context(|| format!("write {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn remove_existing_skill_target(target: &Path) -> Result<bool> {
