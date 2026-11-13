@@ -22,7 +22,7 @@ let
       "${mcp.host}:${toString mcp.port}";
 in
 {
-  inherit jsonFormat bindAddress;
+  inherit bindAddress;
 
   packageOption = mkOption {
     type = types.package;
@@ -31,51 +31,33 @@ in
     description = "The mmr package to use.";
   };
 
-  programOptions =
-    { settingsDescription }:
-    {
-      settings = mkOption {
-        inherit (jsonFormat) type;
-        default = { };
-        example = literalExpression ''
-          {
-            summarize = {
-              baseUrl = "https://openrouter.ai/api/v1";
-              model = "openai/gpt-5.5";
-              apiKeyEnv = "OPENROUTER_API_KEY";
-            };
-          }
-        '';
-        description = ''
-          mmr configuration, written as {file}`config.json`. ${settingsDescription}
-
-          mmr reads the `summarize` table: `baseUrl`, `model`, `apiKeyEnv`
-          (the name of an environment variable that holds the key) and
-          `apiKey`. Do not set `apiKey` here: everything in this option is
-          copied to the world-readable Nix store. Use `apiKeyEnv` instead.
-        '';
-      };
-
-      defaultSource = mkOption {
-        type = types.nullOr (types.enum sources);
-        default = null;
-        example = "codex";
-        description = ''
-          Source that commands read when `--source` is omitted, exported as
-          `MMR_DEFAULT_SOURCE`. `null` reads every source.
-        '';
-      };
-
-      autoDiscoverProject = mkOption {
-        type = types.bool;
-        default = true;
-        description = ''
-          Whether project-scoped commands such as `mmr list sessions` and
-          `mmr read project` default to the project in the current directory.
-          `false` exports `MMR_AUTO_DISCOVER_PROJECT=0`.
-        '';
-      };
+  programOptions = {
+    autoDiscoverProject = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Whether project-scoped commands such as `mmr list sessions` and
+        `mmr read project` default to the project in the current directory.
+        `false` exports `MMR_AUTO_DISCOVER_PROJECT=0`.
+      '';
     };
+
+    # No longer used. Still declared so that existing configurations
+    # evaluate; `removedWarnings` says they are ignored.
+    settings = mkOption {
+      inherit (jsonFormat) type;
+      default = { };
+      visible = false;
+      description = "Ignored. mmr no longer reads a config.json file.";
+    };
+
+    defaultSource = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      visible = false;
+      description = "Ignored. mmr reads every harness unless a command passes `--source`.";
+    };
+  };
 
   mcpOptions =
     {
@@ -126,8 +108,7 @@ in
         type = types.attrsOf types.str;
         default = { };
         example = {
-          OPENAI_BASE_URL = "https://openrouter.ai/api/v1";
-          MMR_SUMMARISER_MODEL = "openai/gpt-5.5";
+          MMR_AUTO_DISCOVER_PROJECT = "0";
         };
         description = ''
           Extra environment variables for the server. These are stored in the
@@ -141,17 +122,15 @@ in
         example = "/run/secrets/mmr-mcp.env";
         description = ''
           File of `NAME=value` lines loaded when the server starts. Use it for
-          `OPENAI_API_KEY` (the `mmr_summarize_*` tools) and `MORPHLLM_API_KEY`
-          (the `mmr_compact_*` tools). ${environmentFileDescription}
+          values that must stay out of the Nix store.
+          ${environmentFileDescription}
         '';
       };
     };
 
   # Environment variables that carry the `programs.mmr` defaults.
   cliEnvironment =
-    cfg:
-    lib.optionalAttrs (cfg.defaultSource != null) { MMR_DEFAULT_SOURCE = cfg.defaultSource; }
-    // lib.optionalAttrs (!cfg.autoDiscoverProject) { MMR_AUTO_DISCOVER_PROJECT = "0"; };
+    cfg: lib.optionalAttrs (!cfg.autoDiscoverProject) { MMR_AUTO_DISCOVER_PROJECT = "0"; };
 
   mcpCommand = mcp: [
     (lib.getExe mcp.package)
@@ -164,12 +143,16 @@ in
     mcp.path
   ];
 
-  settingsWarnings =
-    prefix: settings:
-    lib.optional (lib.attrByPath [ "summarize" "apiKey" ] null settings != null) ''
-      ${prefix}.settings.summarize.apiKey copies your API key into the
-      world-readable Nix store. Set ${prefix}.settings.summarize.apiKeyEnv to
-      the name of an environment variable that holds the key instead.
+  removedWarnings =
+    prefix: cfg:
+    lib.optional (cfg.settings != { }) ''
+      ${prefix}.settings is ignored and can be removed. mmr no longer reads
+      config.json, because the model-backed summarize and compact commands
+      were removed.
+    ''
+    ++ lib.optional (cfg.defaultSource != null) ''
+      ${prefix}.defaultSource is ignored and can be removed. mmr reads every
+      harness unless a command passes --source.
     '';
 
   mcpWarnings =

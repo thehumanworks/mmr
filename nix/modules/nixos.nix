@@ -14,11 +14,7 @@ let
   cfg = config.programs.mmr;
   mcp = config.services.mmr-mcp;
 
-  configPath = "/etc/mmr/config.json";
-
-  cliEnvironment =
-    common.cliEnvironment cfg
-    // lib.optionalAttrs (cfg.settings != { }) { MMR_CONFIG_FILE = configPath; };
+  cliEnvironment = common.cliEnvironment cfg;
 in
 {
   options.programs.mmr = {
@@ -26,14 +22,7 @@ in
 
     package = common.packageOption;
   }
-  // common.programOptions {
-    settingsDescription = ''
-      When this is not empty, the file is placed at {file}`${configPath}`
-      and `MMR_CONFIG_FILE` points every user at it, which replaces each
-      user's own {file}`~/.config/mmr/config.json`. Use the home-manager
-      module for per-user settings.
-    '';
-  };
+  // common.programOptions;
 
   options.services.mmr-mcp =
     common.mcpOptions {
@@ -50,23 +39,18 @@ in
         example = "alice";
         description = ''
           Account whose coding-session history the server serves. The
-          service runs as this user, with that user's home directory, and
-          reads {file}`~/.config/mmr/config.json` like the CLI does.
+          service runs as this user, with that user's home directory.
         '';
       };
     };
 
   config = lib.mkMerge [
     (lib.mkIf cfg.enable {
-      warnings = common.settingsWarnings "programs.mmr" cfg.settings;
+      warnings = common.removedWarnings "programs.mmr" cfg;
 
       environment.systemPackages = [ cfg.package ];
 
       environment.sessionVariables = cliEnvironment;
-
-      environment.etc."mmr/config.json" = lib.mkIf (cfg.settings != { }) {
-        source = common.jsonFormat.generate "mmr-config.json" cfg.settings;
-      };
     })
 
     (lib.mkIf mcp.enable {
@@ -88,8 +72,8 @@ in
           KillSignal = "SIGINT";
           UMask = "0077";
 
-          # mmr reads the user's history and keeps its store under
-          # ~/.local/share/mmr, so the home directory stays writable.
+          # The server reads the user's history from the home directory, so
+          # ProtectHome stays off.
           CapabilityBoundingSet = "";
           LockPersonality = true;
           NoNewPrivileges = true;

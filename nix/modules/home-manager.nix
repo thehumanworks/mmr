@@ -51,13 +51,7 @@ in
       '';
     };
   }
-  // common.programOptions {
-    settingsDescription = ''
-      The file is placed at {file}`$XDG_CONFIG_HOME/mmr/config.json`
-      (normally {file}`~/.config/mmr/config.json`). Nothing is written while
-      this is empty.
-    '';
-  };
+  // common.programOptions;
 
   options.services.mmr-mcp = common.mcpOptions {
     defaultPackage = cfg.package;
@@ -70,15 +64,11 @@ in
 
   config = lib.mkMerge [
     (lib.mkIf cfg.enable {
-      warnings = common.settingsWarnings "programs.mmr" cfg.settings;
+      warnings = common.removedWarnings "programs.mmr" cfg;
 
       home.packages = [ cfg.package ];
 
       home.sessionVariables = common.cliEnvironment cfg;
-
-      xdg.configFile."mmr/config.json" = lib.mkIf (cfg.settings != { }) {
-        source = common.jsonFormat.generate "mmr-config.json" cfg.settings;
-      };
 
       home.file.".agents/skills/mmr" = lib.mkIf cfg.installSkill {
         source = "${cfg.package}/share/mmr/skills/mmr";
