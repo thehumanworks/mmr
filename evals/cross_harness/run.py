@@ -194,7 +194,12 @@ def setup_condition(condition: str, home: Path, mmr: Path, run_dir: Path, agent:
         catalog = codex_catalog(model, run_dir.parent)
         if catalog:
             config.append(f'model_catalog_json = "{catalog}"')
-    config += ["", "[features]", "multi_agent = false", "", "[analytics]", "enabled = false"]
+    # With the user's sign-in, Codex also offers the apps connected to that account (such as Slack
+    # and GitHub search). In the first Codex run the agent without mmr searched them. Apps, plugins
+    # and browser or computer use are off, so the agent sees only the throwaway world.
+    config += ["", "[features]", "multi_agent = false", "apps = false", "plugins = false",
+               "browser_use = false", "computer_use = false", "image_generation = false",
+               "", "[analytics]", "enabled = false"]
     if not codex_login:
         config += ["", "[model_providers.gateway]", 'name = "AI Gateway"', f'base_url = "{base_url}"',
                    'env_key = "AI_GATEWAY_API_KEY"', 'wire_api = "responses"']
