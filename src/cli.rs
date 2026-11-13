@@ -8,8 +8,6 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::agent::{ai, compact};
-use crate::config::{self, DEFAULT_SUMMARISER_MODEL};
 use crate::messages::service::{MessageQueryOptions, QueryService, SessionSelectionError};
 use crate::peer::{
     PEER_PROTOCOL_VERSION, PeerProjectIdentity, PeerStatusResponse, PeerTeleportPackRequest,
@@ -21,10 +19,7 @@ use crate::teleport::{
     TeleportStatus, apply_bundle, pack_session, read_bundle, receive_bundle, send_session,
     serve_session, verify_artifact_hashes, write_bundle,
 };
-use crate::types::{
-    ApiMessage, ApiMessagesResponse, CompactResponse, RememberRequest, RememberResponse, SortBy,
-    SortOptions, SortOrder, SourceFilter,
-};
+use crate::types::{ApiMessage, ApiMessagesResponse, SortBy, SortOptions, SortOrder, SourceFilter};
 
 #[derive(Debug, Clone)]
 pub struct CliFailure {
@@ -60,8 +55,6 @@ impl std::fmt::Display for CliFailure {
 impl std::error::Error for CliFailure {}
 
 const ENV_AUTO_DISCOVER_PROJECT: &str = "MMR_AUTO_DISCOVER_PROJECT";
-const ENV_DEFAULT_SOURCE: &str = "MMR_DEFAULT_SOURCE";
-const ENV_COMPACT_MODEL: &str = "MMR_COMPACT_MODEL";
 
 #[derive(Debug, Clone, Copy)]
 struct BundledSkillFile {
@@ -97,7 +90,7 @@ const BUNDLED_MMR_SKILL_FILES: &[BundledSkillFile] = &[
     name = "mmr",
     version = env!("CARGO_PKG_VERSION"),
     about = "Fetch a project's earlier agent sessions from Claude Code, Codex, Cursor, Grok and Pi history",
-    after_help = "Examples:\n  mmr find \"retry limit\"                 Search this project's history, newest first\n  mmr --source codex read session <id>   Read one session (each find match prints this)\n  mmr list sessions                      List this project's sessions, newest first\n  mmr recall                             Read the previous session in this project\n  mmr read project --limit 50            Read this project's history, 50 messages a page\n  mmr context project --limit 100        Session list plus bounded messages, in one call\n  mmr summarize project                  Summarize with a model (needs an API key)\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr skill load\n  mmr mcp --transport stdio\n\nScope:\n  Project commands use the current directory's project unless you pass --project, or --all where offered. Every command reads each harness's own history files, so nothing needs to be set up first. --source narrows a command to one harness.\n\nOutput:\n  Commands print JSON on stdout; add --pretty to indent it. summarize prints Markdown unless you pass -O json. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
+    after_help = "Examples:\n  mmr find \"retry limit\"                 Search this project's history, newest first\n  mmr --source codex read session <id>   Read one session (each find match prints this)\n  mmr list sessions                      List this project's sessions, newest first\n  mmr recall                             Read the previous session in this project\n  mmr read project --limit 50            Read this project's history, 50 messages a page\n  mmr context project --limit 100        Session list plus bounded messages, in one call\n  mmr share session latest --to user@host\n  mmr import session --from mini --session latest --project /path/to/project --read-only\n  mmr skill load\n  mmr mcp --transport stdio\n\nScope:\n  Project commands use the current directory's project unless you pass --project, or --all where offered. Every command reads each harness's own history files, so nothing needs to be set up first. --source narrows a command to one harness.\n\nOutput:\n  Commands print JSON on stdout; add --pretty to indent it. `mmr mcp --transport stdio` reserves stdout for MCP protocol frames."
 )]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 pub struct Cli {
@@ -105,7 +98,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub pretty: bool,
 
-    /// Filter by source: claude, codex, cursor, grok, pi (omit to use MMR_DEFAULT_SOURCE or all)
+    /// Only read one harness: claude, codex, cursor, grok or pi (omit to read all)
     #[arg(long, global = true, value_enum)]
     pub source: Option<SourceFilter>,
 
@@ -125,10 +118,6 @@ pub enum Commands {
     Read(ReadArgs),
     /// Collect a project's session list and newest messages for an agent
     Context(ContextArgs),
-    /// Run a stateless summary over scoped history
-    Summarize(SummarizeArgs),
-    /// Compact scoped history with Morph Compact without rewriting surviving lines
-    Compact(CompactArgs),
     /// Load or install the bundled mmr agent skill
     Skill(SkillArgs),
     /// Import session or bundle material into this machine
@@ -281,129 +270,6 @@ pub struct ContextProjectArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct SummarizeArgs {
-    #[command(subcommand)]
-    command: SummarizeCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum SummarizeCommand {
-    /// Run a stateless summary over project-scoped history
-    Project(SummarizeProjectArgs),
-    /// Run a stateless summary over one explicit session
-    Session(SummarizeSessionArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct SummarizeProjectArgs {
-    /// Project name or path (omit to use current directory)
-    #[arg(long, short = 'p')]
-    project: Option<String>,
-    /// Maximum number of messages to include (newest-first window; same as `read project`)
-    #[arg(long)]
-    limit: Option<usize>,
-    /// Number of newest-ranked messages to skip before applying `--limit`
-    #[arg(long, default_value_t = 0)]
-    offset: usize,
-    #[command(flatten)]
-    runner: SummaryRunnerArgs,
-}
-
-#[derive(Args, Debug)]
-pub struct SummarizeSessionArgs {
-    /// Session ID to summarize
-    session_id: String,
-    /// Project name or path (optional; without it the session is searched globally)
-    #[arg(long, short = 'p')]
-    project: Option<String>,
-    /// Maximum number of messages to include (newest-first window; same as `read session`)
-    #[arg(long)]
-    limit: Option<usize>,
-    /// Number of newest-ranked messages to skip before applying `--limit`
-    #[arg(long, default_value_t = 0)]
-    offset: usize,
-    #[command(flatten)]
-    runner: SummaryRunnerArgs,
-}
-
-#[derive(Args, Debug)]
-pub struct CompactArgs {
-    #[command(subcommand)]
-    command: CompactCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum CompactCommand {
-    /// Compact project-scoped history with Morph Compact
-    Project(CompactProjectArgs),
-    /// Compact one explicit session with Morph Compact
-    Session(CompactSessionArgs),
-}
-
-#[derive(Args, Debug)]
-pub struct CompactProjectArgs {
-    /// Project name or path (omit to use current directory)
-    #[arg(long, short = 'p')]
-    project: Option<String>,
-    #[command(flatten)]
-    runner: CompactRunnerArgs,
-}
-
-#[derive(Args, Debug)]
-pub struct CompactSessionArgs {
-    /// Session ID to compact
-    session_id: String,
-    /// Project name or path (optional; without it the session is searched globally)
-    #[arg(long, short = 'p')]
-    project: Option<String>,
-    #[command(flatten)]
-    runner: CompactRunnerArgs,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct CompactRunnerArgs {
-    /// Focus query for relevance-based pruning
-    #[arg(long)]
-    query: Option<String>,
-    /// Fraction of input to keep, e.g. 0.3 aggressive or 0.7 light
-    #[arg(long = "compression-ratio")]
-    compression_ratio: Option<f32>,
-    /// Keep the last N messages uncompressed
-    #[arg(long = "preserve-recent")]
-    preserve_recent: Option<u32>,
-    /// Omit compacted_line_ranges from Morph's response
-    #[arg(long = "no-line-ranges")]
-    no_line_ranges: bool,
-    /// Omit '(filtered N lines)' markers from compacted output
-    #[arg(long = "no-markers")]
-    no_markers: bool,
-    /// Output format for compact results
-    #[arg(
-        short = 'O',
-        long = "output-format",
-        value_enum,
-        default_value = "json"
-    )]
-    output_format: CompactOutputFormatArg,
-    /// Morph compact model to use (overrides MMR_COMPACT_MODEL)
-    #[arg(long)]
-    model: Option<String>,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct SummaryRunnerArgs {
-    /// Override the output format and rules portion of the system instructions
-    #[arg(long)]
-    instructions: Option<String>,
-    /// Output format for summary results
-    #[arg(short = 'O', long = "output-format", value_enum, default_value = "md")]
-    output_format: RememberOutputFormatArg,
-    /// Model to use (overrides config and MMR_SUMMARISER_MODEL)
-    #[arg(long)]
-    model: Option<String>,
-}
-
-#[derive(Args, Debug)]
 pub struct SkillArgs {
     #[command(subcommand)]
     command: SkillCommand,
@@ -454,22 +320,6 @@ pub struct PeerRequestArgs {
     /// Read request JSON from stdin when set to '-'
     #[arg(long = "request-json")]
     request_json: String,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[clap(rename_all = "kebab-case")]
-pub enum RememberOutputFormatArg {
-    Json,
-    #[default]
-    Md,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[clap(rename_all = "kebab-case")]
-pub enum CompactOutputFormatArg {
-    #[default]
-    Json,
-    Md,
 }
 
 #[derive(Args, Debug)]
@@ -634,7 +484,7 @@ impl From<BundleOutputFormatArg> for TeleportOutputFormat {
 }
 
 pub async fn run_cli(cli: Cli) -> Result<String> {
-    let source_filter = effective_source(cli.source);
+    let source_filter = cli.source;
     let pretty = cli.pretty;
     let load_service = || QueryService::load_filtered(source_filter);
     match cli.command {
@@ -647,22 +497,12 @@ pub async fn run_cli(cli: Cli) -> Result<String> {
         Commands::List(args) => {
             list_command_response(&load_service()?, args, source_filter, pretty)
         }
-        Commands::Recall(args) => {
-            recall_response(&load_service()?, args, cli.source, source_filter, pretty)
-        }
+        Commands::Recall(args) => recall_response(&load_service()?, args, source_filter, pretty),
         Commands::Read(args) => {
             read_command_response(&load_service()?, args, source_filter, pretty)
         }
         Commands::Context(args) => {
             context_command_response(&load_service()?, args, source_filter, pretty)
-        }
-        Commands::Summarize(args) => {
-            let service = load_service()?;
-            summarize_command_response(&service, args, source_filter, pretty).await
-        }
-        Commands::Compact(args) => {
-            let service = load_service()?;
-            compact_command_response(&service, args, source_filter, pretty).await
         }
     }
 }
@@ -800,37 +640,6 @@ fn read_cwd_project_messages(
     })
 }
 
-/// The messages that one `summarize` or `compact` target covers.
-#[derive(Clone, Copy)]
-enum MessageScope<'a> {
-    Project(&'a str),
-    Session {
-        session_id: &'a str,
-        project: Option<&'a str>,
-    },
-}
-
-impl MessageScope<'_> {
-    /// Every local message in scope, oldest first.
-    fn local_messages(
-        self,
-        service: &QueryService,
-        source_filter: Option<SourceFilter>,
-    ) -> Result<Vec<ApiMessage>> {
-        let unpaged = MessageQueryOptions::new(None, 0, oldest_first());
-        let response = match self {
-            Self::Project(project) => {
-                service.messages(&[], Some(project), source_filter, unpaged)?
-            }
-            Self::Session {
-                session_id,
-                project,
-            } => service.messages(&[session_id.to_string()], project, source_filter, unpaged)?,
-        };
-        Ok(response.messages)
-    }
-}
-
 fn paginate<T>(items: Vec<T>, limit: Option<usize>, offset: usize) -> Vec<T> {
     let iter = items.into_iter().skip(offset);
     match limit {
@@ -839,36 +648,8 @@ fn paginate<T>(items: Vec<T>, limit: Option<usize>, offset: usize) -> Vec<T> {
     }
 }
 
-fn sort_api_messages_chronological(messages: &mut [ApiMessage]) {
-    messages.sort_by(|a, b| {
-        a.timestamp
-            .cmp(&b.timestamp)
-            .then_with(|| a.session_id.cmp(&b.session_id))
-            .then_with(|| a.source.cmp(&b.source))
-            .then_with(|| a.project_name.cmp(&b.project_name))
-            .then_with(|| a.role.cmp(&b.role))
-    });
-}
-
 fn oldest_first() -> SortOptions {
     SortOptions::new(SortBy::Timestamp, SortOrder::Asc)
-}
-
-/// Keep one page counted back from the newest message, returned oldest first.
-/// With no `--limit` and no `--offset`, keep every message in its current order.
-fn newest_page(
-    mut messages: Vec<ApiMessage>,
-    limit: Option<usize>,
-    offset: usize,
-) -> Vec<ApiMessage> {
-    if limit.is_none() && offset == 0 {
-        return messages;
-    }
-    sort_api_messages_chronological(&mut messages);
-    messages.reverse();
-    let mut page = paginate(messages, limit, offset);
-    page.reverse();
-    page
 }
 
 fn build_next_read_project_command(
@@ -941,140 +722,6 @@ fn context_command_response(
         messages: messages.messages,
     };
     serialize(&response, pretty)
-}
-
-async fn summarize_command_response(
-    service: &QueryService,
-    args: SummarizeArgs,
-    source_filter: Option<SourceFilter>,
-    pretty: bool,
-) -> Result<String> {
-    match args.command {
-        SummarizeCommand::Project(args) => {
-            let project = args
-                .project
-                .unwrap_or(current_dir_project().context("could not resolve current directory")?);
-            if args.limit.is_none() && args.offset == 0 {
-                let model = effective_summariser_model(args.runner.model.as_deref());
-                let response = ai::remember(
-                    service,
-                    RememberRequest {
-                        project: project.as_str(),
-                        source: source_filter,
-                        instructions: args.runner.instructions.as_deref(),
-                        model: &model,
-                    },
-                )
-                .await?;
-                return format_remember_response(&response, args.runner.output_format, pretty);
-            }
-            let scope = MessageScope::Project(project.as_str());
-            let messages = scope.local_messages(service, source_filter)?;
-            let messages = newest_page(messages, args.limit, args.offset);
-            summarize_transcript(&args.runner, &messages, pretty).await
-        }
-        SummarizeCommand::Session(args) => {
-            let scope = MessageScope::Session {
-                session_id: &args.session_id,
-                project: args.project.as_deref(),
-            };
-            let messages = scope.local_messages(service, source_filter)?;
-            let messages = newest_page(messages, args.limit, args.offset);
-            summarize_transcript(&args.runner, &messages, pretty).await
-        }
-    }
-}
-
-async fn summarize_transcript(
-    runner: &SummaryRunnerArgs,
-    messages: &[ApiMessage],
-    pretty: bool,
-) -> Result<String> {
-    let model = effective_summariser_model(runner.model.as_deref());
-    let formatted = format_messages_as_transcript_input(messages);
-    let response =
-        ai::summarize_formatted_messages(runner.instructions.as_deref(), &model, &formatted)
-            .await?;
-    format_remember_response(&response, runner.output_format, pretty)
-}
-
-async fn compact_command_response(
-    service: &QueryService,
-    args: CompactArgs,
-    source_filter: Option<SourceFilter>,
-    pretty: bool,
-) -> Result<String> {
-    let (messages, runner) = match args.command {
-        CompactCommand::Project(args) => {
-            let project = args
-                .project
-                .unwrap_or(current_dir_project().context("could not resolve current directory")?);
-            let scope = MessageScope::Project(project.as_str());
-            (scope.local_messages(service, source_filter)?, args.runner)
-        }
-        CompactCommand::Session(args) => {
-            let scope = MessageScope::Session {
-                session_id: &args.session_id,
-                project: args.project.as_deref(),
-            };
-            (scope.local_messages(service, source_filter)?, args.runner)
-        }
-    };
-    let formatted = format_messages_as_transcript_input(&messages);
-    let response = compact_formatted_messages(&runner, &formatted).await?;
-    format_compact_response(&response, runner.output_format, pretty)
-}
-
-async fn compact_formatted_messages(
-    args: &CompactRunnerArgs,
-    formatted_messages: &str,
-) -> Result<CompactResponse> {
-    validate_compression_ratio(args.compression_ratio)?;
-    let model = effective_compact_model(args.model.as_deref());
-    let client = compact::MorphCompactClient::from_env()?;
-    let mut request = compact::CompactRequest::new(formatted_messages, &model);
-    request.query = args.query.as_deref();
-    request.compression_ratio = args.compression_ratio;
-    request.preserve_recent = args.preserve_recent;
-    request.include_line_ranges = args.no_line_ranges.then_some(false);
-    request.include_markers = args.no_markers.then_some(false);
-
-    let result = client.compact(request).await?;
-    Ok(CompactResponse::new(
-        result.model,
-        result.id,
-        result.output,
-        result.messages,
-        result.usage,
-    ))
-}
-
-fn validate_compression_ratio(ratio: Option<f32>) -> Result<()> {
-    if let Some(ratio) = ratio
-        && !(0.05..=1.0).contains(&ratio)
-    {
-        bail!("--compression-ratio must be between 0.05 and 1.0");
-    }
-    Ok(())
-}
-
-fn format_messages_as_transcript_input(messages: &[ApiMessage]) -> String {
-    let mut output = String::new();
-    let mut current_session = String::new();
-    for message in messages {
-        if message.session_id != current_session {
-            current_session = message.session_id.clone();
-            output.push_str(&format!(
-                "\n## Session {} ({}, {})\n",
-                message.session_id, message.source, message.project_name
-            ));
-        }
-        output.push_str(&format!(
-            "- [{}] {}: {}\n",
-            message.timestamp, message.role, message.content
-        ));
-    }
-    output
 }
 
 fn import_command_response(
@@ -1760,35 +1407,6 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn effective_source(cli_source: Option<SourceFilter>) -> Option<SourceFilter> {
-    cli_source.or_else(default_source_from_env)
-}
-
-fn default_source_from_env() -> Option<SourceFilter> {
-    std::env::var(ENV_DEFAULT_SOURCE)
-        .ok()
-        .and_then(|value| parse_source_filter_env(&value))
-}
-
-fn parse_source_filter_env(value: &str) -> Option<SourceFilter> {
-    SourceFilter::from_name(value.trim().to_ascii_lowercase().as_str())
-}
-
-fn effective_summariser_model(cli_model: Option<&str>) -> String {
-    config::resolve_summarize_settings(cli_model)
-        .map(|settings| settings.model)
-        .unwrap_or_else(|_| DEFAULT_SUMMARISER_MODEL.to_string())
-}
-
-fn effective_compact_model(cli_model: Option<&str>) -> String {
-    cli_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(default_compact_model_from_env)
-        .unwrap_or_else(|| compact::default_compact_model().to_string())
-}
-
 /// Reject the not-by-default newest session (age 0) unless the caller opted in with
 /// `--include-newest`. Out-of-range ages depend on the in-scope session count and are
 /// enforced later in the service against the recency ranking.
@@ -1797,13 +1415,6 @@ fn validate_session_back(age: u32, include_newest: bool) -> Result<u32, SessionS
         return Err(SessionSelectionError::AgeZeroNotSelectable);
     }
     Ok(age)
-}
-
-fn default_compact_model_from_env() -> Option<String> {
-    std::env::var(ENV_COMPACT_MODEL)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn effective_project_scope(explicit_project: Option<String>, all: bool) -> Option<String> {
@@ -2083,7 +1694,6 @@ fn normalize_git_remotes(remotes: &[String]) -> Vec<String> {
 fn recall_response(
     service: &QueryService,
     args: RecallArgs,
-    cli_source: Option<SourceFilter>,
     source_filter: Option<SourceFilter>,
     pretty: bool,
 ) -> Result<String> {
@@ -2118,7 +1728,7 @@ fn recall_response(
             .and_then(|selection| selection.selected.first())
             .map(|selected| selected.session_id.as_str());
         response.next_command = Some(build_next_recall_read_command(
-            cli_source,
+            source_filter,
             pretty,
             session_id,
             project_scope.as_deref(),
@@ -2252,204 +1862,14 @@ fn serialize<T: Serialize>(value: &T, pretty: bool) -> Result<String> {
     }
 }
 
-fn format_remember_response(
-    response: &RememberResponse,
-    output_format: RememberOutputFormatArg,
-    pretty: bool,
-) -> Result<String> {
-    match output_format {
-        RememberOutputFormatArg::Json => serialize(response, pretty),
-        RememberOutputFormatArg::Md => Ok(remember_response_to_markdown(response)),
-    }
-}
-
-fn format_compact_response(
-    response: &CompactResponse,
-    output_format: CompactOutputFormatArg,
-    pretty: bool,
-) -> Result<String> {
-    match output_format {
-        CompactOutputFormatArg::Json => serialize(response, pretty),
-        CompactOutputFormatArg::Md => Ok(compact_response_to_markdown(response)),
-    }
-}
-
-fn remember_response_to_markdown(response: &RememberResponse) -> String {
-    if response.text.trim().is_empty() {
-        "(No continuity brief returned.)"
-    } else {
-        response.text.trim()
-    }
-    .to_string()
-}
-
-fn compact_response_to_markdown(response: &CompactResponse) -> String {
-    if response.output.trim().is_empty() {
-        "(No compacted transcript returned.)"
-    } else {
-        response.output.trim()
-    }
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn summarize_project_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "summarize",
-            "project",
-            "--project",
-            "/Users/test/proj",
-            "--model",
-            "openrouter/auto",
-            "-O",
-            "json",
-        ])
-        .expect("summarize project should parse");
-        let Commands::Summarize(args) = parsed.command else {
-            panic!("expected summarize command");
-        };
-        let SummarizeCommand::Project(project) = args.command else {
-            panic!("expected summarize project command");
-        };
-        assert_eq!(project.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(project.runner.model.as_deref(), Some("openrouter/auto"));
-        assert_eq!(project.runner.output_format, RememberOutputFormatArg::Json);
-    }
-
-    #[test]
-    fn summarize_session_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "summarize",
-            "session",
-            "sess-123",
-            "--project",
-            "/Users/test/proj",
-        ])
-        .expect("summarize session should parse");
-        let Commands::Summarize(args) = parsed.command else {
-            panic!("expected summarize command");
-        };
-        let SummarizeCommand::Session(session) = args.command else {
-            panic!("expected summarize session command");
-        };
-        assert_eq!(session.session_id, "sess-123");
-        assert_eq!(session.project.as_deref(), Some("/Users/test/proj"));
-    }
-
-    #[test]
-    fn summarize_project_limit_offset_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "summarize",
-            "project",
-            "--limit",
-            "10",
-            "--offset",
-            "5",
-        ])
-        .expect("summarize project limit/offset should parse");
-        let Commands::Summarize(args) = parsed.command else {
-            panic!("expected summarize command");
-        };
-        let SummarizeCommand::Project(project) = args.command else {
-            panic!("expected summarize project command");
-        };
-        assert_eq!(project.limit, Some(10));
-        assert_eq!(project.offset, 5);
-    }
-
-    #[test]
-    fn compact_project_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "compact",
-            "project",
-            "--project",
-            "/Users/test/proj",
-            "--query",
-            "active task",
-            "--compression-ratio",
-            "0.4",
-            "--preserve-recent",
-            "3",
-            "--no-line-ranges",
-            "--no-markers",
-            "--model",
-            "morph-compactor",
-            "-O",
-            "md",
-        ])
-        .expect("compact project should parse");
-        let Commands::Compact(args) = parsed.command else {
-            panic!("expected compact command");
-        };
-        let CompactCommand::Project(project) = args.command else {
-            panic!("expected compact project command");
-        };
-        assert_eq!(project.project.as_deref(), Some("/Users/test/proj"));
-        assert_eq!(project.runner.query.as_deref(), Some("active task"));
-        assert_eq!(project.runner.compression_ratio, Some(0.4));
-        assert_eq!(project.runner.preserve_recent, Some(3));
-        assert!(project.runner.no_line_ranges);
-        assert!(project.runner.no_markers);
-        assert_eq!(project.runner.model.as_deref(), Some("morph-compactor"));
-        assert_eq!(project.runner.output_format, CompactOutputFormatArg::Md);
-    }
-
-    #[test]
-    fn compact_session_parses() {
-        let parsed = Cli::try_parse_from([
-            "mmr",
-            "compact",
-            "session",
-            "sess-123",
-            "--project",
-            "/Users/test/proj",
-        ])
-        .expect("compact session should parse");
-        let Commands::Compact(args) = parsed.command else {
-            panic!("expected compact command");
-        };
-        let CompactCommand::Session(session) = args.command else {
-            panic!("expected compact session command");
-        };
-        assert_eq!(session.session_id, "sess-123");
-        assert_eq!(session.project.as_deref(), Some("/Users/test/proj"));
-    }
-
-    #[test]
     fn old_summary_and_remember_do_not_parse() {
         assert!(Cli::try_parse_from(["mmr", "summary", "all"]).is_err());
         assert!(Cli::try_parse_from(["mmr", "remember", "all"]).is_err());
-    }
-
-    #[test]
-    fn parse_source_filter_env_accepts_supported_values() {
-        assert_eq!(parse_source_filter_env("codex"), Some(SourceFilter::Codex));
-        assert_eq!(
-            parse_source_filter_env("CLAUDE"),
-            Some(SourceFilter::Claude)
-        );
-        assert_eq!(
-            parse_source_filter_env("cursor"),
-            Some(SourceFilter::Cursor)
-        );
-        assert_eq!(
-            parse_source_filter_env("CURSOR"),
-            Some(SourceFilter::Cursor)
-        );
-        assert_eq!(parse_source_filter_env("grok"), Some(SourceFilter::Grok));
-        assert_eq!(parse_source_filter_env("GROK"), Some(SourceFilter::Grok));
-        assert_eq!(parse_source_filter_env("pi"), Some(SourceFilter::Pi));
-        assert_eq!(parse_source_filter_env("PI"), Some(SourceFilter::Pi));
-        assert_eq!(parse_source_filter_env(""), None);
-        assert_eq!(parse_source_filter_env("invalid"), None);
     }
 
     #[test]
@@ -2571,48 +1991,6 @@ mod tests {
         assert!(Cli::try_parse_from(["mmr", "remember", "--session-id", "sess-123"]).is_err());
         assert!(Cli::try_parse_from(["mmr", "remember", "--continue-from", "abc"]).is_err());
         assert!(Cli::try_parse_from(["mmr", "remember", "--follow-up", "next"]).is_err());
-    }
-
-    #[test]
-    fn remember_markdown_transformation_includes_summary_only() {
-        let response = RememberResponse {
-            backend: "openai-compatible".to_string(),
-            model: "test-model".to_string(),
-            text: "# Continuity Brief\n\nSummary body".to_string(),
-        };
-
-        let markdown = remember_response_to_markdown(&response);
-        assert!(markdown.contains("# Continuity Brief"));
-        assert!(markdown.contains("Summary body"));
-        assert!(!markdown.contains("Interaction ID:"));
-        assert!(!markdown.contains("Thread ID:"));
-    }
-
-    #[test]
-    fn remember_markdown_transformation_handles_empty_values() {
-        let response = RememberResponse {
-            backend: "openai-compatible".to_string(),
-            model: "test-model".to_string(),
-            text: "  ".to_string(),
-        };
-
-        let markdown = remember_response_to_markdown(&response);
-        assert!(markdown.contains("(No continuity brief returned.)"));
-        assert!(!markdown.contains("Interaction ID:"));
-        assert!(!markdown.contains("Thread ID:"));
-    }
-
-    #[test]
-    fn remember_markdown_transformation_trims_outer_whitespace() {
-        let response = RememberResponse {
-            backend: "openai-compatible".to_string(),
-            model: "test-model".to_string(),
-            text: "\n  line one\nline two  \n".to_string(),
-        };
-
-        let markdown = remember_response_to_markdown(&response);
-        assert!(markdown.contains("line one\nline two"));
-        assert!(!markdown.contains("id-1"));
     }
 
     #[test]

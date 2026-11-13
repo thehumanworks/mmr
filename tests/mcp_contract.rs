@@ -22,10 +22,6 @@ const EXPECTED_TOOLS: &[&str] = &[
     "mmr_recall",
     "mmr_find",
     "mmr_context_project",
-    "mmr_summarize_project",
-    "mmr_summarize_session",
-    "mmr_compact_project",
-    "mmr_compact_session",
     "mmr_skill_load",
 ];
 
