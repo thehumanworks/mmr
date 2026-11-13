@@ -36,9 +36,6 @@ Match tests to the touched surface before the full loop:
 # CLI contract changes
 cargo test --test cli_contract <test_prefix>_ -- --nocapture
 
-# Summarize
-cargo test --test summary_contract
-
 # MCP surface
 cargo test --test mcp_contract <test_prefix>_ -- --nocapture
 ```

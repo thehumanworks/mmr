@@ -22,10 +22,8 @@ cargo install --git https://github.com/thehumanworks/mmr.git --rev <commit-sha> 
 
 Requirements:
 
-- Rust 1.85 or newer.
-- A C compiler toolchain, because the TLS crypto library (`aws-lc-sys`, pulled
-  in by `reqwest`) compiles C code.
-- Normal platform TLS/build prerequisites for Rust networking crates.
+- Rust 1.85 or newer. mmr is pure Rust: it needs no C compiler, TLS library,
+  configuration file or API key.
 
 ## Download A Prebuilt Binary
 
@@ -137,8 +135,6 @@ mmr context project --limit 20   # session list plus the newest messages, in one
 - `--source <claude|codex|cursor|grok|pi>` narrows any command to one harness.
 - Output is JSON; add `--pretty` to indent it. Paged results include a
   `next_command` that runs as printed.
-- `summarize` and `compact` condense history with an external model and need an
-  API key. See [docs/mmr-command-taxonomy.md](docs/mmr-command-taxonomy.md).
 - For agents: `mmr skill load` prints the agent skill, and
   `mmr mcp --transport stdio` serves the fetch commands as MCP tools (see
   [docs/mmr-mcp.md](docs/mmr-mcp.md)).

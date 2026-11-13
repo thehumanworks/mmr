@@ -33,25 +33,28 @@ let
   home = mkHome {
     programs.mmr = {
       enable = true;
-      defaultSource = "codex";
       autoDiscoverProject = false;
       installSkill = true;
-      settings.summarize = {
-        baseUrl = "https://openrouter.ai/api/v1";
-        model = "openai/gpt-5.5";
-        apiKeyEnv = "OPENROUTER_API_KEY";
-      };
     };
     services.mmr-mcp = {
       enable = true;
       port = 8799;
-      environment.OPENAI_BASE_URL = "https://openrouter.ai/api/v1";
+      environment.RUST_LOG = "warn";
       environmentFile = "/run/secrets/mmr-mcp.env";
     };
   };
 
-  # A bare `enable` writes no config file and no session variables.
+  # A bare `enable` writes no session variables.
   minimal = mkHome { programs.mmr.enable = true; };
+
+  # Options from older releases still evaluate and are ignored.
+  legacy = mkHome {
+    programs.mmr = {
+      enable = true;
+      defaultSource = "codex";
+      settings.summarize.model = "openai/gpt-5.5";
+    };
+  };
 
   inherit (home.config.services.mmr-mcp) package;
   exe = lib.getExe package;
@@ -59,19 +62,17 @@ let
   mmrVariables = cfg: lib.filterAttrs (name: _: lib.hasPrefix "MMR_" name) cfg.home.sessionVariables;
 in
 # home-manager traces warnings whenever a configuration is read, so the
-# warning cases are covered by the NixOS module check, which shares them.
+# warning texts are covered by the NixOS module check, which shares them.
+# Building this check prints the two expected warnings for `legacy`.
 assert home.config.warnings == [ ];
 assert minimal.config.warnings == [ ];
-assert !(minimal.config.xdg.configFile ? "mmr/config.json");
 assert mmrVariables minimal.config == { };
-assert
-  mmrVariables home.config == {
-    MMR_DEFAULT_SOURCE = "codex";
-    MMR_AUTO_DISCOVER_PROJECT = "0";
-  };
+assert mmrVariables home.config == { MMR_AUTO_DISCOVER_PROJECT = "0"; };
+assert lib.length legacy.config.warnings == 2;
+assert mmrVariables legacy.config == { };
+assert !(legacy.config.xdg.configFile ? "mmr/config.json");
 pkgs.runCommand "mmr-home-manager-module-test"
   {
-    nativeBuildInputs = [ pkgs.jq ];
     files = home.config.home-files;
     activation = home.activationPackage;
     sessionVars = home.config.home.sessionVariablesPackage;
@@ -80,19 +81,11 @@ pkgs.runCommand "mmr-home-manager-module-test"
     ''
       set -euo pipefail
 
-      echo "config.json holds the summarize settings"
-      jq -e '.summarize == {
-        apiKeyEnv: "OPENROUTER_API_KEY",
-        baseUrl: "https://openrouter.ai/api/v1",
-        model: "openai/gpt-5.5"
-      }' "$files/.config/mmr/config.json"
-
       echo "the CLI is on the profile PATH"
       test -x "$activation/home-path/bin/mmr"
       "$activation/home-path/bin/mmr" --version
 
       echo "session variables carry the CLI defaults"
-      grep -F 'MMR_DEFAULT_SOURCE="codex"' "$sessionVars/etc/profile.d/hm-session-vars.sh"
       grep -F 'MMR_AUTO_DISCOVER_PROJECT="0"' "$sessionVars/etc/profile.d/hm-session-vars.sh"
 
       echo "the agent skill matches what mmr skill install writes"
@@ -109,8 +102,8 @@ pkgs.runCommand "mmr-home-manager-module-test"
           wrapper="$(grep -o '/nix/store/[^<]*-mmr-mcp' "$plist")"
           grep -Fx '. /run/secrets/mmr-mcp.env' "$wrapper"
           grep -Fx 'exec ${exe} mcp --transport http --bind 127.0.0.1:8799 --path /mcp' "$wrapper"
-          grep -F '<key>MMR_DEFAULT_SOURCE</key>' "$plist"
-          grep -F '<key>OPENAI_BASE_URL</key>' "$plist"
+          grep -F '<key>MMR_AUTO_DISCOVER_PROJECT</key>' "$plist"
+          grep -F '<key>RUST_LOG</key>' "$plist"
         ''
       else
         ''
@@ -118,9 +111,8 @@ pkgs.runCommand "mmr-home-manager-module-test"
           unit="$files/.config/systemd/user/mmr-mcp.service"
           cat "$unit"
           grep -Fx "ExecStart=${exe} mcp --transport http --bind 127.0.0.1:8799 --path /mcp" "$unit"
-          grep -Fx 'Environment="MMR_DEFAULT_SOURCE=codex"' "$unit"
           grep -Fx 'Environment="MMR_AUTO_DISCOVER_PROJECT=0"' "$unit"
-          grep -Fx 'Environment="OPENAI_BASE_URL=https://openrouter.ai/api/v1"' "$unit"
+          grep -Fx 'Environment="RUST_LOG=warn"' "$unit"
           grep -Fx 'EnvironmentFile=/run/secrets/mmr-mcp.env' "$unit"
           grep -Fx 'KillSignal=SIGINT' "$unit"
           grep -Fx 'WantedBy=default.target' "$unit"

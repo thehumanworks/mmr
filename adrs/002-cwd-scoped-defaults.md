@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted
+Accepted. Amended on 2026-11-13: `MMR_DEFAULT_SOURCE` is ignored and
+`MMR_DEFAULT_REMEMBER_AGENT` is gone with `remember`. Without `--source`,
+every command reads every harness. See
+`goals/2026-11-13-cut-model-calls-and-default-source.md`.
 
 ## Date
 

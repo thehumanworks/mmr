@@ -27,8 +27,6 @@ narrows a tool to one harness.
 | `mmr_context_project` | Brief yourself: session list plus the newest messages. |
 | `mmr_read_project` | Read a project's raw history in time order. |
 | `mmr_list_projects` | See which projects have history. |
-| `mmr_summarize_project`, `mmr_summarize_session` | Summarize with a model (needs an API key). |
-| `mmr_compact_project`, `mmr_compact_session` | Drop low-relevance lines with Morph Compact (needs `MORPHLLM_API_KEY`). |
 | `mmr_skill_load` | Load the full mmr agent skill. |
 
 ## Runnable synthetic stdio example
@@ -50,7 +48,7 @@ Expected output:
 
 ```text
 Stdio initialized with unusable REST settings; no REST server needed.
-Listed 12 MCP tools.
+Listed 8 MCP tools.
 user: Keep the retry limit at three.
 assistant: Noted for the next session.
 Protocol stdout was JSON only; native histories unchanged; clean EOF shutdown.

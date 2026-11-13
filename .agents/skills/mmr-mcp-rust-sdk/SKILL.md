@@ -11,7 +11,7 @@ Use this skill when implementing or reviewing `mmr mcp` in this Rust CLI. It kee
 
 1. Re-read `AGENTS.md`, `.cursor/rules/verification-loop.mdc`, and `.cursor/rules/cli-contract.mdc`.
 2. Keep MCP server code in a dedicated module, for example `src/mcp.rs` or `src/mcp/mod.rs`, and keep `src/main.rs` as the thin clap entrypoint.
-3. Prefer direct calls into existing `QueryService`, `ai`, and formatting helpers over spawning the `mmr` binary.
+3. Prefer direct calls into existing `QueryService` and formatting helpers over spawning the `mmr` binary.
 4. For stdio, never write human diagnostics to stdout after transport startup. stdout belongs to MCP frames only.
 5. For HTTP, use streamable HTTP, nest the service at `/mcp`, and default bind to loopback.
 6. Test the server through MCP protocol calls, not only by asserting Rust helper functions.
@@ -30,7 +30,7 @@ Load [references/rmcp-server-patterns.md](references/rmcp-server-patterns.md) be
 
 Expose mmr data with the same semantics as the CLI:
 
-- `--source` means one of `claude`, `codex`, `cursor`, `grok`, or `pi`; omitted means all sources unless `MMR_DEFAULT_SOURCE` applies.
+- `--source` means one of `claude`, `codex`, `cursor`, `grok`, or `pi`; omitted means all sources.
 - Project scoping should match current CLI project detection and alias resolution.
 - Tool responses should preserve existing JSON response structs where practical.
 - Read/query tools should include source and project metadata on returned items.

@@ -41,18 +41,15 @@ commit unsafe.
 - `src/types/`: public API response types and sort/source enums.
 - `src/source/`: source-specific JSONL loaders (`codex.rs`, `claude.rs`, `cursor.rs`, `grok.rs`, `pi.rs`), parallel ingest wiring in `mod.rs`.
 - `src/teleport/`: provider-profile native bundle pack/apply/resume/export (`provider.rs`, `providers/{codex,claude,cursor,grok,pi}.rs`); artifact paths are provider-qualified (`native/<provider>/…`); legacy flat `transcript.native.jsonl` bundles still verify on read.
-- `src/agent/chat_completions.rs`: strongly typed OpenAI-compatible Chat Completions client used by `summarize`.
 - `flake.nix`, `nix/`: Nix flake (package, overlay, dev shell), home-manager and NixOS modules in `nix/modules/`, and flake checks in `nix/tests/`. User guide: `docs/mmr-nix.md`.
 - `.github/workflows/build.yml`: release builds for Linux and macOS (x86_64 and arm64) on pushes to `main`, pull requests and `v*` tags; `v*` tags also publish the archives to the GitHub release. The tag must match the `Cargo.toml` version. Pin actions to commit SHAs and run `actionlint` after editing it.
 - `specs/`: canonical product and behavior specifications.
 - `adrs/`: architecture decision records.
 - `docs/tech-debt/`: tech-debt findings from codebase reviews — `tracked/` for open items, `handled/` for completed/dismissed (guidelines in `docs/tech-debt/AGENTS.md`).
-- `tests/cli_contract.rs`: integration tests for user-facing CLI behavior (includes mock provider tests for summarization).
-- `tests/summary_contract.rs`: summarize help, provider request shape and API-key configuration against a mock provider.
+- `tests/cli_contract.rs`: integration tests for user-facing CLI behavior.
 - `tests/mcp_contract.rs`, `tests/portable_bundle_contract.rs`, `tests/peer_import_loopback_contract.rs`: MCP server, share/import bundles, and `import session --from` through a loopback SSH peer.
 - `tests/cli_benchmark.rs`: ignored benchmark test (run explicitly).
 - `tests/common/mod.rs`: fixture + temp `HOME` helpers.
-- `src/agent/ai.rs`: Memory Agent orchestration — system prompt construction, session selection, transcript formatting, and stateless summarization helpers.
 - `.cursor/rules/`: persistent repo rules for workflow, contract, ingestion, and tests.
 - `.agents/skills/mmr-clap-colored-cli/`: local reusable CLI workflow references.
 - `.agents/skills/mmr-native-bundle-providers/`: provider-profile native teleport layouts and verification notes.
@@ -90,10 +87,6 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 - `cargo run -- --source claude read project --project /path/to/proj` — read project history filtered to one source.
 - `cargo run -- find "retry limit"` — search the cwd project's history across all sources, newest first; each match has a `read_command`.
 - `cargo run -- context project` — return the project's session list and its newest messages across all sources.
-- `cargo run -- summarize project --project /path/to/proj` — generate a stateless summary over project history.
-- `cargo run -- summarize session <session-id>` — generate a stateless summary over one session.
-- `cargo run -- compact project --project /path/to/proj --query "current task"` — compact project history through Morph Compact without paraphrasing surviving lines.
-- `cargo run -- compact session <session-id> -O md` — compact one session and print the compacted transcript text.
 - `cargo run -- skill load` — print the bundled mmr agent skill to stdout for immediate agent context.
 - `cargo run -- skill install` — replace `~/.agents/skills/mmr` with the bundled mmr skill.
 - `cargo run -- skill install --local` — replace `.agents/skills/mmr` under the current project with the bundled mmr skill.
@@ -115,29 +108,7 @@ Treat `.cursor/rules/` as required guidance before editing code in this repo.
 ## CLI default env vars
 
 - `MMR_AUTO_DISCOVER_PROJECT=0` disables cwd project auto-discovery for project-scoped list/read/recall commands; unset or `1` keeps the default auto-discovery behavior.
-- `MMR_DEFAULT_SOURCE=codex|claude|cursor|grok|pi` sets the default source filter when `--source` is omitted. Empty or unset preserves the default of all sources.
-- `MMR_SUMMARISER_MODEL=<model>` sets the default OpenAI-compatible model for `summarize`; `--model` overrides it for one command. `OPENAI_API_KEY` is required, and `OPENAI_BASE_URL` can point at OpenAI, OpenRouter, or a compatible proxy.
-- `MORPHLLM_API_KEY=<key>` is required for `compact`; `MORPHLLM_BASE_URL` defaults to `https://api.morphllm.com/v1`, and `MMR_COMPACT_MODEL` defaults the Morph compact model (`--model` overrides it).
-
-## Summarize command and `--instructions` system prompt architecture
-
-The `summarize` command sends selected transcripts to an OpenAI-compatible Chat
-Completions API. The memory flow uses a system prompt composed of two parts:
-
-1. **Base instruction** (`MEMORY_AGENT_BASE_INSTRUCTION` in `src/agent/ai.rs`): Always present. Contains only the agent's identity ("You are a Memory Agent") and the input format description. Must **never** contain output-directing language (e.g. "continuity brief", "sole purpose", output quality directives).
-
-2. **Output instruction** (appended after the base):
-   - **Without `--instructions`**: `MEMORY_AGENT_DEFAULT_OUTPUT_INSTRUCTION` is used — includes `## Purpose`, `## Output Format`, `## Rules`, and `### Resume Instructions` sections.
-   - **With `--instructions <text>`**: The custom text **replaces** the entire default output instruction. The base (identity + input format) is preserved, but all output-directing sections are replaced by the user's text.
-
-This separation ensures `--instructions` has full control over how the agent processes transcripts and formats its response, while preserving the agent's awareness of its role and input structure.
-
-The user prompt is neutral ("Analyze the following AI coding session transcript(s).") and does not prescribe an output format, so the system instruction has sole authority over output behavior.
-
-Environment: `OPENAI_API_KEY` is required. `OPENAI_BASE_URL` defaults to
-`https://api.openai.com/v1` and may point to a compatible proxy such as
-OpenRouter. `MMR_SUMMARISER_MODEL` defaults the model, and `--model` overrides
-it for one command.
+- Without `--source`, every command reads every harness. mmr has no default-source setting and no configuration file.
 
 ## Coding Style & Naming Conventions
 
@@ -169,7 +140,6 @@ it for one command.
 ## Learned User Preferences
 
 - Expect `mmr teleport read` to print session messages on stdout (JSON `messages` array; `-O md` for readable text); caching must not require a separate export step.
-- Prefer stateless one-shot CLI flows for `summarize` (no continuation or follow-up parameters).
 - For GitHub-backed mmr features, use standard `GITHUB_TOKEN` or `GH_TOKEN` plus gh user config rather than `MMR_`-prefixed credential env vars.
 
 ## Learned Workspace Facts

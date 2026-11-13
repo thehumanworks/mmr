@@ -12,10 +12,7 @@ pkgs.testers.runNixOSTest {
 
       users.users.alice.isNormalUser = true;
 
-      programs.mmr = {
-        enable = true;
-        defaultSource = "codex";
-      };
+      programs.mmr.enable = true;
 
       services.mmr-mcp = {
         enable = true;
@@ -53,9 +50,8 @@ pkgs.testers.runNixOSTest {
         "chown alice:users /home/alice/.codex/sessions/sess-nix-1.jsonl",
     )
 
-    with subtest("the CLI is installed and exports its defaults"):
+    with subtest("the CLI is installed and reads alice's history"):
         machine.succeed("mmr --version")
-        assert machine.succeed("su - alice -c 'echo $MMR_DEFAULT_SOURCE'").strip() == "codex"
         projects = machine.succeed("su - alice -c 'mmr list projects'")
         assert "nix-proj" in projects, projects
 

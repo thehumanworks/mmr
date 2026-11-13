@@ -3,8 +3,6 @@
   stdenv,
   rustPlatform,
   makeBinaryWrapper,
-  pkg-config,
-  cacert,
   versionCheckHook,
   gitMinimal,
   openssh,
@@ -34,29 +32,16 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = ../Cargo.lock;
 
-  nativeBuildInputs = [
-    makeBinaryWrapper
-    pkg-config
-  ];
+  nativeBuildInputs = [ makeBinaryWrapper ];
 
-  # `git` resolves project roots; `zsh` runs a paging contract test; the HTTP
-  # client loads system CA certificates even when it only talks to localhost.
+  # `git` resolves project roots; `zsh` runs a paging contract test.
   nativeCheckInputs = [
-    cacert
     gitMinimal
     zsh
   ];
 
   # The MCP and teleport contract tests bind loopback ports.
   __darwinAllowLocalNetworking = true;
-
-  # `cursor_import_cli_contract_is_implemented` expects its temporary project
-  # path to start with a prefix that mmr redacts as a local path (/tmp, /var,
-  # /private, /home or /Users). The Linux sandbox sets TMPDIR to /build, so
-  # move it into the sandbox's own /tmp.
-  preCheck = lib.optionalString stdenv.buildPlatform.isLinux ''
-    export TMPDIR="$(mktemp -d /tmp/mmr-check.XXXXXX)"
-  '';
 
   postInstall =
     # Ship the same skill files that `mmr skill install` writes, so the

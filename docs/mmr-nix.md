@@ -60,26 +60,17 @@ flake already has home-manager, add `inputs.home-manager.follows =
 ## home-manager
 
 ```nix
-{ config, inputs, ... }:
+{ inputs, ... }:
 {
   imports = [ inputs.mmr.homeModules.default ];
 
   programs.mmr = {
     enable = true;
-    defaultSource = "codex";   # optional; omit to read every source
     installSkill = true;       # links ~/.agents/skills/mmr
-    settings.summarize = {
-      baseUrl = "https://openrouter.ai/api/v1";
-      model = "openai/gpt-5.5";
-      apiKeyEnv = "OPENROUTER_API_KEY";
-    };
   };
 
   # Optional: serve MCP over HTTP at http://127.0.0.1:8765/mcp.
-  services.mmr-mcp = {
-    enable = true;
-    environmentFile = "${config.home.homeDirectory}/.config/mmr/mcp.env";
-  };
+  services.mmr-mcp.enable = true;
 }
 ```
 
@@ -101,10 +92,12 @@ programs.mmr.package = inputs.mmr.packages.${pkgs.stdenv.hostPlatform.system}.de
 | --- | --- | --- |
 | `enable` | `false` | Adds `mmr` to `home.packages`. |
 | `package` | built from this flake with your `pkgs` | The mmr package to install. |
-| `settings` | `{ }` | Written to `~/.config/mmr/config.json` (under `$XDG_CONFIG_HOME`). Nothing is written while it is empty. |
-| `defaultSource` | `null` | Sets `MMR_DEFAULT_SOURCE` (`claude`, `codex`, `cursor`, `grok` or `pi`). |
 | `autoDiscoverProject` | `true` | `false` sets `MMR_AUTO_DISCOVER_PROJECT=0`. |
 | `installSkill` | `false` | Links the bundled agent skill into `~/.agents/skills/mmr`. |
+
+mmr needs no configuration file or API key. The old `settings` and
+`defaultSource` options are still accepted so that existing configurations
+evaluate, but they do nothing and raise a warning. Remove them.
 
 ### `services.mmr-mcp` options (home-manager and NixOS)
 
@@ -116,11 +109,11 @@ programs.mmr.package = inputs.mmr.packages.${pkgs.stdenv.hostPlatform.system}.de
 | `port` | `8765` | Listen port. |
 | `path` | `"/mcp"` | HTTP path of the MCP endpoint. |
 | `environment` | `{ }` | Extra environment variables. They are stored in the Nix store, so no secrets. |
-| `environmentFile` | `null` | `NAME=value` file read at start, for `OPENAI_API_KEY` and `MORPHLLM_API_KEY`. |
+| `environmentFile` | `null` | `NAME=value` file read at start, for values that must stay out of the Nix store. |
 | `user` | (NixOS only, required) | Account whose history the server serves. |
 
 When `programs.mmr` is also enabled, the server gets the same
-`MMR_DEFAULT_SOURCE` and `MMR_AUTO_DISCOVER_PROJECT` values as your shell.
+`MMR_AUTO_DISCOVER_PROJECT` value as your shell.
 
 ## NixOS
 
@@ -134,23 +127,18 @@ When `programs.mmr` is also enabled, the server gets the same
   services.mmr-mcp = {
     enable = true;
     user = "alice";
-    environmentFile = "/run/secrets/mmr-mcp.env";
   };
 }
 ```
 
-`programs.mmr` takes `enable`, `package`, `settings`, `defaultSource` and
-`autoDiscoverProject`, with the same meaning as above, applied to every user.
-One difference: a non-empty `settings` is written to `/etc/mmr/config.json`
-and `MMR_CONFIG_FILE` points at it, so it replaces each user's own
-`~/.config/mmr/config.json`. Use the home-manager module for per-user
-settings.
+`programs.mmr` takes `enable`, `package` and `autoDiscoverProject`, with the
+same meaning as above, applied to every user.
 
 `services.mmr-mcp` is a system service, `mmr-mcp.service`, that runs as
-`user` with that user's home directory. It reads the user's history and
-`~/.config/mmr/config.json`, and keeps its store in `~/.local/share/mmr`. The
+`user` with that user's home directory, and reads that user's history. The
 unit is sandboxed (read-only system directories, no capabilities, no new
-privileges) but leaves the home directory writable, because mmr needs it.
+privileges) but leaves the home directory visible, because the history is
+there.
 
 ## Connect an MCP client
 
@@ -169,10 +157,8 @@ them to run `mmr mcp --transport stdio`.
 - The MCP server has no authentication. Anyone who can connect can read your
   coding-session history. Keep `host` on loopback. The modules never open the
   firewall, and they warn when `host` is not a loopback address.
-- Everything in `settings` and `environment` is copied to the world-readable
-  Nix store. Put API keys in an environment variable named by
-  `settings.summarize.apiKeyEnv`, or in `environmentFile`. The modules warn if
-  `settings.summarize.apiKey` is set.
+- Everything in `environment` is copied to the world-readable Nix store. Put
+  secrets in `environmentFile`.
 
 ## Develop with Nix
 

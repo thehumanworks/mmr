@@ -13,7 +13,7 @@ Remove public CLI commands cleanly — no hidden compatibility shims unless the 
 
 ## When to Use
 
-- A command duplicates another surface (`context` vs `read`/`summarize`/`assimilate`)
+- A command duplicates another surface, or does work the calling agent can do itself (`summarize` and `compact` called a model to condense what an agent can read)
 - User chose no backwards compatibility
 - Deprecation period is over and the command must disappear from help
 

@@ -1,5 +1,5 @@
-# Evaluates a NixOS system with every mmr option set and checks the generated
-# /etc entry, session variables and systemd unit, without booting anything.
+# Evaluates NixOS systems that set the mmr options and checks the session
+# variables, warnings and systemd unit, without booting anything.
 {
   pkgs,
   self,
@@ -31,12 +31,7 @@ let
   system = mkSystem {
     programs.mmr = {
       enable = true;
-      defaultSource = "claude";
       autoDiscoverProject = false;
-      settings.summarize = {
-        baseUrl = "https://openrouter.ai/api/v1";
-        apiKeyEnv = "OPENROUTER_API_KEY";
-      };
     };
     services.mmr-mcp = {
       enable = true;
@@ -44,14 +39,17 @@ let
       host = "::1";
       port = 9876;
       path = "/memory/mcp";
-      environment.MMR_COMPACT_MODEL = "morph-compactor";
+      environment.RUST_LOG = "warn";
       environmentFile = "/run/secrets/mmr-mcp.env";
     };
   };
 
-  risky = mkSystem {
+  # Options from older releases still evaluate, are ignored, and warn. A
+  # server on a public address warns too.
+  legacy = mkSystem {
     programs.mmr = {
       enable = true;
+      defaultSource = "claude";
       settings.summarize.apiKey = "sk-test";
     };
     services.mmr-mcp = {
@@ -72,40 +70,35 @@ let
   inherit (system) config;
   exe = lib.getExe config.services.mmr-mcp.package;
   hasMmr = packages: lib.any (p: (p.pname or "") == "mmr") packages;
+  warns = needle: lib.any (lib.hasInfix needle) legacy.config.warnings;
 in
 assert config.warnings == [ ];
-assert lib.length risky.config.warnings == 2;
+assert lib.length legacy.config.warnings == 3;
+assert warns "programs.mmr.settings is ignored";
+assert warns "programs.mmr.defaultSource is ignored";
+assert warns "services.mmr-mcp.host";
+assert !(legacy.config.environment.sessionVariables ? MMR_DEFAULT_SOURCE);
+assert !(legacy.config.environment.sessionVariables ? MMR_CONFIG_FILE);
+assert !(legacy.config.environment.etc ? "mmr/config.json");
+assert !(legacy.config.systemd.services.mmr-mcp.environment ? MMR_DEFAULT_SOURCE);
 assert hasMmr config.environment.systemPackages;
 assert !(hasMmr serviceOnly.config.environment.systemPackages);
-assert config.environment.sessionVariables.MMR_DEFAULT_SOURCE == "claude";
 assert config.environment.sessionVariables.MMR_AUTO_DISCOVER_PROJECT == "0";
-assert config.environment.sessionVariables.MMR_CONFIG_FILE == "/etc/mmr/config.json";
-assert !(serviceOnly.config.environment.sessionVariables ? MMR_CONFIG_FILE);
-assert !(serviceOnly.config.systemd.services.mmr-mcp.environment ? MMR_DEFAULT_SOURCE);
+assert !(serviceOnly.config.systemd.services.mmr-mcp.environment ? MMR_AUTO_DISCOVER_PROJECT);
 pkgs.runCommand "mmr-nixos-module-test"
   {
-    nativeBuildInputs = [ pkgs.jq ];
-    configFile = config.environment.etc."mmr/config.json".source;
     unitDir = config.systemd.units."mmr-mcp.service".unit;
   }
   ''
     set -euo pipefail
-
-    echo "/etc/mmr/config.json holds the summarize settings"
-    jq -e '.summarize == {
-      apiKeyEnv: "OPENROUTER_API_KEY",
-      baseUrl: "https://openrouter.ai/api/v1"
-    }' "$configFile"
 
     echo "mmr-mcp.service runs as the named user with the CLI defaults"
     unit="$unitDir/mmr-mcp.service"
     cat "$unit"
     grep -Fx 'ExecStart="${exe}" "mcp" "--transport" "http" "--bind" "[::1]:9876" "--path" "/memory/mcp"' "$unit"
     grep -Fx 'User=alice' "$unit"
-    grep -Fx 'Environment="MMR_DEFAULT_SOURCE=claude"' "$unit"
     grep -Fx 'Environment="MMR_AUTO_DISCOVER_PROJECT=0"' "$unit"
-    grep -Fx 'Environment="MMR_CONFIG_FILE=/etc/mmr/config.json"' "$unit"
-    grep -Fx 'Environment="MMR_COMPACT_MODEL=morph-compactor"' "$unit"
+    grep -Fx 'Environment="RUST_LOG=warn"' "$unit"
     grep -Fx 'EnvironmentFile=/run/secrets/mmr-mcp.env' "$unit"
     grep -Fx 'KillSignal=SIGINT' "$unit"
     grep -Fx 'ProtectSystem=full' "$unit"
