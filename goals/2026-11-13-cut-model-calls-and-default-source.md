@@ -3,7 +3,7 @@ goal_id: "2026-11-13-cut-model-calls-and-default-source"
 title: "Cut summarize, compact and MMR_DEFAULT_SOURCE"
 description: "Remove the two model-backed commands and their MCP tools, the summarize config they need, and the default-source setting, so every mmr command fetches raw project context with no setup or API key."
 date: "2026-11-13"
-status: "in-progress"
+status: "done"
 confidence_floor: 85
 created: "2026-11-13"
 updated: "2026-11-13"
@@ -56,7 +56,7 @@ cut them in a follow-up:
 - [x] DoD-2 — `MMR_DEFAULT_SOURCE` and its Nix options removed, with warnings.
 - [x] DoD-3 — Differential check explained.
 - [x] DoD-4 — Docs, skill text and help teach only the surviving surface.
-- [ ] DoD-5 — Full verification loop passes; PR merged after the evaluation
+- [x] DoD-5 — Full verification loop passes; PR merged after the evaluation
   thread's PR.
 
 ## Evidence
@@ -74,6 +74,14 @@ cut them in a follow-up:
   timestamps and the hashes that cover them, as they do between two runs of
   the same binary. All 47 summarize/compact cases
   of the model matrix are now exit 2.
+- After merging `main` with #33 (eece0d3), the same matrix against a binary
+  built from eece0d3 gives the same 22 changed cases, and `skill load`
+  differs only in the three session-mining lines this PR rewrites.
+- Verification loop on the merge: `cargo fmt --check`, clippy with
+  `-D warnings`, `cargo test` (220 tests), benchmarks, both examples,
+  `cargo build --release`, `nix build`, and the `nixos-module`,
+  `home-manager` and `nixos-vm` checks pass. PR #34 CI builds all four
+  targets.
 - No runtime dependency compiles C any more (`cargo tree -i cc` finds only
   the Haiku time-zone crate).
 
