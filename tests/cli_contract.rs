@@ -3168,6 +3168,56 @@ fn model_commands_are_rejected() {
 }
 
 #[test]
+fn closed_stdout_reader_exits_quietly() {
+    // `mmr ... | head` closes the pipe before mmr finishes writing. mmr must
+    // stop without a panic, a stack trace or a failing exit code.
+    let fixture = TestFixture::seeded();
+    let cwd = fixture.home.join("big-project");
+    fs::create_dir_all(&cwd).expect("create project dir");
+    let cwd_str = fs::canonicalize(&cwd)
+        .expect("canonicalize project dir")
+        .to_string_lossy()
+        .into_owned();
+    // Larger than a pipe buffer, so the write cannot finish without a reader.
+    let big = "x".repeat(256 * 1024);
+    write_file(
+        &fixture
+            .home
+            .join(".claude")
+            .join("projects")
+            .join(encode_claude_project_name(&cwd_str))
+            .join("sess-big.jsonl"),
+        &format!(
+            r#"{{"type":"user","sessionId":"sess-big","message":{{"role":"user","content":"{big}"}},"timestamp":"2025-01-07T00:01:00","uuid":"u-big-1","cwd":"{cwd_str}"}}"#
+        ),
+    );
+
+    for args in [
+        &["context", "project", "--limit", "5"][..],
+        &["read", "project", "--limit", "5"][..],
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_mmr"))
+            .args(args)
+            .env("HOME", &fixture.home)
+            .env("RUST_BACKTRACE", "1")
+            .current_dir(&cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn mmr");
+        drop(child.stdout.take());
+        let output = child.wait_with_output().expect("wait for mmr");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "args={args:?} stderr={stderr}"
+        );
+        assert!(stderr.is_empty(), "args={args:?} stderr={stderr}");
+    }
+}
+
+#[test]
 fn default_source_env_is_ignored() {
     let fixture = TestFixture::seeded();
     let sources = |args: &[&str]| {

@@ -62,7 +62,7 @@ No compatibility aliases are kept. Each removed name is a usage error (exit 2).
 | `mmr messages --session <id>` | `mmr read session <id>` |
 | `mmr messages`, `mmr export` | `mmr read project` |
 | `mmr prev [N]` | `mmr recall [N]` |
-| `mmr summary`, `mmr remember`, `mmr summarize`, `mmr compact` | `mmr read session` or `mmr read project`; the calling agent condenses what it reads |
+| `mmr summary`, `mmr remember`, `mmr summarize`, `mmr compact` | `mmr read session` or `mmr read project`; the calling agent condenses what it reads, or you pipe the output to your own model (README, "Summarise with your own model") |
 | `mmr search`, `mmr rg`, `mmr retrieve` | `mmr find`, then each match's `read_command` |
 | `read`, `context` with `source` | the `project` or `session` form, with `--source` |
 | `--remote <ssh-target>` | `mmr import session --from <ssh-target>` |
