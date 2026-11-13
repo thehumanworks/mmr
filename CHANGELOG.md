@@ -19,7 +19,7 @@ Removed commands. Each now fails as an unknown command (exit 2).
 | `retrieve <query>` | `find <query>`, then run the match's `read_command`. |
 | `note` | None. |
 | `read source`, `context source` | `read project` or `context project`, with `--source` to narrow to one harness. `list sessions --all --source <harness>` lists one harness across projects. |
-| `summarize project\|session\|source`, `compact project\|session\|source` | `read session`, `read project` or `context project`, and let the agent summarise. |
+| `summarize project\|session\|source`, `compact project\|session\|source` | `read session`, `read project` or `context project`, and let the agent summarise, or pipe the output to your own model (README, "Summarise with your own model"). |
 | `assimilate project\|source` | None. |
 | `sync`, `redact scan\|explain` | None. `share session` keeps its privacy scan. |
 
@@ -88,6 +88,8 @@ delete it.
   the project.
 - Project folders whose path mixes `-` and `.`, or has dot folders, decode back
   to the right project.
+- `mmr ... | head` no longer panics with a stack trace and exit 101 when the
+  reader closes the pipe early; mmr stops quietly with exit 0.
 
 ## v0.2.0 (2026-11-12)
 

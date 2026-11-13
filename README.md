@@ -163,6 +163,40 @@ Temporary home removed.
 The example creates an isolated temporary HOME/project, clears inherited provider
 configuration, and verifies native files remain byte-for-byte unchanged.
 
+## Summarise with your own model
+
+mmr does not call a model, and you do not configure one in mmr. To get a
+brief instead of raw history, pipe the JSON into any model or agent CLI you
+already use. `context project` prints the session list first and then the
+messages newest first. `--limit` sets how many messages go in, and `head -c`
+is a hard byte cap that keeps the newest part:
+
+```bash
+mmr context project --limit 100 | head -c 400000 |
+  claude -p --no-session-persistence --tools "" --model haiku \
+  "These are earlier agent sessions for this project, as JSON from mmr. Write a resume brief: status, what was done, decisions, open items, next step."
+```
+
+Replace the last command with any tool that takes an instruction and reads the
+history on stdin:
+
+| Harness or provider | Command |
+| --- | --- |
+| Claude Code (sign-in or API key) | `claude -p --no-session-persistence --tools "" --model <model> "<instruction>"` |
+| Codex (sign-in or API key) | `codex exec --ephemeral "<instruction>"` |
+| Any API provider, or a local model through a plugin | `llm -m <model> -s "<instruction>"` ([llm](https://llm.datasette.io)) |
+
+- Tell an agent CLI not to save the run (`--no-session-persistence`,
+  `--ephemeral`). Otherwise the summary becomes a new session in this
+  project's history, with the whole transcript in its prompt, and later `find`
+  results match it.
+- Size: on a tool-heavy Claude Code session, `--limit 100` was about 200 KB,
+  roughly 50k tokens. Use a lower `--limit` for small-context or local models.
+- The history goes to whichever provider the command uses. mmr does no secret
+  scan on this path, unlike `share session`.
+- For one session, use `mmr recall` (the previous session) or
+  `mmr read session <id> --limit 100` instead of `context project`.
+
 ## Move a session to another machine
 
 Carry one session to another machine without SSH:
