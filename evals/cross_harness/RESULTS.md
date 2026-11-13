@@ -1,5 +1,79 @@
 # Cross-harness context eval: results
 
+## 2026-11-13: Codex as the reader
+
+**Result.** Codex finds what earlier sessions hold as well as Claude Code does.
+With `mmr skill install`, a Codex agent found the earlier-session fact in 30 of
+32 runs, and in 14 of 16 runs of change requests. The skill alone did almost as
+well (28 of 32), because Codex opened the skill in every run. Without mmr it
+found 1 of 32. MCP failed at first because Codex refused to call tools that do
+not say they are read-only; mmr's tools now say so, and MCP went from 1 of 32
+to 20 of 32.
+
+| condition | Codex: all 16 tasks | Codex: 8 change requests | Claude Code: all 16 | Claude Code: 8 change requests |
+|---|---|---|---|---|
+| `none` | 1/32 | 0/16 | 0/32 | 0/16 |
+| `skill` | 28/32 | 14/16 | 19/32 | 5/16 |
+| `mcp` | 20/32 | 6/16 | 26/32 | 12/16 |
+| `shipped-skill` | **30/32** | **14/16** | **29/32** | **15/16** |
+
+Codex CLI 0.167.0-alpha.4.1 on macOS with its default model `gpt-6.1-sol`,
+signed in with a ChatGPT plan, Codex's `workspace-write` sandbox, 2
+repetitions per task. Builds f80b5d7 (`mcp` row: a03c863, with the read-only
+annotations). The Claude Code columns are from the section below. A ChatGPT
+plan reports no price; with the install a run used a median of 89k input
+tokens, 643 output tokens and 27 seconds, against 94k, 551 and 28 seconds
+without mmr.
+
+**How Codex differs from Claude Code.**
+
+- **Codex always reads the skill.** It opened mmr's `SKILL.md` in all 64 runs
+  that had it, and called mmr in all of them. Claude Code with the skill alone
+  checked history for 5 of 16 change requests. For Codex the paragraph in
+  `AGENTS.md` adds little; for Claude Code it is what makes change requests
+  work. `mmr skill install` writes both.
+- **Codex makes the change, then tells the user.** In the 14 install runs of
+  the seven new change requests, Codex made the change in 9 and stopped to ask
+  in 5. In 7 of the 9 it quoted the earlier reason after the change, for
+  example: "Set `TIMEOUT_S` to `10` ... Earlier session history links the
+  15-second timeout to ..." Claude Code asked first in 13 of 14. The paragraph
+  says "tell the user", not "ask before you change it", so both pass.
+- **Codex looks in other projects.** For the dashboard question, whose answer
+  is in the sibling project `ledger-ui`, Codex ran `mmr find "dashboard" --all`
+  after the current project had nothing (5 of 6 runs) and found the number each
+  time. The two MCP runs did not name the project, which the rubric requires.
+  Claude Code did not find it in any run.
+
+**Where it still fails.**
+
+- **Reading a rule is not following it.** For "swap the retry loop for the
+  tenacity library", Codex read the session where the user said "no new
+  runtime dependencies without asking me first" in 5 of 6 runs with mmr, and
+  added tenacity each time without mentioning the rule. The request names the
+  library, which the agent may take as the permission the rule asks for.
+  Claude Code broke the same rule in 1 of 2 install runs.
+- **MCP misses one-line changes.** With MCP only, Codex made no mmr call for
+  "set TIMEOUT_S back to 10", "set BACKOFF_BASE_S to 0.5" and "add the payload
+  to the log line" (0 of 6), although the server's instructions name one-line
+  changes. For "about to deploy, anything to watch out for?" it read two
+  or three sessions, but not the one with the deploy window. Use the skill
+  with Codex.
+- **MCP tools need annotations.** `codex exec` runs with no person to approve,
+  so Codex refused every unannotated MCP call ("MCP tool call requires
+  approval, but approval policy is never"): 28 errors, 1 of 32. All eight mmr
+  tools now declare `readOnlyHint`, `destructiveHint: false` and
+  `openWorldHint: false`, and a contract test checks it. Afterwards: no errors.
+
+**Isolation.** Without mmr, the control's one pass (`constraints`) came from
+reading the throwaway `~/.codex` session files directly. A signed-in Codex
+also offers the search tools of apps connected to the account, and the control
+agent used them 17 times with words from the task; nothing came back. The
+runner now turns apps, plugins and browser or computer use off for Codex.
+
+Full reports: [codex](results/codex/report.md) (`none`, `skill`,
+`shipped-skill`, and `mcp` before the fix) and
+[codex-mcp-readonly](results/codex-mcp-readonly/report.md) (`mcp` after it).
+
 ## 2026-11-13: agents check earlier sessions without being asked
 
 **Result.** `mmr skill install` now also adds one paragraph to the global
@@ -9,9 +83,7 @@ fact in 29 of 32 runs, and in 15 of 16 runs of requests to change code, which
 never sound like questions about the past. With the skill alone it found 5 of
 those 16; without mmr, none. Every run with the install called mmr.
 
-The reader is still only Claude Code. A Codex runner is built and checked
-offline, but Codex has not run against a real model yet: the model and endpoint
-wait on approval.
+The reader here is Claude Code; the section above repeats the run with Codex.
 
 | condition | what the agent has | all 16 tasks | 8 change requests | 9 tasks of round 1 |
 |---|---|---|---|---|
@@ -41,9 +113,8 @@ tasks.
   checks history for 5 of 16 change requests, the hook for 11, MCP for 12. A
   client that reads neither `CLAUDE.md` nor `AGENTS.md` should use MCP, whose
   instructions now name code changes.
-- **Only Claude Code reads.** See above. The Codex runner (`--agent codex`)
-  puts the skill, hook, paragraph and MCP server where Codex 0.167 reads them;
-  a local stand-in server confirmed that each reaches Codex's model request.
+- **Only Claude Code reads.** Codex was measured afterwards; see the section
+  above.
 - **One synthetic project.** Real histories are longer and noisier.
 
 ### What changed this round

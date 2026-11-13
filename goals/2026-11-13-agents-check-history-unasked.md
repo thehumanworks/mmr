@@ -3,7 +3,7 @@ goal_id: "2026-11-13-agents-check-history-unasked"
 title: "Agents check earlier sessions unasked, in more than one harness"
 description: "Close the gaps the first cross-harness evaluation left: measure a reader other than Claude Code, make agents look at history for requests that do not sound like history questions, and fix the remaining failing runs."
 date: "2026-11-13"
-status: "in-progress"
+status: "done"
 created: "2026-11-13"
 updated: "2026-11-13"
 ---
@@ -37,12 +37,10 @@ fetching across harnesses) named three gaps:
 1. Proactive tasks with Claude Code: none, skill, hook, global-instructions
    paragraph, 2 repetitions each.
 2. The winning mechanism on the original nine tasks, to check it does not hurt.
-3. The same conditions with Codex as the reader, once a model and endpoint are
-   approved. Proposed: Codex 0.167 with its default model (GPT-6.1-Sol) through
-   the Vercel AI Gateway, with the model's entry from Codex's bundled catalog so
-   Codex sends its native prompt and tools. The runner was checked offline
-   against a local stand-in server: Codex sees the skill, the AGENTS.md
-   paragraph, the hook output and the MCP server.
+3. The same conditions with Codex as the reader. Tomas chose (2026-11-13) to
+   run Codex 0.167 on his Mac with his own ChatGPT sign-in and Codex's default
+   model, in a throwaway `HOME` and `CODEX_HOME`, with Codex's sandbox on
+   (`--codex-login --codex-sandbox`). The gateway path stays as a fallback.
 4. Contract tests for the install change; fmt, clippy, tests, release build,
    `nix build`.
 
@@ -78,6 +76,15 @@ fetching across harnesses) named three gaps:
   written afterwards 6/6.
 - Still failing: the sibling-project task (out of scope, see Decisions) and
   one run where the agent read a rule and broke it.
-- Codex runner built (`--agent codex`) and checked offline against a local
-  stand-in server. Codex measurement waits on approval of model and endpoint;
-  until then the goal stays in progress.
+- Codex 0.167 (`gpt-6.1-sol`), build f80b5d7, 16 tasks x 2: install 30/32
+  and 14/16 on change requests; skill alone 28/32 (Codex opened the skill in
+  every run); no mmr 1/32.
+- Codex refused unannotated MCP calls under `approval_policy = "never"`
+  (1/32). All mmr tools now declare read-only annotations (a03c863); MCP then
+  scored 20/32 with no errors.
+- A signed-in Codex offers the account's connected apps; the control agent
+  searched them. The runner now turns apps, plugins and browser or computer
+  use off.
+- Still failing with Codex: `add-dep` (it read the no-new-dependencies rule
+  and added the library anyway, 5 of 6 runs) and, with MCP only, one-line
+  changes.

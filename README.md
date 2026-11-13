@@ -114,7 +114,8 @@ instructions.
 Why both: a skill is used when a request sounds like it needs history ("why is
 this 3?", "pick up where we left off"). Asked to change code instead ("set
 TIMEOUT_S back to 10"), Claude Code agents with only the skill found the
-earlier decision in 5 of 16 runs; with the paragraph, in 15 of 16. See
+earlier decision in 5 of 16 runs; with the paragraph, in 15 of 16. Codex
+agents opened the skill in every run and found it in 14 of 16 either way. See
 [evals/cross_harness](evals/cross_harness/RESULTS.md).
 
 ## Use

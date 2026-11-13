@@ -113,7 +113,15 @@ impl MmrMcpServer {
     /// List known projects with source coverage and recency metadata. Use to check whether
     /// prior session history exists for a codebase before deeper retrieval, or to map which
     /// projects have history across Claude, Codex, Cursor, Grok, and Pi.
-    #[tool(name = "mmr_list_projects")]
+    #[tool(
+        name = "mmr_list_projects",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn list_projects(
         &self,
         Parameters(args): Parameters<ListProjectsToolArgs>,
@@ -124,7 +132,15 @@ impl MmrMcpServer {
     /// List a project's sessions, newest first, across every harness. Use to see what past
     /// sessions exist before reading one; pass a session's session_id and source to
     /// mmr_read_session.
-    #[tool(name = "mmr_list_sessions")]
+    #[tool(
+        name = "mmr_list_sessions",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn list_sessions(
         &self,
         Parameters(args): Parameters<ListSessionsToolArgs>,
@@ -134,7 +150,15 @@ impl MmrMcpServer {
 
     /// Read one session's messages by session_id. Use after mmr_find, mmr_list_sessions or
     /// mmr_recall points at a session; pass its source too when you have it.
-    #[tool(name = "mmr_read_session")]
+    #[tool(
+        name = "mmr_read_session",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn read_session(
         &self,
         Parameters(args): Parameters<ReadSessionToolArgs>,
@@ -144,7 +168,15 @@ impl MmrMcpServer {
 
     /// Read a project's raw message history across every harness, in time order. Use to
     /// reconstruct how work evolved when raw detail matters more than a summary.
-    #[tool(name = "mmr_read_project")]
+    #[tool(
+        name = "mmr_read_project",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn read_project(
         &self,
         Parameters(args): Parameters<ReadProjectToolArgs>,
@@ -156,7 +188,15 @@ impl MmrMcpServer {
     /// when resuming or continuing earlier work, when the user says "continue", "as we
     /// discussed", or "last time", or after compaction, /clear, or a fresh session on an
     /// ongoing task.
-    #[tool(name = "mmr_recall")]
+    #[tool(
+        name = "mmr_recall",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn recall(
         &self,
         Parameters(args): Parameters<RecallToolArgs>,
@@ -170,7 +210,15 @@ impl MmrMcpServer {
     /// such as deploys, and for "did we ever..." or "why did we..." questions. Search for a
     /// few distinctive words. Each match has a session_id and source to pass to
     /// mmr_read_session. Set all=true to search every project.
-    #[tool(name = "mmr_find")]
+    #[tool(
+        name = "mmr_find",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn find(
         &self,
         Parameters(args): Parameters<FindToolArgs>,
@@ -181,7 +229,15 @@ impl MmrMcpServer {
     /// Return a project's session list plus its newest messages across every harness, in one
     /// call and without a model. Use to brief yourself before starting work on a project with
     /// prior history.
-    #[tool(name = "mmr_context_project")]
+    #[tool(
+        name = "mmr_context_project",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn context_project(
         &self,
         Parameters(args): Parameters<ContextProjectToolArgs>,
@@ -191,7 +247,15 @@ impl MmrMcpServer {
 
     /// Return the bundled mmr agent skill as JSON text. Use to load full mmr usage guidance
     /// and retrieval patterns into context before deeper history work.
-    #[tool(name = "mmr_skill_load")]
+    #[tool(
+        name = "mmr_skill_load",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
     async fn skill_load(
         &self,
         Parameters(_args): Parameters<EmptyToolArgs>,

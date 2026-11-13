@@ -127,6 +127,14 @@ async fn mcp_lists_expected_tools() -> anyhow::Result<()> {
             "missing expected tool {expected}; got {tool_names:?}"
         );
     }
+    // Every tool only reads local history. Clients such as Codex ask before an
+    // MCP call unless the tool says so.
+    for tool in &result.tools {
+        let annotations = tool.annotations.as_ref().expect("tool annotations");
+        assert_eq!(annotations.read_only_hint, Some(true), "{}", tool.name);
+        assert_eq!(annotations.destructive_hint, Some(false), "{}", tool.name);
+        assert_eq!(annotations.open_world_hint, Some(false), "{}", tool.name);
+    }
 
     client.cancel().await?;
     server.await??;

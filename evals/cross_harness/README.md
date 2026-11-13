@@ -86,29 +86,47 @@ python3 evals/cross_harness/run.py --regrade evals/cross_harness/results/mine  #
 ```
 
 `--model` picks the agent model (default `claude-sonnet-5-5`), `--jobs` the
-parallelism, `--keep` keeps sandboxes.
+parallelism, `--keep` keeps sandboxes. A Claude Code run of 16 tasks x 5
+conditions x 2 repetitions (160 runs) takes about 25 minutes at 7 jobs and costs
+about $10 with the default model. Results land in `results/<label>/`:
+`results.jsonl` (one row per run, with the final answer and every tool step),
+`report.md`, `probe.json` and every transcript (transcripts are not committed).
 
-To run Codex as the reader (`codex` CLI on PATH; tested with 0.167):
+### Codex as the reader
+
+`--agent codex` runs `codex exec` (tested with Codex 0.167) in the same
+throwaway `HOME`, with `CODEX_HOME` inside it. Subagents, web search,
+analytics, and the apps, plugins and browser tools a signed-in account brings
+are off. Each row records the model Codex actually used, read from its own
+session file. There are two ways to reach a model:
 
 ```bash
-AI_GATEWAY_API_KEY=... python3 evals/cross_harness/run.py --agent codex --label codex --reps 2
+# With your own Codex sign-in (ChatGPT plan), on a real machine:
+python3 evals/cross_harness/run.py --agent codex --codex-login --codex-sandbox \
+  --conditions none,skill,shipped-skill,mcp --label codex --jobs 4
+
+# Through an OpenAI-compatible gateway (default: Vercel AI Gateway):
+AI_GATEWAY_API_KEY=... python3 evals/cross_harness/run.py --agent codex --label codex-gw
 ```
 
-Codex talks to an OpenAI-compatible Responses endpoint (`--base-url`, default
-the Vercel AI Gateway, key in `AI_GATEWAY_API_KEY`). The default model is
-`openai/gpt-6.1-sol`, the model Codex 0.167 picks by default. The runner copies
-that model's entry from Codex's bundled catalog (`codex debug models
---bundled`) under the gateway's name, so Codex sends its native prompt and
-tools. Subagents, web search and analytics are off. A full run (9 tasks x 7 conditions x 2
-repetitions, 126 runs) takes about ten minutes at 7 jobs and costs about $8 with
-the default model. Results land in
-`results/<label>/`: `results.jsonl` (one row per run), `report.md`,
-`probe.json` and every transcript.
+- `--codex-login` links `~/.codex/auth.json` into each throwaway `CODEX_HOME`
+  and leaves the model to Codex's default. If Codex refreshes the tokens by
+  replacing the link, the runner copies them back. Codex writes its sessions
+  and settings to the throwaway `CODEX_HOME`, not to your `~/.codex`.
+- `--codex-sandbox` keeps Codex's `workspace-write` sandbox, so the agent's
+  commands can write only inside the throwaway project (and temp folders).
+  Without it the runner bypasses the sandbox, which is what works inside a
+  container.
+- Through a gateway, the default model is `openai/gpt-6.1-sol`. Codex knows
+  models only by its own names, so the runner copies the model's entry from
+  Codex's bundled catalog (`codex debug models --bundled`) under the gateway's
+  name; Codex then sends its native prompt and tools. `--base-url` picks
+  another endpoint.
 
 ## Limits
 
 - Two readers are measured, Claude Code and Codex. Cursor, Grok and Pi agents
-  are not.
+  are not. Codex runs used a ChatGPT plan, so they report no cost.
 - One synthetic project. Real histories are longer and noisier; the probe
   numbers say whether a fact is reachable, not how hard it is to find in a
   year of sessions.
