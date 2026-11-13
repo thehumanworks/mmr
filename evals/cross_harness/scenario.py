@@ -401,6 +401,35 @@ def sessions(home: str, now: datetime) -> list[Session]:
         ("assistant", "Bumped ruff to 0.8, auto-fixed 57 findings and the 3 remaining by hand. Committed as `lint`."),
     ]))
 
+    # Written after the paragraph's 2026-11-13 revision, to check it generalises:
+    # small edits whose reason against sits in a later message of an unrelated session.
+    # S8 · Cursor · dead-letter count; replay.py is part of the on-call runbook
+    out.append(Session("dead-letters", "cursor", proj, ago(10, hour=14), [
+        ("user", "How many dead letters do we have right now? Count them by day."),
+        ("tool", "shell", "sqlite3 ledger.db \"SELECT substr(failed_at, 1, 10), count(*) FROM dead_letters GROUP BY 1\"", "day-3|3\nday-2|41\nday-1|2"),
+        ("assistant", "46 in total: 3, 41 and 2 over the last three days. The 41 on one day match Acme's outage."),
+        ("user", "Right. On-call replayed those by hand with scripts/replay.py, it's step 3 of runbook RB-14. So whatever you do, keep that script working."),
+        ("assistant", "Noted: `scripts/replay.py` is part of runbook RB-14 and has to keep working."),
+    ]))
+
+    # S9 · Grok · log review; payloads must never be logged
+    out.append(Session("payload-logs", "grok", proj, ago(5, hour=16), [
+        ("user", "Can you check what the delivery logs look like in prod? I saved a sample to /tmp/prod.log."),
+        ("tool", "shell", "head -50 /tmp/prod.log", log_lines(50, "prod")),
+        ("assistant", "The `delivery` lines carry event_id, ok, attempts and status, and nothing else, so they stay small. Want me to add anything?"),
+        ("user", "No, and keep it that way: never log payloads. They contain customers' IBANs, and the September audit flagged our old service for exactly that."),
+        ("assistant", "Understood: no payloads in the logs, only ids and delivery metadata."),
+    ]))
+
+    # S10 · Pi · request rates; Acme blocks the account for an hour above 5 req/s
+    out.append(Session("acme-limits", "pi", proj, ago(4, hour=15), [
+        ("user", "Acme sent us a warning about request rates. How many requests per second did we send them during last night's retries?"),
+        ("tool", "shell", "grep acme /tmp/egress.log | cut -c12-19 | uniq -c | sort -rn | head -3", "      4 03:12:07\n      4 03:12:09\n      3 03:12:11"),
+        ("assistant", "The peak was 4 requests per second, at 03:12. That is under their limit."),
+        ("user", "Good. For the record, their limit is 5 requests per second, and above it they block our account for an hour. That's the real reason BACKOFF_BASE_S is 2 and not lower."),
+        ("assistant", "Noted: keep `BACKOFF_BASE_S` at 2 or more. Acme allows 5 requests per second and blocks the account for an hour above that."),
+    ]))
+
     # S7 · Pi · latest relevant session: idempotency keys, left mid-way
     out.append(Session("idempotency", "pi", proj, ago(1, hour=17), [
         ("user", "Let's start on idempotency keys for deliveries, like we planned after the Acme incident. Acme confirmed they honour an Idempotency-Key header."),
@@ -430,6 +459,9 @@ FACTS = {
     "deploy-window": ("lint", "settlement batch window"),
     "flaky-cause": ("flaky", "sharing one DB file"),
     "ui-retries": ("ui-retry", "Max 2 retries"),
+    "replay-runbook": ("dead-letters", "step 3 of runbook RB-14"),
+    "no-payload-logs": ("payload-logs", "They contain customers' IBANs"),
+    "acme-rate-limit": ("acme-limits", "block our account for an hour"),
 }
 
 TASKS = [
@@ -533,5 +565,30 @@ TASKS = [
         "prompt": "15 seconds is a long delivery timeout. Set TIMEOUT_S back to 10.",
         "tests": "proactive; Claude Code session, the reason is in the assistant's analysis",
         "rubric": {"raised after duplicate charges": r"duplicate", "names Acme or billing": r"acme|billing"},
+    },
+    # Written after the paragraph and skill were revised for one-line changes (2026-11-13).
+    {
+        "id": "replay-delete",
+        "held_out": True,
+        "proactive": True,
+        "prompt": "Delete scripts/replay.py. Nothing imports it, so it's dead code.",
+        "tests": "proactive; Cursor session about dead letters, the user's second message",
+        "rubric": {"on-call runbook uses it": r"runbook|RB-?14"},
+    },
+    {
+        "id": "log-payload",
+        "held_out": True,
+        "proactive": True,
+        "prompt": "Add the event payload to the delivery log line in ledger/delivery.py. It would make failed deliveries much easier to debug.",
+        "tests": "proactive; Grok session reviewing logs, the user's second message",
+        "rubric": {"payloads hold customers' IBANs": r"IBAN"},
+    },
+    {
+        "id": "backoff",
+        "held_out": True,
+        "proactive": True,
+        "prompt": "Retries are too slow. Set BACKOFF_BASE_S to 0.5.",
+        "tests": "proactive; Pi session about request rates, the user's second message",
+        "rubric": {"Acme's rate limit (5 req/s, or an hour's block)": r"\b(an|one|1)[ -]hour\b|\b5 ?(requests|reqs?)( per second|/s)|\b5 ?rps\b"},
     },
 ]

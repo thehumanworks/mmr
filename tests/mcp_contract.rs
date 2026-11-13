@@ -88,6 +88,7 @@ async fn mcp_server_initializes_with_tools_and_prompts() -> anyhow::Result<()> {
     // instructions must say when to check earlier sessions.
     let instructions = info.instructions.as_deref().expect("server instructions");
     for trigger in [
+        "before you change code or config",
         "before you explain why code is the way it is",
         "resume",
         "before a risky step",

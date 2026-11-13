@@ -402,7 +402,7 @@ fn skill_install_adds_one_paragraph_to_each_agents_global_instructions() {
     );
     let claude = fs::read_to_string(&claude_md).expect("CLAUDE.md");
     assert!(claude.starts_with("# My rules\n- be terse\n\n<!-- mmr:begin -->\n"));
-    assert!(claude.contains("run `mmr list sessions`"));
+    assert!(claude.contains("even a one-line change: run `mmr find"));
     assert!(!agents_md.exists());
 
     // Installing again replaces the paragraph instead of adding a second one.
