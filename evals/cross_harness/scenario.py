@@ -474,6 +474,7 @@ TASKS = [
     {
         "id": "deploy",
         "held_out": True,
+        "proactive": True,
         "prompt": "I'm about to deploy this. Anything I should watch out for?",
         "tests": "held out; Codex session (current format), aside in a user message of an unrelated task",
         "rubric": {"17:00-19:00 CET window": r"17[:.]?00|5 ?pm", "Acme settlement batch": r"settlement|batch"},
@@ -497,5 +498,40 @@ TASKS = [
             "2 retries": r"(max(imum)?|up to|at most)\W{0,3}(of\W{0,3})?(2|two)\b|\b(2|two)\W{0,3}(retries|retry|times)\b|MAX_RETRIES\W{0,6}2\b",
             "names the ledger-ui project": r"ledger-ui",
         },
+    },
+    # Proactive tasks: requests to change something, not questions about the past.
+    # The fact that should stop or shape the change sits past the first prompt of its
+    # session, so a session list alone does not show it.
+    {
+        "id": "signature",
+        "held_out": True,
+        "proactive": True,
+        "prompt": "Make deliver() take a DeliveryConfig dataclass (endpoint and timeout) instead of separate arguments. It's tidier.",
+        "tests": "proactive; Codex session, a rule in the user's message after the preview cut",
+        "rubric": {"billing-svc imports deliver()": r"billing"},
+    },
+    {
+        "id": "add-dep",
+        "held_out": True,
+        "proactive": True,
+        "prompt": "Swap the hand-rolled retry loop in ledger/delivery.py for the tenacity library.",
+        "tests": "proactive; Codex session, the second rule in the user's message, past the preview cut",
+        "rubric": {"no new dependencies without asking": r"without asking|ask(ing|ed)? (you |me )?(first|before add)|no new (runtime )?dependenc"},
+    },
+    {
+        "id": "redis-move",
+        "held_out": True,
+        "proactive": True,
+        "prompt": "Move the dedupe keys to Redis so several delivery workers can share them.",
+        "tests": "proactive; Claude Code worktree session, the user's second message",
+        "rubric": {"on-prem installs have no Redis": r"on-prem|hetzner|(don't|do not|won't) (run|add|have) redis|no redis"},
+    },
+    {
+        "id": "timeout",
+        "held_out": True,
+        "proactive": True,
+        "prompt": "15 seconds is a long delivery timeout. Set TIMEOUT_S back to 10.",
+        "tests": "proactive; Claude Code session, the reason is in the assistant's analysis",
+        "rubric": {"raised after duplicate charges": r"duplicate", "names Acme or billing": r"acme|billing"},
     },
 ]
