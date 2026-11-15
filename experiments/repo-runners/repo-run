@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Run an executable from a GitHub repository's Pixi environment."""
+
+import argparse
+import fcntl
+import hashlib
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+class RunnerError(Exception):
+    pass
+
+
+def repository(value):
+    match = re.fullmatch(
+        r"(?:https://)?github\.com/([A-Za-z0-9_-]+)/([A-Za-z0-9_.-]+)(?:@(.+))?",
+        value,
+    )
+    if not match:
+        raise RunnerError("expected github.com/OWNER/REPO[@REF] (HTTPS URLs also accepted)")
+    owner, name, ref = match.groups()
+    name = name.removesuffix(".git")
+    if name in ("", ".", ".."):
+        raise RunnerError("invalid repository name")
+    ref = ref or "HEAD"
+    if ref.startswith("-") or any(c.isspace() or ord(c) < 32 for c in ref):
+        raise RunnerError("invalid Git reference")
+    return f"https://github.com/{owner}/{name}.git", ref
+
+
+def git(*args, capture=False):
+    result = subprocess.run(
+        ["git", *map(str, args)],
+        stdout=subprocess.PIPE if capture else sys.stderr,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip() if capture else None
+
+
+def checkout(url, ref, cache):
+    root = cache / hashlib.sha256(url.encode()).hexdigest()[:24]
+    root.mkdir(parents=True, exist_ok=True)
+    pinned = re.fullmatch(r"[0-9a-fA-F]{40}", ref) is not None
+    with (root / "fetch.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if pinned and (root / ref.lower() / ".git").is_dir():
+            return root / ref.lower()
+        objects = root / "objects.git"
+        if not objects.exists():
+            git("init", "--bare", objects)
+        git("--git-dir", objects, "fetch", "--depth=1", "--force", url, f"{ref}:refs/heads/repo-run-source")
+        sha = git("--git-dir", objects, "rev-parse", "FETCH_HEAD^{commit}", capture=True)
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise RunnerError("Git returned an invalid commit ID")
+        if pinned and sha != ref.lower():
+            raise RunnerError("Git resolved a different commit than requested")
+        target = root / sha
+        if not target.exists():
+            staging = Path(tempfile.mkdtemp(prefix="checkout-", dir=root))
+            try:
+                git("clone", "--no-hardlinks", "--no-checkout", objects, staging)
+                git("-C", staging, "checkout", "--detach", sha)
+                staging.rename(target)
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging)
+        return target
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        usage="%(prog)s github.com/OWNER/REPO[@REF] -- COMMAND [ARG ...]",
+        epilog=("Requires Python 3.9+, Git, and Pixi on Linux or macOS. The repository must "
+                "contain a root pixi.toml that builds/installs the requested executable. "
+                "Repository code runs with your permissions. First use can compile locally; "
+                "no GitHub runners or release binaries are required. Pin a full 40-character "
+                "commit for repeatability and offline source reuse. Named refs (default HEAD) "
+                "are fetched on every invocation. Set REPO_RUN_CACHE to change the cache "
+                "directory, and PIXI_BIN to select Pixi. Runtime keeps your working directory. "
+                "The commit pins source, but installed Pixi environments are mutable caches. "
+                "A root pixi.lock enables --locked; without it dependencies can change. "
+                "Git submodules are not initialized. Cached environments are retained; "
+                "delete their cache directory to rebuild.")
+    )
+    parser.add_argument("repository")
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    if not args.command:
+        parser.error("provide -- COMMAND [ARG ...]")
+    command = args.command
+    if command[0] == "--":
+        command = command[1:]
+    if not command:
+        parser.error("provide a command after --")
+    try:
+        url, ref = repository(args.repository)
+        pixi = os.environ.get("PIXI_BIN", "pixi")
+        if not shutil.which(pixi):
+            raise RunnerError(f"Pixi executable not found: {pixi}; install Pixi or set PIXI_BIN")
+        if not shutil.which("git"):
+            raise RunnerError("Git is required")
+        cache = Path(os.environ.get("REPO_RUN_CACHE", str(Path.home() / ".cache/repo-run"))).expanduser().resolve()
+        source = checkout(url, ref, cache)
+        manifest = source / "pixi.toml"
+        if not manifest.is_file():
+            raise RunnerError(f"repository has no root pixi.toml at {ref}")
+        print(f"repo-run: {url}@{source.name}", file=sys.stderr)
+        options = ["--locked"] if (source / "pixi.lock").is_file() else []
+        result = subprocess.run([pixi, "run", "--manifest-path", str(manifest),
+                                 "--executable", *options, "--", *command])
+        return result.returncode if result.returncode >= 0 else 128 - result.returncode
+    except subprocess.CalledProcessError as error:
+        print(f"repo-run: Git failed with exit status {error.returncode}", file=sys.stderr)
+        return error.returncode if error.returncode > 0 else 128 - error.returncode
+    except (RunnerError, OSError) as error:
+        print(f"repo-run: {error}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

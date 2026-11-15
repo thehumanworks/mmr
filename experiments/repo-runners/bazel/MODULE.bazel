@@ -1,0 +1,7 @@
+module(name = "mmr_runner_evaluation")
+bazel_dep(name = "mmr")
+git_override(
+    module_name = "mmr",
+    remote = "https://github.com/thehumanworks/mmr.git",
+    commit = "daf2639dcd5768c6ad809b1e771b0b9029d0eb24",
+)

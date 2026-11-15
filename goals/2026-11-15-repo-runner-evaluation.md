@@ -1,0 +1,11 @@
+---
+title: Evaluate source repository runners on Linux and macOS
+description: Verify GitHub source builds and execution without GitHub Actions or published tool binaries.
+date: 2026-11-15
+status: in-progress
+---
+Outcome: establish whether existing runners support `<runner> <github_repo> -- command` for mmr (Rust) and tny (C/C++).
+Surface: experimental build configuration, runner adapters if explicitly labelled, and evidence. No product source changes or main-branch changes.
+Authorization: user explicitly requested feature branches and practical testing in this conversation.
+Validation: pinned source revisions; real Linux and macOS execution; version/help plus synthetic functional commands; record toolchain provisioning, cold/warm runs, cache behavior and host prerequisites. Compare Pixi and Bazel viability and existing Nix baseline. Do not equate a custom wrapper with native URL support.
+Definition of done: reproducible experiment files and evidence, explicit pass/fail/untested verdict for both repositories and platforms, limitations and recommendation. No live provider inference. Never use private session history as fixtures.

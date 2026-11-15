@@ -1,0 +1,18 @@
+[workspace]
+name = "mmr"
+channels = ["https://prefix.dev/conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
+
+[dependencies]
+mmr = { path = "." }
+
+[package]
+name = "mmr"
+version = "0.2.0"
+
+[package.build.backend]
+name = "pixi-build-rust"
+
+[package.build.config]
+extra-input-globs = [".agents/**", "specs/**", "docs/**"]

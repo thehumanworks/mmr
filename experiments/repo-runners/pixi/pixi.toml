@@ -1,0 +1,11 @@
+[workspace]
+name = "mmr-runner-evaluation"
+channels = ["https://prefix.dev/conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
+
+[dependencies.mmr]
+git = "https://github.com/thehumanworks/mmr.git"
+rev = "daf2639dcd5768c6ad809b1e771b0b9029d0eb24"
+package.build.backend.name = "pixi-build-rust"
+package.build.config.extra-input-globs = [".agents/**", "specs/**", "docs/**"]

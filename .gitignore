@@ -5,3 +5,7 @@ __pycache__
 .claude
 /result
 /result-*
+
+# Experimental source-runner environments
+.pixi/
+bazel-*
