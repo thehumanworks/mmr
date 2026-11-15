@@ -131,6 +131,44 @@ class RunnerTests(unittest.TestCase):
         result = self.run_tool(ref=sha, **config)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_real_git_annotated_tag_checks_out_tagged_commit(self):
+        real_git = shutil.which("git")
+        if not real_git:
+            self.skipTest("Git is not installed")
+        (self.bin / "git").unlink()
+        (self.bin / "git").symlink_to(real_git)
+        repo = self.root / "tag fixture"
+        repo.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(
+                [real_git, "-C", str(repo), "-c", "user.name=Test",
+                 "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                 "-c", "tag.gpgsign=false", *args], stderr=subprocess.STDOUT,
+                text=True).strip()
+
+        git("init")
+        (repo / "pixi.toml").write_text("[workspace]\n")
+        (repo / "marker").write_text("tagged version")
+        git("add", ".")
+        git("commit", "-m", "tagged version")
+        sha = git("rev-parse", "HEAD")
+        git("tag", "-a", "v1.0.0", "-m", "release")
+        self.assertNotEqual(git("rev-parse", "v1.0.0"), sha)
+        (repo / "marker").write_text("newer version")
+        git("commit", "-am", "newer version")
+        config = dict(GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0=f"url.{repo.as_uri()}.insteadOf",
+                      GIT_CONFIG_VALUE_0="https://github.com/example/tool.git",
+                      GIT_CONFIG_KEY_1="protocol.file.allow", GIT_CONFIG_VALUE_1="always")
+        result = self.run_tool(ref="v1.0.0", **config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checkout = Path(self.calls()[-1]["args"][2]).parent
+        self.assertEqual(checkout.name, sha)
+        self.assertEqual((checkout / "marker").read_text(), "tagged version")
+        checked_out_sha = subprocess.check_output(
+            [real_git, "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
+        self.assertEqual(checked_out_sha, sha)
+
     def test_non_github_urls_rejected(self):
         for url in ("file:///tmp/local", "https://evil.example/owner/repo", "github.com/u/.."):
             with self.subTest(url=url):

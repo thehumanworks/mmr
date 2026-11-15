@@ -8,4 +8,4 @@ __pycache__
 
 # Experimental source-runner environments
 .pixi/
-bazel-*
+bazel-*/

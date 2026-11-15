@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-15",
+  "hosts": {
+    "macos": "ARM64, existing Apple SDK",
+    "linux": "x86_64 NixOS 26.11; Pixi tests inside temporary buildFHSEnv"
+  },
+  "versions": {
+    "pixi": "0.84.2",
+    "bazel": "9.3.2",
+    "mise": "2026.11.8"
+  },
+  "tested_commits": {
+    "mmr": "bc5075a0da36824e99e23ef3ce070d11fbf56b3b",
+    "tny": "e616aea15847afe386025fe60f8d5583f54dae88"
+  },
+  "pixi_wrapper": {
+    "mmr": {
+      "macos": {
+        "exit": 0,
+        "first_seconds": 39.9,
+        "warm_seconds": 0.96,
+        "functional": "synthetic session list and read"
+      },
+      "linux": {
+        "exit": 0,
+        "first_seconds": 161,
+        "warm_seconds": 1,
+        "functional": "empty-home listing"
+      }
+    },
+    "tny": {
+      "macos": {
+        "exit": 0,
+        "first_seconds": 260.03,
+        "warm_seconds": 1.21,
+        "runtime_tests": 8
+      },
+      "linux": {
+        "exit": 0,
+        "first_seconds": 451,
+        "warm_seconds": 1,
+        "runtime_tests": 8
+      }
+    }
+  },
+  "wrapper_tests": 10,
+  "tny_quality_exit": 0,
+  "timing_caveat": "First application builds reused compiler/download caches. Concurrent jobs ran on Linux. These are observations, not comparative benchmarks.",
+  "limitations": [
+    "pixi-build preview",
+    "Mac existing SDK; no bare-machine test",
+    "Raw NixOS dynamically linked backend/binary fails without FHS compatibility",
+    "Only osx-arm64 and linux-64 configured",
+    "No live provider calls tested",
+    "Bazel/Buck2 integration not implemented",
+    "Tangram Mac distribution returned404"
+  ],
+  "nix_baseline": {
+    "linux": {
+      "mmr_exit": 0,
+      "tny_exit": 0
+    },
+    "macos": "not tested"
+  }
+}

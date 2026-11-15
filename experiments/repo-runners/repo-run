@@ -55,12 +55,15 @@ def checkout(url, ref, cache):
         objects = root / "objects.git"
         if not objects.exists():
             git("init", "--bare", objects)
-        git("--git-dir", objects, "fetch", "--depth=1", "--force", url, f"{ref}:refs/heads/repo-run-source")
+        git("--git-dir", objects, "fetch", "--depth=1", "--force", "--no-tags", url, ref)
         sha = git("--git-dir", objects, "rev-parse", "FETCH_HEAD^{commit}", capture=True)
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
             raise RunnerError("Git returned an invalid commit ID")
         if pinned and sha != ref.lower():
             raise RunnerError("Git resolved a different commit than requested")
+        # Annotated tags must be peeled before storing a branch ref. Keeping the
+        # commit on a branch also makes it available to the subsequent clone.
+        git("--git-dir", objects, "update-ref", "refs/heads/repo-run-source", sha)
         target = root / sha
         if not target.exists():
             staging = Path(tempfile.mkdtemp(prefix="checkout-", dir=root))
