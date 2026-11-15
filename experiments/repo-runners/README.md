@@ -31,7 +31,7 @@ For manual use after checkout: `pixi run --manifest-path pixi.toml -x -- mmr --v
 
 ## Other tools
 
-See [mise, Buck2 and packslip](mise-buck2-packslip.md), [the candidate comparison](alternatives.md), [Bazel integration assessment](bazel-assessment.md), and [Tangram evidence](tangram.md). Missing Bazel metadata establishes that the direct invocation is unsupported in these source trees; it does not establish inability to build either program. Bazel and Buck2 need project build rules and a fetch/run adapter for the requested command shape.
+See [mise, Buck2 and packslip](mise-buck2-packslip.md), [the candidate comparison](alternatives.md), [Bazel integration assessment](bazel-assessment.md), and [Tangram evidence](tangram.md). Missing Bazel metadata establishes that the direct invocation is unsupported in these source trees; it does not establish inability to build either program. Bazel needs project build rules and a fetch/run adapter. Buck2 now has tested local Cargo/Make adapters; see the follow-up below.
 
 ## NixOS reproduction
 
@@ -66,7 +66,7 @@ Final wrapper review fixed annotated-tag fetching; ten wrapper tests pass, inclu
 
 **Pixi plus the reusable adapter meets the tested two-repository command contract on these hosts.** It downloads the toolchain/dependencies, builds on the consumer machine and caches the result. It requires a root package recipe and uses preview source-packaging support. It is not a zero-prerequisite or zero-compilation system.
 
-For mmr alone, native mise Cargo Git installation passed on macOS with existing Rust1.99.1/Apple SDK, without this wrapper. Native mise `github:` and packslip install published artifacts; they do not replace the tny recipe. Bazel and Buck2 can be integrated for both operating systems, but need explicit build/toolchain definitions and a GitHub adapter. Tangram's source/toolchain model is promising, but its macOS installer failed404 and its CLI does not directly interpret GitHub URLs. Xmake/xrepo also supports both OS families but requires packaging integration; Linux-only Brioche is excluded.
+For mmr alone, native mise Cargo Git installation passed on macOS with existing Rust1.99.1/Apple SDK, without this wrapper. Native mise `github:` and packslip install published artifacts; they do not replace the tny recipe. Bazel remains unintegrated. Buck2 has now built both applications on macOS/Linux using local Cargo/Make actions and supplied compiler environments. Tangram has now passed native macOS sandboxed C compilation with downloaded LLVM/SDK and standard std.sdk, following a source bootstrap despite the installer404. Neither adds native arbitrary-GitHub-URL interpretation. Xmake/xrepo also supports both OS families but requires packaging integration; Linux-only Brioche is excluded.
 
 Nix remains the closest native repository interface, and both repositories already have flakes. Both direct GitHub flake invocations passed on native NixOS, including the existing package build/check phases: `nix run github:thehumanworks/mmr/daf2639dcd5768c6ad809b1e771b0b9029d0eb24 -- --version` printed `mmr 0.2.0`; `nix run github:thehumanworks/tny/eebc162d1b22125afd75409c8a0a530ed66a0be1 -- --version` printed `eebc162`. Mac Nix execution was not tested. The Nix mmr build includes release-mode tests, unlike the Pixi recipe, so its build duration is not a like-for-like performance comparison.
 
@@ -82,3 +82,11 @@ repo-run github.com/thehumanworks/tny@e616aea15847afe386025fe60f8d5583f54dae88 -
 The feature-branch name can replace the SHA to follow changes. The runner refreshes named refs; pinned source can be reused without another Git fetch. Pixi may still need network access for uncached dependencies. The caller's working directory and command arguments are preserved. Python and Git remain bootstrap prerequisites; macOS SDK and Linux runtime compatibility are separate requirements.
 
 Machine-readable outcomes: [results.json](evidence/results.json). The committed runtime smoke script in the tny experiment directory takes the installed binary and checkout path as its two arguments.
+
+## Follow-up: executed Buck2 and Tangram macOS
+
+The initial documentation-only Buck2 assessment is superseded by [actual Buck2 builds](buck2/README.md) and [the integration review](buck2/review.md). Both source projects built and ran on macOS ARM64 and native NixOS x86_64. mmr passed synthetic session reads; tny passed eight runtime tests on both hosts. The generic GitHub adapter is in the mmr experiment directory; see its BUCK-RUNNER.md for arguments. Actual GitHub-wrapper outcomes and tested commit IDs are recorded in buck2/evidence/final-results.json.
+
+This is Buck2 scheduling/caching/run support around existing Cargo/Make builds, not native per-crate/per-object Buck rules. Host compiler/SDK contents are not tracked inputs; network downloads occur inside local-only actions. Nix supplied Linux tool packages but did not build either application. These tests did not use an FHS environment. This establishes a viable configured local runner, not automatic arbitrary-repo packaging or managed cross-compilation.
+
+[Tangram macOS investigation](tangram.md) supersedes the installer-only conclusion. Source-built CLI and actual managed-toolchain/sandbox execution passed on ARM64 macOS27.3; the built CLI declares minimum macOS26. Its std.sdk can compile and run native C through tg run. Linux/Intel and mmr/tny builds with Tangram remain untested. Recipes and sanitized process evidence are in [tangram-proof](tangram-proof/README.md). The reproduction script is syntax/lint checked; its operations were executed manually, not rerun as a fresh single-script installation.

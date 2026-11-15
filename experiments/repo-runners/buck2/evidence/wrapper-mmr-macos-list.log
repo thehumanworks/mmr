@@ -1,0 +1,11 @@
+buck-repo-run: https://github.com/thehumanworks/mmr.git@73663c5d9195aa671ae96f5eb293d42d7a9d74fa //:mmr
+[2026-11-15T16:52:02.494+00:00] Starting new buck2 daemon...
+[2026-11-15T16:52:02.635+00:00] Connected to new buck2 daemon.
+[2026-11-15T16:52:02.638+00:00] Build ID: 526c4a97-5ec0-49f5-9a58-96e9d761348b
+[2026-11-15T16:52:09.738+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:16.837+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:23.936+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:30.937+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:31.055+00:00] Cache hits: 0%
+[2026-11-15T16:52:31.055+00:00] Commands: 1 (cached: 0, remote: 0, local: 1)
+BUILD SUCCEEDED - starting your binary

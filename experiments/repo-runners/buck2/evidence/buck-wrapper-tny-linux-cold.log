@@ -1,0 +1,98 @@
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+Initialized empty Git repository in /home/tomas/repo-runner-evaluation/buck2/runner-cache/bb82be2ebf466f1aee283a50/objects.git/
+From https://github.com/thehumanworks/tny
+ * branch            331c3ce7c43d68edacee32cb4caee71cdee2337b -> FETCH_HEAD
+Cloning into '/home/tomas/repo-runner-evaluation/buck2/runner-cache/bb82be2ebf466f1aee283a50/checkout-0bvn6kzr'...
+HEAD is now at 331c3ce Add tested Buck2 Make adapter for tny source builds
+buck-repo-run: https://github.com/thehumanworks/tny.git@331c3ce7c43d68edacee32cb4caee71cdee2337b //:tny
+[2026-11-15T16:56:52.703+00:00] Starting new buck2 daemon...
+[2026-11-15T16:56:53.138+00:00] Connected to new buck2 daemon.
+[2026-11-15T16:56:53.155+00:00] Build ID: 9a5ef200-a960-40a5-be3c-053458a57d11
+[2026-11-15T16:57:00.239+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:07.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:14.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:21.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:28.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:35.443+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:42.539+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:49.543+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:56.639+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:03.639+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:10.739+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:17.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:24.939+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:32.039+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:39.139+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:46.143+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:53.241+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:00.242+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:07.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:14.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:21.540+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:28.639+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:35.639+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:42.739+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:49.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:56.939+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:04.039+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:11.139+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:18.239+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:25.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:32.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:39.539+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:46.639+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:00:53.739+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:00.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:07.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:14.939+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:22.039+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:29.139+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:36.239+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:43.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:50.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:01:57.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:04.539+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:11.639+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:18.739+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:25.739+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:32.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:39.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:46.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:02:53.939+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:01.039+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:08.139+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:15.239+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:22.239+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:29.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:36.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:43.539+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:50.540+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:03:57.639+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:04.739+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:11.739+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:18.839+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:25.939+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:33.039+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:40.139+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:47.239+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:04:54.239+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:05:01.339+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:05:08.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:05:15.439+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T17:05:19.959+00:00] Cache hits: 0%
+[2026-11-15T17:05:19.959+00:00] Commands: 1 (cached: 0, remote: 0, local: 1)
+BUILD SUCCEEDED - starting your binary
+0.39.0
+elapsed=514

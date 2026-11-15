@@ -1,0 +1,1 @@
+{"sessions":[{"session_id":"repo-runner-synthetic","source":"codex","project_name":"/tmp/repo-runner-fixture","project_path":"/tmp/repo-runner-fixture","first_timestamp":"2025-01-02T00:00:01","last_timestamp":"2025-01-02T00:00:02","message_count":2,"user_messages":1,"assistant_messages":1,"preview":"synthetic runner verification"}],"total_sessions":1}

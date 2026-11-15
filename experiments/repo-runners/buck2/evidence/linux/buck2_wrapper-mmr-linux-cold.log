@@ -1,0 +1,79 @@
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+Initialized empty Git repository in /home/tomas/repo-runner-evaluation/buck2/runner-cache/22c73286731b050084709893/objects.git/
+From https://github.com/thehumanworks/mmr
+ * branch            73663c5d9195aa671ae96f5eb293d42d7a9d74fa -> FETCH_HEAD
+Cloning into '/home/tomas/repo-runner-evaluation/buck2/runner-cache/22c73286731b050084709893/checkout-hvbj_q3w'...
+HEAD is now at 73663c5 Add tested Buck2 Cargo adapter and generic GitHub runner
+buck-repo-run: https://github.com/thehumanworks/mmr.git@73663c5d9195aa671ae96f5eb293d42d7a9d74fa //:mmr
+[2026-11-15T16:54:12.546+00:00] Starting new buck2 daemon...
+[2026-11-15T16:54:12.953+00:00] Connected to new buck2 daemon.
+[2026-11-15T16:54:12.961+00:00] Build ID: d33d9fe7-95ef-4d95-8667-69b44c09dcea
+[2026-11-15T16:54:20.054+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:54:27.154+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:54:34.157+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:54:41.254+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:54:48.256+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:54:55.354+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:02.354+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:09.356+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:16.357+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:23.454+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:30.454+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:37.557+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:44.654+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:51.754+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:55:58.755+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:05.854+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:12.954+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:20.055+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:27.056+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:34.154+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:41.256+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:48.354+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:56:55.354+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:02.454+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:09.454+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:16.458+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:23.554+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:30.556+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:37.558+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:44.654+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:51.755+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:57:58.854+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:05.854+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:12.955+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:20.054+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:27.154+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:34.154+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:41.254+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:48.354+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:58:55.358+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:02.454+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:09.454+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:16.456+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:23.554+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:30.558+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:37.654+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:44.654+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:51.754+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:59:58.755+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T17:00:05.854+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T17:00:12.954+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T17:00:19.956+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T17:00:20.827+00:00] Cache hits: 0%
+[2026-11-15T17:00:20.827+00:00] Commands: 1 (cached: 0, remote: 0, local: 1)
+BUILD SUCCEEDED - starting your binary
+mmr 0.2.0
+real_seconds=370

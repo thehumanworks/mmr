@@ -1,0 +1,7 @@
+ProductName:		macOS
+ProductVersion:		27.3
+BuildVersion:		26C5035r
+/Users/tomas/repo-runner-evaluation/tangram/target/debug/tangram: Mach-O 64-bit executable arm64
+      cmd LC_BUILD_VERSION
+    minos 26.0
+      sdk 27.0

@@ -1,0 +1,41 @@
+Initialized empty Git repository in /Users/tomas/repo-runner-evaluation/buck2/runner-cache/bb82be2ebf466f1aee283a50/objects.git/
+From https://github.com/thehumanworks/tny
+ * branch            331c3ce7c43d68edacee32cb4caee71cdee2337b -> FETCH_HEAD
+Cloning into '/Users/tomas/repo-runner-evaluation/buck2/runner-cache/bb82be2ebf466f1aee283a50/checkout-x36k2yil'...
+HEAD is now at 331c3ce Add tested Buck2 Make adapter for tny source builds
+buck-repo-run: https://github.com/thehumanworks/tny.git@331c3ce7c43d68edacee32cb4caee71cdee2337b //:tny
+[2026-11-15T16:56:48.561+00:00] Starting new buck2 daemon...
+[2026-11-15T16:56:48.718+00:00] Connected to new buck2 daemon.
+[2026-11-15T16:56:48.723+00:00] Build ID: fe99b531-fe3a-412c-810b-04aac3a9424f
+[2026-11-15T16:56:55.821+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:02.821+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:09.920+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:17.020+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:24.120+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:31.220+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:38.221+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:45.320+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:52.320+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:57:59.321+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:06.421+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:13.421+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:20.422+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:27.520+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:34.522+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:41.621+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:48.721+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:58:55.821+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:02.821+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:09.821+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:16.921+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:24.020+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:31.021+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:38.021+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:45.121+00:00] Waiting on root//:tny (<unspecified>) -- make_tny [local_execute]
+[2026-11-15T16:59:50.049+00:00] Cache hits: 0%
+[2026-11-15T16:59:50.049+00:00] Commands: 1 (cached: 0, remote: 0, local: 1)
+BUILD SUCCEEDED - starting your binary
+0.39.0
+real 186.26
+user 0.89
+sys 0.75

@@ -1,0 +1,6 @@
+buck-repo-run: https://github.com/thehumanworks/tny.git@331c3ce7c43d68edacee32cb4caee71cdee2337b //:tny
+[2026-11-15T17:05:20.478+00:00] Build ID: 3bc9e55c-e49e-4377-84a4-bcdc05ee91d6
+[2026-11-15T17:05:20.489+00:00] File changed: source.tar.Mu6UmB
+BUILD SUCCEEDED - starting your binary
+0.39.0
+elapsed=0

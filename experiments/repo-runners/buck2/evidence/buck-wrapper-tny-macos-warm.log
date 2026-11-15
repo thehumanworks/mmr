@@ -1,0 +1,8 @@
+buck-repo-run: https://github.com/thehumanworks/tny.git@331c3ce7c43d68edacee32cb4caee71cdee2337b //:tny
+[2026-11-15T16:59:50.931+00:00] Build ID: fc5cad6a-cc43-45f1-9364-d03717d193f5
+[2026-11-15T16:59:50.933+00:00] File changed: source.tar.L2plqc
+BUILD SUCCEEDED - starting your binary
+0.39.0
+real 0.37
+user 0.26
+sys 0.08

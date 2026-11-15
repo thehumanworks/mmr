@@ -1,0 +1,8 @@
+buck-repo-run: https://github.com/thehumanworks/mmr.git@73663c5d9195aa671ae96f5eb293d42d7a9d74fa //:mmr
+[2026-11-15T16:52:02.388+00:00] Build ID: 11b186aa-332c-4de2-a86a-ca1388af3634
+[2026-11-15T16:52:02.390+00:00] File changed: source.tar.56aKQWn7
+BUILD SUCCEEDED - starting your binary
+mmr 0.2.0
+real 0.10
+user 0.05
+sys 0.04

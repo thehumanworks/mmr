@@ -1,0 +1,43 @@
+=== build.log ===
+   Compiling tangram_cli_tangram v0.0.0 (/Users/tomas/repo-runner-evaluation/tangram/source/packages/cli/packages/tangram)
+   Compiling tangram_cli_id v0.0.0 (/Users/tomas/repo-runner-evaluation/tangram/source/packages/cli/packages/id)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `tangram_cli` (bin "tangram") generated 1 warning
+    Finished `dev` profile [unoptimized] target(s) in 5m 47s
+
+=== build-python.log ===
+   Compiling tangram_cli_id v0.0.0 (/Users/tomas/repo-runner-evaluation/tangram/source/packages/cli/packages/id)
+   Compiling tangram_cli_authorization v0.0.0 (/Users/tomas/repo-runner-evaluation/tangram/source/packages/cli/packages/authorization)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `tangram_cli` (bin "tangram") generated 1 warning
+    Finished `dev` profile [unoptimized] target(s) in 2m 28s
+
+=== native-host.log ===
+Tangram native macOS build succeeded
+
+=== managed-bootstrap.log ===
+info pcs_0006gy08he95sp981zga8jv538n4?[capability-redacted] 06gy08he95sp981zga9nhdw260
+"/Users/tomas/repo-runner-evaluation/tangram/managed-bootstrap-hello"
+
+=== managed-bootstrap-hello-run.log ===
+exit=0
+Tangram managed native macOS build succeeded
+
+=== managed-bootstrap-repeat.log ===
+exit=0
+fil_016wsm951xhp1f5accasqfaprhg9y3eg6ksaztjvmb477e7jz5sbeg?[capability-redacted]
+info pcs_0006gy08he95sp981zga8jv538n4?[capability-redacted]
+
+Standard SDK native compile: PASS
+Compiler process pcs_0006gy09q4dxsq936t25vj6xnmgm, exit0, sandbox assigned.
+Artifact fil_01rwjwt4fcfhvnjpw3d76ktfencnm5mknbkacfkvq06g9amya7t5f0
+tg run artifact: exit0
+Tangram std.sdk macOS build succeeded
+Initial std.sdk failure: wrapper could not locate store directory (isolated directory was named state). Local .tangram->state alias fixed wrapper discovery; build --retry succeeded.
+Direct --checkout of std.sdk wrapped artifact failed: cannot check out a dependency without a store path. Native tg run artifact succeeded.

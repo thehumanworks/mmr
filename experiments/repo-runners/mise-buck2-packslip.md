@@ -1,5 +1,7 @@
 # Mise, packslip and Buck2 addendum
 
+Update: the original Buck2 screening below is superseded by [executed Cargo/Make adapter tests](buck2/README.md). The limitation is supplied host toolchains and explicit rules, not inability to build these applications.
+
 Checked 2026-11-15. Documentation/API verification, not new application build tests.
 
 ## Latest mise and the original command

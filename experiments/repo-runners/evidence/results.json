@@ -52,8 +52,9 @@
     "Raw NixOS dynamically linked backend/binary fails without FHS compatibility",
     "Only osx-arm64 and linux-64 configured",
     "No live provider calls tested",
-    "Bazel/Buck2 integration not implemented",
-    "Tangram Mac distribution returned404"
+    "Bazel integration not implemented",
+    "Buck2 uses supplied host toolchains and Cargo/Make adapters",
+    "Tangram installed from source; app-specific Linux/macOS matrix untested"
   ],
   "nix_baseline": {
     "linux": {
@@ -61,5 +62,6 @@
       "tny_exit": 0
     },
     "macos": "not tested"
-  }
+  },
+  "follow_up": "Buck2 executed and Tangram macOS proven; see ../buck2/evidence/final-results.json and ../tangram.md"
 }

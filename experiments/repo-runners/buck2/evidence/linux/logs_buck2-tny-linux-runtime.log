@@ -1,0 +1,15 @@
+PASS: --help
+PASS: tool list --json
+test_call_round_trips_files_through_the_shared_tools (test_tool_cli.ToolCliTest.test_call_round_trips_files_through_the_shared_tools) ... ok
+test_errors_have_distinct_exit_codes (test_tool_cli.ToolCliTest.test_errors_have_distinct_exit_codes) ... ok
+test_list_and_describe_use_the_nested_catalog (test_tool_cli.ToolCliTest.test_list_and_describe_use_the_nested_catalog) ... ok
+test_memory_and_skill_work_outside_a_turn (test_tool_cli.ToolCliTest.test_memory_and_skill_work_outside_a_turn) ... ok
+test_permission_rules_still_apply (test_tool_cli.ToolCliTest.test_permission_rules_still_apply) ... ok
+test_code_mode_calls_extensions (test_tool_extensions.ToolExtensionsTest.test_code_mode_calls_extensions) ... ok
+test_module_commands_take_schema_flags (test_tool_extensions.ToolExtensionsTest.test_module_commands_take_schema_flags) ... ok
+test_tool_call_results_and_errors (test_tool_extensions.ToolExtensionsTest.test_tool_call_results_and_errors) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 2.765s
+
+OK

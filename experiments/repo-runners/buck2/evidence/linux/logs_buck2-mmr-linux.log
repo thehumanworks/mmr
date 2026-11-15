@@ -1,0 +1,39 @@
+[2026-11-15T16:49:20.374+00:00] Starting new buck2 daemon...
+[2026-11-15T16:49:20.574+00:00] Connected to new buck2 daemon.
+[2026-11-15T16:49:20.595+00:00] Build ID: f271fe83-9a2b-4d81-b1f5-a36927f2ebb9
+[2026-11-15T16:49:27.675+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:49:34.678+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:49:41.775+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:49:48.875+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:49:55.876+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:02.977+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:10.075+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:17.175+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:24.177+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:31.275+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:38.376+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:45.476+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:52.575+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:50:59.575+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:06.578+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:13.675+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:20.775+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:27.775+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:34.875+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:41.975+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:49.078+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:51:56.175+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:03.275+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:10.376+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:17.475+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:24.576+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:31.576+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:38.675+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:45.776+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:52.875+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:52:59.975+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:53:04.051+00:00] Cache hits: 0%
+[2026-11-15T16:53:04.051+00:00] Commands: 1 (cached: 0, remote: 0, local: 1)
+BUILD SUCCEEDED - starting your binary
+mmr 0.2.0
+elapsed=224

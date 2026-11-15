@@ -1,0 +1,119 @@
+{
+  "cacheable": true,
+  "children": [],
+  "command": {
+    "node": {
+      "args": [
+        {
+          "kind": "string",
+          "value": "-x",
+        },
+        {
+          "kind": "string",
+          "value": "c",
+        },
+        {
+          "kind": "string",
+          "value": {
+            "kind": "object",
+            "value": "fil_013qvd4jnfj3c4j20ydsxamjzh13wgya65q4prgpr3jbjqtkby77mg",
+          },
+        },
+        {
+          "kind": "string",
+          "value": "-o",
+        },
+        {
+          "kind": "string",
+          "value": {
+            "kind": "placeholder",
+            "value": {
+              "name": "output",
+            },
+          },
+        },
+      ],
+      "env": {
+        "CPATH": {
+          "kind": "string",
+          "value": {
+            "kind": "template",
+            "value": {
+              "components": [
+                {
+                  "kind": "artifact",
+                  "value": "dir_013mtk1g8sztdm43t6pja4kt9fj1ymmf7abvkacqx6w5rh7cnfj6mg",
+                },
+                {
+                  "kind": "string",
+                  "value": "/include",
+                },
+              ],
+            },
+          },
+        },
+        "LIBRARY_PATH": {
+          "kind": "string",
+          "value": {
+            "kind": "template",
+            "value": {
+              "components": [
+                {
+                  "kind": "artifact",
+                  "value": "dir_013mtk1g8sztdm43t6pja4kt9fj1ymmf7abvkacqx6w5rh7cnfj6mg",
+                },
+                {
+                  "kind": "string",
+                  "value": "/lib",
+                },
+              ],
+            },
+          },
+        },
+        "PATH": {
+          "kind": "string",
+          "value": {
+            "kind": "template",
+            "value": {
+              "components": [
+                {
+                  "kind": "artifact",
+                  "value": "dir_013mtk1g8sztdm43t6pja4kt9fj1ymmf7abvkacqx6w5rh7cnfj6mg",
+                },
+                {
+                  "kind": "string",
+                  "value": "/bin",
+                },
+              ],
+            },
+          },
+        },
+      },
+      "executable": {
+        "node": {
+          "path": "cc",
+        },
+      },
+      "host": "aarch64-darwin",
+    },
+  },
+  "created_at": 1794762007,
+  "creator": "pcs_0006gy09q31xv2q11x8xcpa5y45r",
+  "exit": 0,
+  "finished_at": 1794762009,
+  "host": "aarch64-darwin",
+  "log": "blb_01ch64m5923ye6nc4yv1jsfsvvnwcm6z14dw51m2tmfx20gak5dpjg",
+  "output": {
+    "node": {
+      "kind": "object",
+      "value": "fil_01rwjwt4fcfhvnjpw3d76ktfencnm5mknbkacfkvq06g9amya7t5f0",
+    },
+  },
+  "retry": true,
+  "sandbox": "sbx_0006gy09q4dxsq936t25w25kx9jm",
+  "started_at": 1794762007,
+  "status": "finished",
+  "stderr": "log",
+  "stdin": "null",
+  "stdout": "log",
+}

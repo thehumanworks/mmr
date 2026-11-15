@@ -1,0 +1,94 @@
+{
+  "cacheable": true,
+  "children": [],
+  "command": {
+    "node": {
+      "args": [
+        {
+          "kind": "string",
+          "value": "-x",
+        },
+        {
+          "kind": "string",
+          "value": "c",
+        },
+        {
+          "kind": "string",
+          "value": "-isysroot",
+        },
+        {
+          "kind": "string",
+          "value": {
+            "kind": "object",
+            "value": "dir_01w4wdd1xset9n0cwbstgm99bgy424w23zfx7r8vhbt5fx0c9m3rc0",
+          },
+        },
+        {
+          "kind": "string",
+          "value": {
+            "kind": "object",
+            "value": "fil_01jj8vahptxqp2x9ehgmgqztaqynw71te5kbmkmmed8w7bamqzgegg",
+          },
+        },
+        {
+          "kind": "string",
+          "value": "-o",
+        },
+        {
+          "kind": "string",
+          "value": {
+            "kind": "placeholder",
+            "value": {
+              "name": "output",
+            },
+          },
+        },
+      ],
+      "env": {
+        "PATH": {
+          "kind": "string",
+          "value": {
+            "kind": "template",
+            "value": {
+              "components": [
+                {
+                  "kind": "artifact",
+                  "value": "dir_01jd3vamcqmetn9r74ee7b2ve40q7z9hxy59qvhznpkanfj7p6j1mg",
+                },
+                {
+                  "kind": "string",
+                  "value": "/bin",
+                },
+              ],
+            },
+          },
+        },
+      },
+      "executable": {
+        "node": {
+          "artifact": "dir_01jd3vamcqmetn9r74ee7b2ve40q7z9hxy59qvhznpkanfj7p6j1mg",
+          "path": "bin/clang",
+        },
+      },
+      "host": "aarch64-darwin",
+    },
+  },
+  "created_at": 1794761698,
+  "creator": "pcs_0006gy08he95sp981zga8jv538n4",
+  "exit": 0,
+  "finished_at": 1794761701,
+  "host": "aarch64-darwin",
+  "log": "blb_01ch64m5923ye6nc4yv1jsfsvvnwcm6z14dw51m2tmfx20gak5dpjg",
+  "output": {
+    "node": {
+      "kind": "object",
+      "value": "fil_016wsm951xhp1f5accasqfaprhg9y3eg6ksaztjvmb477e7jz5sbeg",
+    },
+  },
+  "sandbox": "sbx_0006gy08hendrpbce10r6xayvhp4",
+  "started_at": 1794761698,
+  "status": "finished",
+  "stderr": "log",
+  "stdin": "null",
+  "stdout": "log",
+}

@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-15",
+  "method": "Buck2 local-only actions wrapping Cargo/Make; source.tar is declared input from selected committed HEAD",
+  "tested_github_commits": {
+    "mmr": "73663c5d9195aa671ae96f5eb293d42d7a9d74fa",
+    "tny": "331c3ce7c43d68edacee32cb4caee71cdee2337b"
+  },
+  "github_wrapper": {
+    "mmr": {
+      "macos": {
+        "exit": 0,
+        "cold_seconds": 30.78,
+        "warm_seconds": 0.1,
+        "synthetic_read": true,
+        "caller_cwd_verified": true
+      },
+      "linux": {
+        "exit": 0,
+        "cold_seconds": 370,
+        "warm_seconds": 1,
+        "timing_resolution_seconds": 1
+      }
+    },
+    "tny": {
+      "macos": {
+        "exit": 0,
+        "cold_seconds": 186.26,
+        "warm_seconds": 0.37,
+        "fixture_tests": 8
+      },
+      "linux": {
+        "exit": 0,
+        "cold_seconds": 514,
+        "warm_seconds": 0,
+        "timing_resolution_seconds": 1,
+        "fixture_tests": 8
+      }
+    }
+  },
+  "direct_build_tests": {
+    "mmr_macos": true,
+    "mmr_linux": true,
+    "tny_macos": true,
+    "tny_linux": true,
+    "mmr_linux_synthetic_read": true,
+    "tny_runtime_tests_each_os": 8
+  },
+  "runner_tests": 8,
+  "limits": [
+    "Host compiler/SDK contents are not tracked inputs",
+    "Local-only Cargo/Make adapters; no native Rust/C++ Buck dependency graph",
+    "Supplied host toolchains: Apple SDK/Rust on Mac, nix shell tool packages on NixOS",
+    "No FHS for Buck2 tests",
+    "No automatic cross-compilation or compiler provisioning demonstrated",
+    "tny recipe version fixed0.39.0 for tested snapshot",
+    "Concurrent jobs and different host/toolchain caches; not comparable performance benchmarks"
+  ],
+  "tangram": {
+    "macos_arm64_native": true,
+    "downloaded_llvm_sdk_sandbox_compile_run": true,
+    "std_sdk_compile_run": true,
+    "cli_minos": "26.0",
+    "host_macos": "27.3",
+    "linux_intel_mmr_tny": "not tested",
+    "installation": "source bootstrap; official CLI release download404",
+    "std_sdk_direct_checkout": "failed; tg run succeeds"
+  }
+}
