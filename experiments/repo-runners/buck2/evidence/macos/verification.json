@@ -1,0 +1,14 @@
+{
+  "initial-version": {
+    "exit_code": 0,
+    "seconds": 32.4625984999584
+  },
+  "warm-version": {
+    "exit_code": 0,
+    "seconds": 0.02759933308698237
+  },
+  "synthetic-read": {
+    "exit_code": 0,
+    "seconds": 0.028485917020589113
+  }
+}

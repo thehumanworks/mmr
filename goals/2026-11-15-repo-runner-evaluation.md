@@ -2,7 +2,7 @@
 title: Evaluate source repository runners on Linux and macOS
 description: Verify GitHub source builds and execution without GitHub Actions or published tool binaries.
 date: 2026-11-15
-status: done
+status: in-progress
 ---
 Outcome: establish whether existing runners support `<runner> <github_repo> -- command` for mmr (Rust) and tny (C/C++).
 Surface: experimental build configuration, runner adapters if explicitly labelled, and evidence. No product source changes or main-branch changes.
@@ -11,3 +11,5 @@ Validation: pinned source revisions; real Linux and macOS execution; version/hel
 Definition of done: reproducible experiment files and evidence, explicit pass/fail/untested verdict for both repositories and platforms, limitations and recommendation. No live provider inference. Never use private session history as fixtures.
 
 Result: both applications passed the generic Pixi GitHub runner on macOS ARM64 and Linux x86_64 in an FHS environment on NixOS; tny passed eight fixture runtime tests on each. Ten wrapper tests pass. Both existing Nix GitHub invocations passed on native NixOS. Native mise Cargo mmr source invocation passed on macOS. Bazel/Buck2 remain feasible but unintegrated; Tangram macOS installer returned404. Evidence and reproduction are in `experiments/repo-runners/README.md` and `evidence/results.json`. Application code and original main worktrees remain unchanged.
+
+Follow-up authorized by user: implement and execute Buck2 builds for both projects on macOS/Linux; investigate Tangram macOS through source bootstrap and real recipe execution. Do not present Make/Cargo adapter actions as fully hermetic native language-rule integrations. Preserve earlier measured results.

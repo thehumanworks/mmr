@@ -1,0 +1,9 @@
+load(":cargo_adapter.bzl", "cargo_application")
+
+cargo_application(
+    name = "mmr",
+    script = "build.sh",
+    source = "source.tar",
+    tool_path = read_config("experiment", "tool_path", "/usr/bin:/bin"),
+    visibility = ["PUBLIC"],
+)

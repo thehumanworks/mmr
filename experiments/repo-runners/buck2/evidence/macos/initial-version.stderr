@@ -1,0 +1,10 @@
+[2026-11-15T16:48:27.981+00:00] Starting new buck2 daemon...
+[2026-11-15T16:48:28.141+00:00] Connected to new buck2 daemon.
+[2026-11-15T16:48:28.145+00:00] Build ID: 9be01755-579f-487e-b137-746d625a3271
+[2026-11-15T16:48:35.241+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:48:42.243+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:48:49.343+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:48:56.442+00:00] Waiting on root//:mmr (<unspecified>) -- cargo_source_build [local_execute]
+[2026-11-15T16:49:00.076+00:00] Cache hits: 0%
+[2026-11-15T16:49:00.076+00:00] Commands: 1 (cached: 0, remote: 0, local: 1)
+BUILD SUCCEEDED - starting your binary

@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Experimental GitHub checkout adapter for existing Buck2 projects."""
+import argparse
+import importlib.machinery
+import importlib.util
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+
+def load_checkout_helpers():
+    loader = importlib.machinery.SourceFileLoader(
+        'repo_run_checkout', str(Path(__file__).resolve().with_name('repo-run')))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        usage='%(prog)s [--project-dir PATH] github.com/OWNER/REPO[@REF] -- NAME [ARG ...]',
+        epilog=('Requires Python 3.9+, Git, Buck2, and sibling repo-run. The repository must '
+                'provide a Buck2 workspace and runnable target. NAME maps to //:NAME; full '
+                '//package:target labels also work. An optional project prepare.sh runs via '
+                '/bin/sh before Buck2: this executes repository code with your permissions. '
+                'BUCK2_BIN selects Buck2; REPO_RUN_CACHE selects the shared source cache. '
+                'Pin full commit SHAs for repeatability. Named refs refresh each invocation. '
+                'Buck2 builds locally on cache misses; the adapter does not install compilers '
+                'or make build rules portable. Runtime preserves the caller working directory. '
+                'This is an evaluation adapter, not a production architecture.'))
+    parser.add_argument('--project-dir', default='.', help='relative Buck2 workspace inside repository')
+    parser.add_argument('--config', action='append', default=[], metavar='SECTION.KEY=VALUE',
+                        help='Buck2 configuration override; repeat as needed')
+    parser.add_argument('repository')
+    parser.add_argument('command', nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    command = args.command[1:] if args.command[:1] == ['--'] else args.command
+    if not command:
+        parser.error('provide -- NAME [ARG ...]')
+    helpers = load_checkout_helpers()
+    try:
+        url, ref = helpers.repository(args.repository)
+        name = command[0]
+        if re.fullmatch(r'[A-Za-z0-9_.+-]+', name):
+            target = '//:' + name
+        elif re.fullmatch(r'//[A-Za-z0-9_./+-]*:[A-Za-z0-9_.+-]+', name):
+            target = name
+        else:
+            raise helpers.RunnerError('expected an executable target name or //package:target')
+        relative = Path(args.project_dir)
+        if relative.is_absolute() or '..' in relative.parts:
+            raise helpers.RunnerError('--project-dir must stay inside the repository')
+        buck = shutil.which(os.environ.get('BUCK2_BIN', 'buck2'))
+        if not buck:
+            raise helpers.RunnerError('Buck2 not found; install it or set BUCK2_BIN')
+        original_cwd = os.getcwd()
+        cache = Path(os.environ.get('REPO_RUN_CACHE', str(Path.home() / '.cache/repo-run'))).expanduser().resolve()
+        source = helpers.checkout(url, ref, cache)
+        project = (source / relative).resolve()
+        if not project.is_relative_to(source.resolve()):
+            raise helpers.RunnerError('--project-dir resolves outside the repository')
+        if not (project / '.buckconfig').is_file():
+            raise helpers.RunnerError('selected project has no .buckconfig')
+        print(f'buck-repo-run: {url}@{source.name} {target}', file=sys.stderr)
+        prepare = project / 'prepare.sh'
+        if prepare.is_file():
+            subprocess.run(['/bin/sh', str(prepare)], cwd=project, stdout=sys.stderr, check=True)
+        config_args = [part for value in args.config for part in ('--config', value)]
+        result = subprocess.run([buck, 'run', '--chdir', original_cwd, *config_args,
+                                 target, '--', *command[1:]], cwd=project)
+        return result.returncode if result.returncode >= 0 else 128 - result.returncode
+    except subprocess.CalledProcessError as error:
+        print(f'buck-repo-run: setup command failed with exit status {error.returncode}', file=sys.stderr)
+        return error.returncode if error.returncode > 0 else 128 - error.returncode
+    except (helpers.RunnerError, OSError) as error:
+        print(f'buck-repo-run: {error}', file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == '__main__':
+    sys.exit(main())
